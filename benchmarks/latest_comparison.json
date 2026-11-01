@@ -1,0 +1,817 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-11-01T10:59:47.628338+00:00",
+    "mode": "hosted",
+    "extended_mode": false,
+    "trials_per_tool": 3,
+    "system_specs": {
+      "os_name": "Windows",
+      "os_release": "2022Server",
+      "os_version": "10.0.20348",
+      "architecture": "AMD64",
+      "processor": "AMD64 Family 25 Model 1 Stepping 1, AuthenticAMD",
+      "logical_cpus": 4,
+      "total_ram_gb": 15.99,
+      "runner_label": "GitHub Actions 1000006455",
+      "is_github_actions": true,
+      "git_commit": "c5f68f4c95154e77bb8bfb59993fbd878554598d",
+      "git_branch": "main"
+    }
+  },
+  "tools": {
+    "flux_8": {
+      "name": "Radium Download Manager",
+      "version": "Radium Download Manager v1.0.0 (Radium) [Brisk Engine + Cat Catch Media Detection + N_m3u8DL-RE Pipeline]",
+      "connections": 8,
+      "path": "D:\\a\\Radium-Download-Manager\\Radium-Download-Manager\\build\\Release\\radium.exe",
+      "available": true,
+      "status": "READY",
+      "notes": "Native C++20 / WinHTTP segmented download engine (8 connections)"
+    },
+    "flux_32": {
+      "name": "Radium Download Manager",
+      "version": "Radium Download Manager v1.0.0 (Radium) [Brisk Engine + Cat Catch Media Detection + N_m3u8DL-RE Pipeline]",
+      "connections": 32,
+      "path": "D:\\a\\Radium-Download-Manager\\Radium-Download-Manager\\build\\Release\\radium.exe",
+      "available": true,
+      "status": "READY",
+      "notes": "Native C++20 / WinHTTP segmented download engine (32 connections)"
+    },
+    "aria2_16": {
+      "name": "aria2",
+      "version": "aria2 version 1.37.0",
+      "connections": 16,
+      "path": "D:\\a\\Radium-Download-Manager\\Radium-Download-Manager\\tools\\benchmarks\\aria2c.exe",
+      "available": true,
+      "status": "READY",
+      "notes": "aria2 1.37.0 official x64 build (-x 16 -s 16 -k 1M)"
+    },
+    "idm_642": {
+      "name": "Internet Download Manager",
+      "version": "6.42 Build 64",
+      "connections": 16,
+      "path": null,
+      "available": false,
+      "status": "SKIPPED",
+      "notes": "Unattended licensing dialog / interactive trial prompt requires desktop user session in CI; Tonec terms prohibit redistributable trial cracking"
+    },
+    "fdm_634": {
+      "name": "Free Download Manager",
+      "version": "6.34.4",
+      "connections": 16,
+      "path": null,
+      "available": false,
+      "status": "SKIPPED",
+      "notes": "FDM v6 does not provide a headless CLI download/completion interface; requires interactive desktop GUI session"
+    }
+  },
+  "scenarios": {
+    "scenario_a_256mb_unthrottled": {
+      "scenario": {
+        "id": "scenario_a_256mb_unthrottled",
+        "name": "Scenario A: 256 MiB High-Speed Range Download (Unthrottled)",
+        "description": "Evaluates maximum unthrottled loopback throughput, segment scheduling, and memory footprint.",
+        "dataset": "bench_256mb.bin",
+        "file_size": 268435456,
+        "endpoint_prefix": "/files",
+        "throttled": false,
+        "range_supported": true
+      },
+      "trials": {
+        "flux_8": [
+          {
+            "tool": "flux_8",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 1.0731,
+            "throughput_mibs": 238.57,
+            "throughput_mbps": 2001.25,
+            "peak_rss_mb": 13.91,
+            "cpu_time_ms": 281.25,
+            "peak_connections_observed": 6,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_8",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 1.0846,
+            "throughput_mibs": 236.04,
+            "throughput_mbps": 1980.06,
+            "peak_rss_mb": 14.02,
+            "cpu_time_ms": 281.25,
+            "peak_connections_observed": 7,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_8",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 1.0685,
+            "throughput_mibs": 239.6,
+            "throughput_mbps": 2009.89,
+            "peak_rss_mb": 14.01,
+            "cpu_time_ms": 312.5,
+            "peak_connections_observed": 7,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          }
+        ],
+        "flux_32": [
+          {
+            "tool": "flux_32",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 1.131,
+            "throughput_mibs": 226.34,
+            "throughput_mbps": 1898.69,
+            "peak_rss_mb": 16.93,
+            "cpu_time_ms": 328.12,
+            "peak_connections_observed": 7,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_32",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 1.5226,
+            "throughput_mibs": 168.13,
+            "throughput_mbps": 1410.4,
+            "peak_rss_mb": 17.16,
+            "cpu_time_ms": 375.0,
+            "peak_connections_observed": 8,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_32",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 1.5211,
+            "throughput_mibs": 168.3,
+            "throughput_mbps": 1411.76,
+            "peak_rss_mb": 17.01,
+            "cpu_time_ms": 359.38,
+            "peak_connections_observed": 6,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          }
+        ],
+        "aria2_16": [
+          {
+            "tool": "aria2_16",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 1.3584,
+            "throughput_mibs": 188.45,
+            "throughput_mbps": 1580.85,
+            "peak_rss_mb": 21.58,
+            "cpu_time_ms": 421.88,
+            "peak_connections_observed": 13,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "aria2_16",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 1.4007,
+            "throughput_mibs": 182.77,
+            "throughput_mbps": 1533.2,
+            "peak_rss_mb": 20.39,
+            "cpu_time_ms": 468.75,
+            "peak_connections_observed": 13,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "aria2_16",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 1.3795,
+            "throughput_mibs": 185.57,
+            "throughput_mbps": 1556.66,
+            "peak_rss_mb": 22.65,
+            "cpu_time_ms": 437.5,
+            "peak_connections_observed": 13,
+            "file_verified": true,
+            "actual_size": 268435456,
+            "expected_size": 268435456,
+            "actual_sha256": "2b619a0b4d906de8a7b157dee497e8cc48b6fc0ca317be5040e1c7b9cc4b181a",
+            "leftover_temp_files": 0
+          }
+        ],
+        "idm_642": [
+          {
+            "tool": "idm_642",
+            "trial": 1,
+            "status": "SKIPPED",
+            "reason": "Unattended licensing dialog / interactive trial prompt requires desktop user session in CI; Tonec terms prohibit redistributable trial cracking"
+          }
+        ],
+        "fdm_634": [
+          {
+            "tool": "fdm_634",
+            "trial": 1,
+            "status": "SKIPPED",
+            "reason": "FDM v6 does not provide a headless CLI download/completion interface; requires interactive desktop GUI session"
+          }
+        ]
+      },
+      "summaries": {
+        "flux_8": {
+          "tool": "flux_8",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 1.073,
+          "mean_elapsed_s": 1.075,
+          "min_elapsed_s": 1.069,
+          "max_elapsed_s": 1.085,
+          "median_throughput_mibs": 238.57,
+          "mean_throughput_mibs": 238.07,
+          "median_throughput_mbps": 2001.25,
+          "mean_throughput_mbps": 1997.07,
+          "median_peak_rss_mb": 14.01,
+          "max_peak_rss_mb": 14.02,
+          "median_cpu_time_ms": 281.25,
+          "median_peak_connections": 7,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "flux_32": {
+          "tool": "flux_32",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 1.521,
+          "mean_elapsed_s": 1.392,
+          "min_elapsed_s": 1.131,
+          "max_elapsed_s": 1.523,
+          "median_throughput_mibs": 168.3,
+          "mean_throughput_mibs": 187.59,
+          "median_throughput_mbps": 1411.76,
+          "mean_throughput_mbps": 1573.62,
+          "median_peak_rss_mb": 17.01,
+          "max_peak_rss_mb": 17.16,
+          "median_cpu_time_ms": 359.38,
+          "median_peak_connections": 7,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "aria2_16": {
+          "tool": "aria2_16",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 1.379,
+          "mean_elapsed_s": 1.38,
+          "min_elapsed_s": 1.358,
+          "max_elapsed_s": 1.401,
+          "median_throughput_mibs": 185.57,
+          "mean_throughput_mibs": 185.6,
+          "median_throughput_mbps": 1556.66,
+          "mean_throughput_mbps": 1556.9,
+          "median_peak_rss_mb": 21.58,
+          "max_peak_rss_mb": 22.65,
+          "median_cpu_time_ms": 437.5,
+          "median_peak_connections": 13,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "idm_642": {
+          "tool": "idm_642",
+          "status": "SKIPPED",
+          "reason": "Unattended licensing dialog / interactive trial prompt requires desktop user session in CI; Tonec terms prohibit redistributable trial cracking"
+        },
+        "fdm_634": {
+          "tool": "fdm_634",
+          "status": "SKIPPED",
+          "reason": "FDM v6 does not provide a headless CLI download/completion interface; requires interactive desktop GUI session"
+        }
+      }
+    },
+    "scenario_b_64mb_throttled": {
+      "scenario": {
+        "id": "scenario_b_64mb_throttled",
+        "name": "Scenario B: 64 MiB Multi-Connection Scaling (1 MiB/s per connection)",
+        "description": "Evaluates parallel work-stealing speedup under server-enforced per-connection rate limiting (8 vs 16 vs 32 connections).",
+        "dataset": "bench_64mb.bin",
+        "file_size": 67108864,
+        "endpoint_prefix": "/throttled",
+        "throttled": true,
+        "range_supported": true
+      },
+      "trials": {
+        "flux_8": [
+          {
+            "tool": "flux_8",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 8.4766,
+            "throughput_mibs": 7.55,
+            "throughput_mbps": 63.34,
+            "peak_rss_mb": 14.23,
+            "cpu_time_ms": 62.5,
+            "peak_connections_observed": 6,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_8",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 8.5137,
+            "throughput_mibs": 7.52,
+            "throughput_mbps": 63.06,
+            "peak_rss_mb": 14.14,
+            "cpu_time_ms": 31.25,
+            "peak_connections_observed": 6,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_8",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 8.4821,
+            "throughput_mibs": 7.55,
+            "throughput_mbps": 63.29,
+            "peak_rss_mb": 14.1,
+            "cpu_time_ms": 0.0,
+            "peak_connections_observed": 7,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          }
+        ],
+        "flux_32": [
+          {
+            "tool": "flux_32",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 2.9695,
+            "throughput_mibs": 21.55,
+            "throughput_mbps": 180.8,
+            "peak_rss_mb": 23.48,
+            "cpu_time_ms": 78.12,
+            "peak_connections_observed": 32,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_32",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 2.4692,
+            "throughput_mibs": 25.92,
+            "throughput_mbps": 217.43,
+            "peak_rss_mb": 23.46,
+            "cpu_time_ms": 62.5,
+            "peak_connections_observed": 29,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_32",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 3.0503,
+            "throughput_mibs": 20.98,
+            "throughput_mbps": 176.01,
+            "peak_rss_mb": 23.21,
+            "cpu_time_ms": 140.62,
+            "peak_connections_observed": 34,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          }
+        ],
+        "aria2_16": [
+          {
+            "tool": "aria2_16",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 4.3601,
+            "throughput_mibs": 14.68,
+            "throughput_mbps": 123.13,
+            "peak_rss_mb": 21.66,
+            "cpu_time_ms": 78.12,
+            "peak_connections_observed": 15,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "aria2_16",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 4.3744,
+            "throughput_mibs": 14.63,
+            "throughput_mbps": 122.73,
+            "peak_rss_mb": 21.89,
+            "cpu_time_ms": 140.62,
+            "peak_connections_observed": 14,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "aria2_16",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 4.3584,
+            "throughput_mibs": 14.68,
+            "throughput_mbps": 123.18,
+            "peak_rss_mb": 20.29,
+            "cpu_time_ms": 46.88,
+            "peak_connections_observed": 16,
+            "file_verified": true,
+            "actual_size": 67108864,
+            "expected_size": 67108864,
+            "actual_sha256": "1146d4411ca3ea0b422ab4c2ba3c1e75316155426d37876955c75c894f4e1f1f",
+            "leftover_temp_files": 0
+          }
+        ],
+        "idm_642": [
+          {
+            "tool": "idm_642",
+            "trial": 1,
+            "status": "SKIPPED",
+            "reason": "Unattended licensing dialog / interactive trial prompt requires desktop user session in CI; Tonec terms prohibit redistributable trial cracking"
+          }
+        ],
+        "fdm_634": [
+          {
+            "tool": "fdm_634",
+            "trial": 1,
+            "status": "SKIPPED",
+            "reason": "FDM v6 does not provide a headless CLI download/completion interface; requires interactive desktop GUI session"
+          }
+        ]
+      },
+      "summaries": {
+        "flux_8": {
+          "tool": "flux_8",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 8.482,
+          "mean_elapsed_s": 8.491,
+          "min_elapsed_s": 8.477,
+          "max_elapsed_s": 8.514,
+          "median_throughput_mibs": 7.55,
+          "mean_throughput_mibs": 7.54,
+          "median_throughput_mbps": 63.29,
+          "mean_throughput_mbps": 63.23,
+          "median_peak_rss_mb": 14.14,
+          "max_peak_rss_mb": 14.23,
+          "median_cpu_time_ms": 31.25,
+          "median_peak_connections": 6,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "flux_32": {
+          "tool": "flux_32",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 2.97,
+          "mean_elapsed_s": 2.83,
+          "min_elapsed_s": 2.469,
+          "max_elapsed_s": 3.05,
+          "median_throughput_mibs": 21.55,
+          "mean_throughput_mibs": 22.82,
+          "median_throughput_mbps": 180.8,
+          "mean_throughput_mbps": 191.41,
+          "median_peak_rss_mb": 23.46,
+          "max_peak_rss_mb": 23.48,
+          "median_cpu_time_ms": 78.12,
+          "median_peak_connections": 32,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "aria2_16": {
+          "tool": "aria2_16",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 4.36,
+          "mean_elapsed_s": 4.364,
+          "min_elapsed_s": 4.358,
+          "max_elapsed_s": 4.374,
+          "median_throughput_mibs": 14.68,
+          "mean_throughput_mibs": 14.66,
+          "median_throughput_mbps": 123.13,
+          "mean_throughput_mbps": 123.01,
+          "median_peak_rss_mb": 21.66,
+          "max_peak_rss_mb": 21.89,
+          "median_cpu_time_ms": 78.12,
+          "median_peak_connections": 15,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "idm_642": {
+          "tool": "idm_642",
+          "status": "SKIPPED",
+          "reason": "Unattended licensing dialog / interactive trial prompt requires desktop user session in CI; Tonec terms prohibit redistributable trial cracking"
+        },
+        "fdm_634": {
+          "tool": "fdm_634",
+          "status": "SKIPPED",
+          "reason": "FDM v6 does not provide a headless CLI download/completion interface; requires interactive desktop GUI session"
+        }
+      }
+    },
+    "scenario_c_16mb_norange": {
+      "scenario": {
+        "id": "scenario_c_16mb_norange",
+        "name": "Scenario C: 16 MiB Non-Range Server (Single-Stream Fallback)",
+        "description": "Verifies graceful single-stream fallback when server does not support RFC 7233 byte ranges.",
+        "dataset": "bench_16mb.bin",
+        "file_size": 16777216,
+        "endpoint_prefix": "/no-range",
+        "throttled": false,
+        "range_supported": false
+      },
+      "trials": {
+        "flux_8": [
+          {
+            "tool": "flux_8",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 0.207,
+            "throughput_mibs": 77.29,
+            "throughput_mbps": 648.39,
+            "peak_rss_mb": 11.94,
+            "cpu_time_ms": 31.25,
+            "peak_connections_observed": 1,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_8",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 0.2077,
+            "throughput_mibs": 77.05,
+            "throughput_mbps": 646.34,
+            "peak_rss_mb": 11.96,
+            "cpu_time_ms": 31.25,
+            "peak_connections_observed": 1,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_8",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 0.2073,
+            "throughput_mibs": 77.19,
+            "throughput_mbps": 647.51,
+            "peak_rss_mb": 11.93,
+            "cpu_time_ms": 31.25,
+            "peak_connections_observed": 1,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          }
+        ],
+        "flux_32": [
+          {
+            "tool": "flux_32",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 0.2074,
+            "throughput_mibs": 77.14,
+            "throughput_mbps": 647.08,
+            "peak_rss_mb": 11.94,
+            "cpu_time_ms": 31.25,
+            "peak_connections_observed": 1,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_32",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 0.2073,
+            "throughput_mibs": 77.19,
+            "throughput_mbps": 647.52,
+            "peak_rss_mb": 11.92,
+            "cpu_time_ms": 0.0,
+            "peak_connections_observed": 1,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "flux_32",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 0.2076,
+            "throughput_mibs": 77.06,
+            "throughput_mbps": 646.41,
+            "peak_rss_mb": 11.95,
+            "cpu_time_ms": 31.25,
+            "peak_connections_observed": 1,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          }
+        ],
+        "aria2_16": [
+          {
+            "tool": "aria2_16",
+            "trial": 1,
+            "status": "SUCCESS",
+            "elapsed_s": 0.1087,
+            "throughput_mibs": 147.14,
+            "throughput_mbps": 1234.3,
+            "peak_rss_mb": 10.98,
+            "cpu_time_ms": 93.75,
+            "peak_connections_observed": 7,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "aria2_16",
+            "trial": 2,
+            "status": "SUCCESS",
+            "elapsed_s": 0.1018,
+            "throughput_mibs": 157.15,
+            "throughput_mbps": 1318.23,
+            "peak_rss_mb": 11.23,
+            "cpu_time_ms": 46.88,
+            "peak_connections_observed": 9,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          },
+          {
+            "tool": "aria2_16",
+            "trial": 3,
+            "status": "SUCCESS",
+            "elapsed_s": 0.1075,
+            "throughput_mibs": 148.87,
+            "throughput_mbps": 1248.78,
+            "peak_rss_mb": 10.98,
+            "cpu_time_ms": 78.12,
+            "peak_connections_observed": 6,
+            "file_verified": true,
+            "actual_size": 16777216,
+            "expected_size": 16777216,
+            "actual_sha256": "7e77668966937588a2a9d75d7a542e46bd78d3d531cfba4bb50a8580c499ddf8",
+            "leftover_temp_files": 0
+          }
+        ],
+        "idm_642": [
+          {
+            "tool": "idm_642",
+            "trial": 1,
+            "status": "SKIPPED",
+            "reason": "Unattended licensing dialog / interactive trial prompt requires desktop user session in CI; Tonec terms prohibit redistributable trial cracking"
+          }
+        ],
+        "fdm_634": [
+          {
+            "tool": "fdm_634",
+            "trial": 1,
+            "status": "SKIPPED",
+            "reason": "FDM v6 does not provide a headless CLI download/completion interface; requires interactive desktop GUI session"
+          }
+        ]
+      },
+      "summaries": {
+        "flux_8": {
+          "tool": "flux_8",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 0.207,
+          "mean_elapsed_s": 0.207,
+          "min_elapsed_s": 0.207,
+          "max_elapsed_s": 0.208,
+          "median_throughput_mibs": 77.19,
+          "mean_throughput_mibs": 77.18,
+          "median_throughput_mbps": 647.51,
+          "mean_throughput_mbps": 647.41,
+          "median_peak_rss_mb": 11.94,
+          "max_peak_rss_mb": 11.96,
+          "median_cpu_time_ms": 31.25,
+          "median_peak_connections": 1,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "flux_32": {
+          "tool": "flux_32",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 0.207,
+          "mean_elapsed_s": 0.207,
+          "min_elapsed_s": 0.207,
+          "max_elapsed_s": 0.208,
+          "median_throughput_mibs": 77.14,
+          "mean_throughput_mibs": 77.13,
+          "median_throughput_mbps": 647.08,
+          "mean_throughput_mbps": 647.0,
+          "median_peak_rss_mb": 11.94,
+          "max_peak_rss_mb": 11.95,
+          "median_cpu_time_ms": 31.25,
+          "median_peak_connections": 1,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "aria2_16": {
+          "tool": "aria2_16",
+          "status": "COMPLETED",
+          "samples_count": 3,
+          "median_elapsed_s": 0.107,
+          "mean_elapsed_s": 0.106,
+          "min_elapsed_s": 0.102,
+          "max_elapsed_s": 0.109,
+          "median_throughput_mibs": 148.87,
+          "mean_throughput_mibs": 151.05,
+          "median_throughput_mbps": 1248.78,
+          "mean_throughput_mbps": 1267.1,
+          "median_peak_rss_mb": 10.98,
+          "max_peak_rss_mb": 11.23,
+          "median_cpu_time_ms": 78.12,
+          "median_peak_connections": 7,
+          "all_sha256_verified": true,
+          "zero_leftover_parts": true
+        },
+        "idm_642": {
+          "tool": "idm_642",
+          "status": "SKIPPED",
+          "reason": "Unattended licensing dialog / interactive trial prompt requires desktop user session in CI; Tonec terms prohibit redistributable trial cracking"
+        },
+        "fdm_634": {
+          "tool": "fdm_634",
+          "status": "SKIPPED",
+          "reason": "FDM v6 does not provide a headless CLI download/completion interface; requires interactive desktop GUI session"
+        }
+      }
+    }
+  }
+}
