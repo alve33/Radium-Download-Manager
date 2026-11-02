@@ -247,214 +247,225 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
     // -------------------------------------------------------------------------
     // Phase 1: Initial Probe (FR-001)
+    // Fast path: If the task has already been probed (e.g. from AddDownload dialog,
+    // browser extension headers, or background check) and is not resuming an existing partial download,
+    // skip the redundant synchronous round-trip for instant download start!
     // -------------------------------------------------------------------------
-    task.state = TaskState::kProbing;
-    auto probe_t0 = std::chrono::steady_clock::now();
-    task.status_detail = "Probing server & headers...";
+    bool range_supported = task.range_supported;
+    uint64_t total_bytes = task.total_bytes;
     HttpResponseMeta probe_meta;
-    std::atomic<bool> probe_cancel{false};
-    const uint64_t probe_request_id = http_trace_enabled ? next_trace_request_id.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
-    const auto probe_request_start = std::chrono::steady_clock::now();
-    const uint32_t active_at_probe_start = active_http_requests.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (http_trace_enabled) {
-        EmitRuntimeTrace("{\"event\":\"request_start\",\"request_id\":" + std::to_string(probe_request_id) +
-            ",\"request_kind\":\"probe\",\"worker\":-1,\"segment\":-1,\"range_start\":0,\"range_end\":0" +
-            ",\"elapsed_us\":" + std::to_string(TraceElapsedMicroseconds(engine_start_tp)) +
-            ",\"active_requests\":" + std::to_string(active_at_probe_start) + "}");
-    }
+    Result<HttpResponseMeta> probe_res = Result<HttpResponseMeta>::Ok({});
+    bool is_resume = !task.segments.empty() && task.downloaded_bytes > 0;
+    const bool already_probed = (task.total_bytes > 0 && task.range_supported && !is_resume);
 
-    auto probe_res = HttpClient::PerformGet(
-        task.url,
-        req_headers,
-        0,
-        0,
-        m_cfg.stall_timeout_ms,
-        m_cfg.allow_loopback_redirect,
-        probe_cancel,
-        [&](const HttpResponseMeta& meta) -> HeaderAction {
-            probe_meta = meta;
-            return HeaderAction::kStopSuccess;
-        },
-        nullptr,
-        m_cfg.net_opts);
-    const uint32_t active_after_probe = active_http_requests.fetch_sub(1, std::memory_order_relaxed) - 1;
-    if (http_trace_enabled) {
-        const auto probe_request_end = std::chrono::steady_clock::now();
-        EmitRuntimeTrace("{\"event\":\"request_end\",\"request_id\":" + std::to_string(probe_request_id) +
-            ",\"request_kind\":\"probe\",\"status\":" + std::to_string(probe_meta.status_code) +
-            ",\"response_start\":" + std::to_string(probe_meta.range_start) +
-            ",\"response_end\":" + std::to_string(probe_meta.range_end) +
-            ",\"client_bytes_received\":0,\"file_bytes_written\":0,\"elapsed_us\":" +
-            std::to_string(TraceElapsedMicroseconds(engine_start_tp)) + ",\"duration_us\":" +
-            std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(probe_request_end - probe_request_start).count()) +
-            ",\"active_requests\":" + std::to_string(active_after_probe) +
-            ",\"outcome\":\"" + (probe_res.ok() ? std::string("complete") : std::string("failed")) + "\"}");
-    }
-
-    // FDM-020: If probe is rate-limited (HTTP 429) or overloaded (HTTP 503), back off using Retry-After
-    // and retry a bounded number of times. Servers may apply per-IP rate
-    // limits or transient backpressure to all requests, including the initial range-capability probe.
-    constexpr int kMaxProbeAttempts = 3;
-    for (int probe_attempt = 1;
-         probe_attempt < kMaxProbeAttempts &&
-         (probe_meta.status_code == 429 || probe_meta.status_code == 503 ||
-          (!probe_res.ok() && probe_res.error &&
-           (probe_res.error->code == "ERR_HTTP_429_RATE_LIMITED" || probe_res.error->code == "ERR_HTTP_5XX_TRANSIENT")));
-         ++probe_attempt) {
-        int retry_sec = probe_meta.retry_after_sec;
-        if (retry_sec > 30) {
-            // Server requested a longer wait than is suitable for active probe blocking.
-            // Transition task to user_action_resumable paused state so it can be resumed safely without hammering.
-            OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Probe received HTTP " +
-                std::to_string(probe_meta.status_code) + " with Retry-After: " + std::to_string(retry_sec) +
-                "s > 30s probe cap; pausing task for deferred resumption");
-            task.state = TaskState::kPaused;
-            task.pause_reason = PauseReason::kError;
-            task.error_code = (probe_meta.status_code == 429) ? "ERR_HTTP_429_RATE_LIMITED" : "ERR_HTTP_503";
-            task.error_message = "Server requested wait of " + std::to_string(retry_sec) + "s (HTTP " + std::to_string(probe_meta.status_code) + ")";
-            task.status_detail = task.error_message;
-            return Result<std::filesystem::path>::Err(task.error_code, task.error_message, true, true);
+    if (already_probed) {
+        OPENIDM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Pre-probed metadata available (total_bytes=" +
+                         std::to_string(total_bytes) + ", range_supported=true); skipping redundant initial network probe for instant start!");
+        task.state = TaskState::kDownloading;
+        task.status_detail = "Starting transfer workers...";
+    } else {
+        task.state = TaskState::kProbing;
+        auto probe_t0 = std::chrono::steady_clock::now();
+        task.status_detail = "Probing server & headers...";
+        std::atomic<bool> probe_cancel{false};
+        const uint64_t probe_request_id = http_trace_enabled ? next_trace_request_id.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
+        const auto probe_request_start = std::chrono::steady_clock::now();
+        const uint32_t active_at_probe_start = active_http_requests.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (http_trace_enabled) {
+            EmitRuntimeTrace(std::string("{\"event\":\"request_start\",\"request_id\":") + std::to_string(probe_request_id) +
+                ",\"request_kind\":\"probe\",\"worker\":-1,\"segment\":-1,\"range_start\":0,\"range_end\":0" +
+                ",\"elapsed_us\":" + std::to_string(TraceElapsedMicroseconds(engine_start_tp)) +
+                ",\"active_requests\":" + std::to_string(active_at_probe_start) + "}");
         }
 
-        int wait_sec = (retry_sec > 0) ? retry_sec : (probe_attempt * 2);
-        OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Probe received HTTP " +
-                             std::to_string(probe_meta.status_code) + "; waiting full "
-                             + std::to_string(wait_sec) + "s then retrying probe (attempt "
-                             + std::to_string(probe_attempt + 1) + "/" + std::to_string(kMaxProbeAttempts) + ")...");
-        for (int slept = 0; slept < wait_sec * 1000; slept += 50) {
-            if (pause_requested.load() || cancel_requested.load()) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(std::min(50, wait_sec * 1000 - slept)));
-        }
-        if (!pause_requested.load() && !cancel_requested.load()) {
-            probe_cancel.store(false);
-            probe_meta = {};
-            probe_res = HttpClient::PerformGet(
-                task.url,
-                req_headers,
-                0,
-                0,
-                m_cfg.stall_timeout_ms,
-                m_cfg.allow_loopback_redirect,
-                probe_cancel,
-                [&](const HttpResponseMeta& meta) -> HeaderAction {
-                    probe_meta = meta;
-                    return HeaderAction::kStopSuccess;
-                },
-                nullptr,
-                m_cfg.net_opts);
-        }
-    }
-
-    // If server returned 416 Range Not Satisfiable during range probe:
-    // RFC 9110 Section 14.4: Content-Range: bytes */0 indicates a verified empty resource.
-    if (probe_meta.status_code == 416) {
-        if (probe_meta.is_unsatisfied_range && probe_meta.has_range_total && probe_meta.range_total == 0) {
-            OPENIDM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Probe received 416 with bytes */0 (verified empty resource)");
-            probe_meta.status_code = 200;
-            probe_meta.content_length = 0;
-            probe_meta.has_content_length = true;
-        } else {
-            // Unexpected 416 or unknown length: attempt un-ranged GET to verify actual resource state
-            probe_cancel.store(false);
-            auto unrange_res = HttpClient::PerformGet(
-                task.url,
-                req_headers,
-                std::nullopt,
-                std::nullopt,
-                m_cfg.stall_timeout_ms,
-                m_cfg.allow_loopback_redirect,
-                probe_cancel,
-                [&](const HttpResponseMeta& meta) -> HeaderAction {
-                    probe_meta = meta;
-                    return HeaderAction::kStopSuccess;
-                },
-                nullptr,
-                m_cfg.net_opts);
-            if (!unrange_res.ok()) {
-                probe_res = unrange_res;
-            }
-        }
-    }
-
-    auto probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - probe_t0).count();
-    OPENIDM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Probe completed in " + std::to_string(probe_ms) + " ms (HTTP " + std::to_string(probe_meta.status_code) + ")");
-
-    if (!probe_res.ok() || probe_meta.status_code >= 400) {
-        Error probe_err = !probe_res.ok() ? *probe_res.error : *HttpClient::MapHttpStatusToError(probe_meta).error;
-        task.state = probe_err.user_action_resumable ? TaskState::kPaused : TaskState::kFailed;
-        task.error_code = probe_err.code;
-        task.error_message = probe_err.message;
-        task.status_detail = task.error_message;
-        return Result<std::filesystem::path>::Err(
-            probe_err.code, probe_err.message, probe_err.retryable, probe_err.user_action_resumable);
-    }
-
-    // FDM-007: Cross-origin redirect credential scrubbing
-    if (!probe_meta.final_url.empty() && probe_meta.final_url != task.url) {
-        auto orig_u = HttpClient::ParseUrl(task.url);
-        auto final_u = HttpClient::ParseUrl(probe_meta.final_url);
-        if (orig_u.ok() && final_u.ok()) {
-            bool cross_origin = (orig_u.value->scheme != final_u.value->scheme ||
-                                 orig_u.value->host != final_u.value->host ||
-                                 orig_u.value->port != final_u.value->port);
-            if (cross_origin) {
-                OPENIDM_LOG_INFO("HttpEngine", "Cross-origin redirect detected (" + task.url + " -> " + probe_meta.final_url + "); scrubbing credentials and authorization headers");
-                static const char* kSensitiveHeaders[] = {
-                    "cookie", "cookie2", "authorization", "proxy-authorization",
-                    "Cookie", "Cookie2", "Authorization", "Proxy-Authorization"
-                };
-                for (const char* h : kSensitiveHeaders) {
-                    req_headers.erase(h);
-                    task.headers.erase(h);
-                    task.auth_headers.erase(h);
-                }
-            }
-        }
-        task.url = probe_meta.final_url;
-    }
-
-    bool range_supported = (probe_meta.status_code == 206 && probe_meta.is_partial_content);
-    uint64_t total_bytes = 0;
-    if (range_supported && probe_meta.range_total > 0) {
-        total_bytes = probe_meta.range_total;
-    } else if (probe_meta.has_content_length) {
-        total_bytes = probe_meta.content_length;
-    }
-
-    // Secondary Range capability probe: if server answered 200 OK (and didn't explicitly forbid ranges via Accept-Ranges: none)
-    // for files > min_split_bytes, safely verify byte range support with a nonzero probe.
-    if (!range_supported && probe_meta.status_code == 200 && !probe_meta.accept_ranges_none && total_bytes > m_cfg.min_split_bytes) {
-        OPENIDM_LOG_INFO("HttpEngine", "Probe received 200 OK; performing secondary range verification probe to test Range capability...");
-        HttpResponseMeta sec_meta;
-        std::atomic<bool> sec_cancel{false};
-        uint64_t test_start = total_bytes / 2;
-        auto sec_res = HttpClient::PerformGet(
+        probe_res = HttpClient::PerformGet(
             task.url,
             req_headers,
-            test_start,
-            test_start,
+            0,
+            0,
             m_cfg.stall_timeout_ms,
             m_cfg.allow_loopback_redirect,
-            sec_cancel,
+            probe_cancel,
             [&](const HttpResponseMeta& meta) -> HeaderAction {
-                sec_meta = meta;
+                probe_meta = meta;
                 return HeaderAction::kStopSuccess;
             },
             nullptr,
             m_cfg.net_opts);
-        if (sec_res.ok() && sec_meta.status_code == 206 && sec_meta.is_partial_content &&
-            !sec_meta.content_range_malformed && sec_meta.range_start == test_start) {
+        const uint32_t active_after_probe = active_http_requests.fetch_sub(1, std::memory_order_relaxed) - 1;
+        if (http_trace_enabled) {
+            const auto probe_request_end = std::chrono::steady_clock::now();
+            EmitRuntimeTrace(std::string("{\"event\":\"request_end\",\"request_id\":") + std::to_string(probe_request_id) +
+                ",\"request_kind\":\"probe\",\"status\":" + std::to_string(probe_meta.status_code) +
+                ",\"response_start\":" + std::to_string(probe_meta.range_start) +
+                ",\"response_end\":" + std::to_string(probe_meta.range_end) +
+                ",\"client_bytes_received\":0,\"file_bytes_written\":0,\"elapsed_us\":" +
+                std::to_string(TraceElapsedMicroseconds(engine_start_tp)) + ",\"duration_us\":" +
+                std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(probe_request_end - probe_request_start).count()) +
+                ",\"active_requests\":" + std::to_string(active_after_probe) +
+                ",\"outcome\":\"" + (probe_res.ok() ? std::string("complete") : std::string("failed")) + "\"}");
+        }
+
+        constexpr int kMaxProbeAttempts = 3;
+        for (int probe_attempt = 1;
+             probe_attempt < kMaxProbeAttempts &&
+             (probe_meta.status_code == 429 || probe_meta.status_code == 503 ||
+              (!probe_res.ok() && probe_res.error &&
+               (probe_res.error->code == "ERR_HTTP_429_RATE_LIMITED" || probe_res.error->code == "ERR_HTTP_5XX_TRANSIENT")));
+             ++probe_attempt) {
+            int retry_sec = probe_meta.retry_after_sec;
+            if (retry_sec > 30) {
+                OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Probe received HTTP " +
+                    std::to_string(probe_meta.status_code) + " with Retry-After: " + std::to_string(retry_sec) +
+                    "s > 30s probe cap; pausing task for deferred resumption");
+                task.state = TaskState::kPaused;
+                task.pause_reason = PauseReason::kError;
+                task.error_code = (probe_meta.status_code == 429) ? "ERR_HTTP_429_RATE_LIMITED" : "ERR_HTTP_503";
+                task.error_message = "Server requested wait of " + std::to_string(retry_sec) + "s (HTTP " + std::to_string(probe_meta.status_code) + ")";
+                task.status_detail = task.error_message;
+                return Result<std::filesystem::path>::Err(task.error_code, task.error_message, true, true);
+            }
+
+            int wait_sec = (retry_sec > 0) ? retry_sec : (probe_attempt * 2);
+            OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Probe received HTTP " +
+                                 std::to_string(probe_meta.status_code) + "; waiting full "
+                                 + std::to_string(wait_sec) + "s then retrying probe (attempt "
+                                 + std::to_string(probe_attempt + 1) + "/" + std::to_string(kMaxProbeAttempts) + ")...");
+            for (int slept = 0; slept < wait_sec * 1000; slept += 50) {
+                if (pause_requested.load() || cancel_requested.load()) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(std::min(50, wait_sec * 1000 - slept)));
+            }
+            if (!pause_requested.load() && !cancel_requested.load()) {
+                probe_cancel.store(false);
+                probe_meta = {};
+                probe_res = HttpClient::PerformGet(
+                    task.url,
+                    req_headers,
+                    0,
+                    0,
+                    m_cfg.stall_timeout_ms,
+                    m_cfg.allow_loopback_redirect,
+                    probe_cancel,
+                    [&](const HttpResponseMeta& meta) -> HeaderAction {
+                        probe_meta = meta;
+                        return HeaderAction::kStopSuccess;
+                    },
+                    nullptr,
+                    m_cfg.net_opts);
+            }
+        }
+
+        if (probe_meta.status_code == 416) {
+            if (probe_meta.is_unsatisfied_range && probe_meta.has_range_total && probe_meta.range_total == 0) {
+                OPENIDM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Probe received 416 with bytes */0 (verified empty resource)");
+                probe_meta.status_code = 200;
+                probe_meta.content_length = 0;
+                probe_meta.has_content_length = true;
+            } else {
+                probe_cancel.store(false);
+                auto unrange_res = HttpClient::PerformGet(
+                    task.url,
+                    req_headers,
+                    std::nullopt,
+                    std::nullopt,
+                    m_cfg.stall_timeout_ms,
+                    m_cfg.allow_loopback_redirect,
+                    probe_cancel,
+                    [&](const HttpResponseMeta& meta) -> HeaderAction {
+                        probe_meta = meta;
+                        return HeaderAction::kStopSuccess;
+                    },
+                    nullptr,
+                    m_cfg.net_opts);
+                if (!unrange_res.ok()) {
+                    probe_res = unrange_res;
+                }
+            }
+        }
+
+        auto probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - probe_t0).count();
+        OPENIDM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Probe completed in " + std::to_string(probe_ms) + " ms (HTTP " + std::to_string(probe_meta.status_code) + ")");
+
+        if (!probe_res.ok() || probe_meta.status_code >= 400) {
+            Error probe_err = !probe_res.ok() ? *probe_res.error : *HttpClient::MapHttpStatusToError(probe_meta).error;
+            task.state = probe_err.user_action_resumable ? TaskState::kPaused : TaskState::kFailed;
+            task.error_code = probe_err.code;
+            task.error_message = probe_err.message;
+            task.status_detail = task.error_message;
+            return Result<std::filesystem::path>::Err(
+                probe_err.code, probe_err.message, probe_err.retryable, probe_err.user_action_resumable);
+        }
+
+        if (!probe_meta.final_url.empty() && probe_meta.final_url != task.url) {
+            auto orig_u = HttpClient::ParseUrl(task.url);
+            auto final_u = HttpClient::ParseUrl(probe_meta.final_url);
+            if (orig_u.ok() && final_u.ok()) {
+                bool cross_origin = (orig_u.value->scheme != final_u.value->scheme ||
+                                     orig_u.value->host != final_u.value->host ||
+                                     orig_u.value->port != final_u.value->port);
+                if (cross_origin) {
+                    OPENIDM_LOG_INFO("HttpEngine", "Cross-origin redirect detected (" + task.url + " -> " + probe_meta.final_url + "); scrubbing credentials and authorization headers");
+                    static const char* kSensitiveHeaders[] = {
+                        "cookie", "cookie2", "authorization", "proxy-authorization",
+                        "Cookie", "Cookie2", "Authorization", "Proxy-Authorization"
+                    };
+                    for (const char* h : kSensitiveHeaders) {
+                        req_headers.erase(h);
+                        task.headers.erase(h);
+                        task.auth_headers.erase(h);
+                    }
+                }
+            }
+            task.url = probe_meta.final_url;
+        }
+
+        range_supported = (probe_meta.status_code == 206 && probe_meta.is_partial_content);
+        total_bytes = 0;
+        if (range_supported && probe_meta.range_total > 0) {
+            total_bytes = probe_meta.range_total;
+        } else if (probe_meta.has_content_length) {
+            total_bytes = probe_meta.content_length;
+        }
+
+        if (!range_supported && !probe_meta.accept_ranges_none &&
+            (probe_meta.accept_ranges_bytes || task.range_supported)) {
             range_supported = true;
-            OPENIDM_LOG_INFO("HttpEngine", "Secondary range probe confirmed HTTP 206 Range capability!");
-        } else {
-            OPENIDM_LOG_INFO("HttpEngine", "Secondary range probe rejected HTTP 206 (status " + std::to_string(sec_meta.status_code) + "); falling back to single stream");
+        }
+
+        if (!range_supported && probe_meta.status_code == 200 && !probe_meta.accept_ranges_none && total_bytes > m_cfg.min_split_bytes) {
+            task.status_detail = "Verifying server byte-range support...";
+            OPENIDM_LOG_INFO("HttpEngine", "Probe received 200 OK; performing secondary range verification probe to test Range capability...");
+            HttpResponseMeta sec_meta;
+            std::atomic<bool> sec_cancel{false};
+            uint64_t test_start = total_bytes / 2;
+            auto sec_res = HttpClient::PerformGet(
+                task.url,
+                req_headers,
+                test_start,
+                test_start,
+                m_cfg.stall_timeout_ms,
+                m_cfg.allow_loopback_redirect,
+                sec_cancel,
+                [&](const HttpResponseMeta& meta) -> HeaderAction {
+                    sec_meta = meta;
+                    return HeaderAction::kStopSuccess;
+                },
+                nullptr,
+                m_cfg.net_opts);
+            if (sec_res.ok() && sec_meta.status_code == 206 && sec_meta.is_partial_content &&
+                !sec_meta.content_range_malformed && sec_meta.range_start == test_start) {
+                range_supported = true;
+                OPENIDM_LOG_INFO("HttpEngine", "Secondary range probe confirmed HTTP 206 Range capability!");
+            } else {
+                OPENIDM_LOG_INFO("HttpEngine", "Secondary range probe rejected HTTP 206 (status " + std::to_string(sec_meta.status_code) + "); falling back to single stream");
+            }
         }
     }
 
     // -------------------------------------------------------------------------
     // Resource-Aware Resume Validation (COR-03)
     // -------------------------------------------------------------------------
-    bool is_resume = !task.segments.empty() && task.downloaded_bytes > 0;
+    // is_resume already declared above
     if (is_resume) {
         bool validator_mismatch = false;
         std::string mismatch_reason;

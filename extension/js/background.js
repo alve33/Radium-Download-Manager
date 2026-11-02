@@ -396,56 +396,42 @@ async function collectCookiesForDownload(targetUrl, referrerUrl = "") {
   if (referrerUrl) addTarget(referrerUrl);
 
   if (typeof chrome !== "undefined" && chrome.cookies && typeof chrome.cookies.getAll === "function") {
+    const queryTasks = [];
     for (const u of urlsToQuery) {
-      try {
-        const list = await new Promise((resolve) => {
-          let settled = false;
-          const timer = setTimeout(() => {
-            if (!settled) { settled = true; resolve([]); }
-          }, 1500);
-          try {
-            chrome.cookies.getAll({ url: u }, (cList) => {
-              if (!settled) {
-                settled = true;
-                clearTimeout(timer);
-                if (chrome.runtime) void chrome.runtime.lastError;
-                resolve(cList || []);
-              }
-            });
-          } catch (_) {
-            if (!settled) { settled = true; clearTimeout(timer); resolve([]); }
-          }
-        });
-        if (Array.isArray(list)) {
-          for (const c of list) {
-            if (c && c.name && !cookieMap.has(c.name)) {
-              cookieMap.set(c.name, c.value);
+      queryTasks.push(new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => { if (!settled) { settled = true; resolve([]); } }, 120);
+        try {
+          chrome.cookies.getAll({ url: u }, (cList) => {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              if (chrome.runtime) void chrome.runtime.lastError;
+              resolve(cList || []);
             }
-          }
-        }
-      } catch (_) {}
+          });
+        } catch (_) { if (!settled) { settled = true; clearTimeout(timer); resolve([]); } }
+      }));
     }
-
     for (const dom of domainsToQuery) {
-      try {
-        const list = await new Promise((resolve) => {
-          let settled = false;
-          const timer = setTimeout(() => {
-            if (!settled) { settled = true; resolve([]); }
-          }, 1000);
-          try {
-            chrome.cookies.getAll({ domain: dom }, (cList) => {
-              if (!settled) {
-                settled = true;
-                clearTimeout(timer);
-                if (chrome.runtime) void chrome.runtime.lastError;
-                resolve(cList || []);
-              }
-            });
-          } catch (_) {
-            if (!settled) { settled = true; clearTimeout(timer); resolve([]); }
-          }
-        });
+      queryTasks.push(new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => { if (!settled) { settled = true; resolve([]); } }, 120);
+        try {
+          chrome.cookies.getAll({ domain: dom }, (cList) => {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              if (chrome.runtime) void chrome.runtime.lastError;
+              resolve(cList || []);
+            }
+          });
+        } catch (_) { if (!settled) { settled = true; clearTimeout(timer); resolve([]); } }
+      }));
+    }
+    try {
+      const results = await Promise.all(queryTasks);
+      for (const list of results) {
         if (Array.isArray(list)) {
           for (const c of list) {
             if (c && c.name && !cookieMap.has(c.name)) {
@@ -453,14 +439,13 @@ async function collectCookiesForDownload(targetUrl, referrerUrl = "") {
             }
           }
         }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
   }
 
   if (cookieMap.size === 0) return "";
-  return Array.from(cookieMap.entries()).map(([k, v]) => `${k}=${v}`).join("; ");
+  return Array.from(cookieMap.entries()).map(([k, v]) => k + "=" + v).join("; ");
 }
-
 function findRecentRequestHeadersForUrl(url) {
   if (!url || !G.requestMetaMap) return {};
   try {

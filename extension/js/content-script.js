@@ -349,6 +349,11 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     dragHandle.textContent = "⠿";
     dragHandle.title = "Drag to move Radium controls";
     dragHandle.setAttribute("aria-label", "Drag to move Radium controls");
+    let isDragging = false;
+    dragHandle.addEventListener("click", (ev) => {
+      if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
+      if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+    });
     dragHandle.addEventListener("pointerdown", (ev) => {
       if (!ev || ev.button !== 0) return;
       ev.preventDefault();
@@ -357,6 +362,7 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       const startLeft = parseInt(hostEl.style.left, 10) || 8;
       const startTop = parseInt(hostEl.style.top, 10) || 8;
       const move = (moveEvent) => {
+        isDragging = true;
         const viewport = doc.defaultView || window;
         const maxLeft = Math.max(8, viewport.innerWidth - (hostEl.offsetWidth || 240) - 8);
         const maxTop = Math.max(8, viewport.innerHeight - (hostEl.offsetHeight || 40) - 8);
@@ -369,7 +375,9 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
         hostEl.style.visibility = "visible";
         hostEl.style.opacity = "1";
       };
-      const end = () => {
+      const end = (upEvent) => {
+        if (upEvent && typeof upEvent.stopPropagation === "function") upEvent.stopPropagation();
+        setTimeout(() => { isDragging = false; }, 50);
         doc.removeEventListener("pointermove", move, true);
         doc.removeEventListener("pointerup", end, true);
         doc.removeEventListener("pointercancel", end, true);
@@ -445,15 +453,14 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       }
     };
 
-    btn.addEventListener("click", invokeClick);
-    if (hostEl && typeof hostEl.addEventListener === "function") {
-      hostEl.addEventListener("click", (ev) => {
-        // If clicking on select element, let native select handle it without triggering download
-        const target = ev.target;
-        if (target === selectEl || (target && (target.tagName === "SELECT" || target.className === "radium-drag-handle"))) return;
-        invokeClick(ev);
-      });
-    }
+    btn.addEventListener("click", (ev) => {
+      if (isDragging) {
+        if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
+        if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+        return;
+      }
+      invokeClick(ev);
+    });
 
     selectEl.addEventListener("change", (ev) => {
       if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();

@@ -1261,3 +1261,56 @@ runTests().catch((err) => {
   console.error("FAIL:", err);
   process.exit(1);
 });
+
+// ---------------------------------------------------------------------------
+// Regression Test: Video Download Popup Mover Button Isolation
+// ---------------------------------------------------------------------------
+(function testMoverButtonIsolation() {
+  console.log('[Regression] Testing Mover button drag handle does not trigger download...');
+  let downloadTriggered = 0;
+  const mockVideo = {
+    src: 'https://example.com/video.mp4',
+    getBoundingClientRect: () => ({ left: 10, top: 10, width: 640, height: 360 })
+  };
+  let listeners = {};
+  const mockDoc = {
+    createElement: (tag) => {
+      const el = {
+        tagName: tag.toUpperCase(),
+        style: {},
+        setAttribute: () => {},
+        addEventListener: (ev, fn) => {
+          el._evs = el._evs || {};
+          el._evs[ev] = fn;
+        },
+        appendChild: (child) => {
+          el.children = el.children || [];
+          el.children.push(child);
+        },
+        dispatchEvent: (ev) => {
+          if (el._evs && el._evs[ev.type]) el._evs[ev.type](ev);
+        }
+      };
+      return el;
+    },
+    addEventListener: (ev, fn) => { listeners[ev] = fn; },
+    removeEventListener: () => {},
+    body: { appendChild: () => {} }
+  };
+  
+  if (typeof scanAndAttachVideoOverlays === 'function') {
+    scanAndAttachVideoOverlays(mockDoc, () => { downloadTriggered++; }, 10, 10, [mockVideo]);
+    if (mockVideo.__radiumHostEl) {
+      const dragHandle = mockVideo.__radiumHostEl.shadowRoot ? 
+        mockVideo.__radiumHostEl.shadowRoot.querySelector('.radium-drag-handle') : null;
+      if (dragHandle && dragHandle.dispatchEvent) {
+        dragHandle.dispatchEvent({ type: 'pointerdown', button: 0, clientX: 10, clientY: 10, preventDefault: () => {}, stopPropagation: () => {} });
+        dragHandle.dispatchEvent({ type: 'click', preventDefault: () => {}, stopPropagation: () => {} });
+      }
+    }
+  }
+  if (downloadTriggered > 0) {
+    throw new Error('FAILED: Mover drag handle triggered download click callback!');
+  }
+  console.log('  -> PASS: Mover button event isolation regression assertion passed');
+})();

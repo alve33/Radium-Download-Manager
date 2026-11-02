@@ -586,6 +586,9 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             t.save_dir = sd;
         }
         ExtractHeadersMap(params["headers"], t.headers, t.auth_headers);
+        if (params.contains("fileSize") && params["fileSize"].as_int64(0) > 0) {
+            t.total_bytes = static_cast<uint64_t>(params["fileSize"].as_int64(0));
+        }
 
         // For browser intercepted downloads in GUI mode (desktop app running or starting up with a UI):
         // the task must be queued without starting network transfer until the user confirms

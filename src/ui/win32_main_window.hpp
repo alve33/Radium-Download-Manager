@@ -304,6 +304,8 @@ struct AddDownloadDialogInput {
     std::string subtitle_filter{"all"};
     std::string output_format{"mp4"};
     uint64_t total_bytes{0};
+    bool range_supported{false};
+    bool range_probed{false};
 };
 
 struct BrowserIntegrationStatusView {

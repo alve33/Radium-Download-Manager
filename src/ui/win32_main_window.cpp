@@ -1615,7 +1615,7 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
             row.status_text = (t.total_bytes > 0 || (row.is_stream && t.total_segments > 0)) ? ("Downloading " + std::to_string(ipct) + "%") : "Downloading...";
             row.status_indicator_color = {0xFF, 0x47, 0x57, 255};
         } else if (t.state == TaskState::kProbing) {
-            row.status_text = "Connecting...";
+            row.status_text = (!t.status_detail.empty()) ? t.status_detail : "Connecting...";
             row.status_indicator_color = {0x8B, 0x5C, 0xF6, 255};
         } else if (t.state == TaskState::kMuxing) {
             row.status_text = "Merging (FFmpeg)...";
@@ -2292,7 +2292,7 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
     // 1. General
     add_item(
         "start_minimized", SettingsCategory::kGeneral, "Startup & Window Behavior",
-        "Start Minimized to System Tray",
+        "Start Minimised to System Tray",
         "Launch Radium quietly in the system tray without opening the main window on startup.",
         SettingControlType::kToggleSwitch,
         s.start_minimized ? "Enabled" : "Disabled", "Disabled",
@@ -2595,8 +2595,9 @@ SettingsCenterViewModel DesktopView::BuildSettingsCenterView() const {
         SettingsCategory::kKeyboardShortcuts
     };
 
-    int tab_y = vm.sidebar_rect.top + m.space_sm;
-    int tab_h = DesignSystem::ScaleForDpi(32, m.dpi);
+    int tab_y = vm.sidebar_rect.top + DesignSystem::ScaleForDpi(8, m.dpi);
+    int tab_h = DesignSystem::ScaleForDpi(36, m.dpi);
+    int tab_spacing = DesignSystem::ScaleForDpi(4, m.dpi);
     for (SettingsCategory c : all_cats) {
         size_t cnt = 0;
         size_t mod_cnt = 0;
@@ -2606,15 +2607,16 @@ SettingsCenterViewModel DesktopView::BuildSettingsCenterView() const {
                 if (it.is_modified) ++mod_cnt;
             }
         }
-        RectI trc{vm.sidebar_rect.left + m.space_sm, tab_y, vm.sidebar_rect.right - m.space_sm, tab_y + tab_h};
+        RectI trc{vm.sidebar_rect.left + DesignSystem::ScaleForDpi(10, m.dpi), tab_y, vm.sidebar_rect.right - DesignSystem::ScaleForDpi(10, m.dpi), tab_y + tab_h};
         vm.categories.push_back({c, SettingsCategoryToLabel(c), cnt, mod_cnt, c == m_settings_category, trc});
-        tab_y += tab_h + m.space_xs;
+        tab_y += tab_h + tab_spacing;
     }
 
     std::string q = ToLower(m_settings_search_query);
-    int row_y = vm.content_rect.top + m.space_sm;
-    int row_h = DesignSystem::ScaleForDpi(48, m.dpi);
-    int ctrl_w = DesignSystem::ScaleForDpi(170, m.dpi);
+    int card_pad = DesignSystem::ScaleForDpi(14, m.dpi);
+    int row_y = vm.content_rect.top + card_pad + DesignSystem::ScaleForDpi(4, m.dpi);
+    int row_h = DesignSystem::ScaleForDpi(58, m.dpi);
+    int ctrl_w = DesignSystem::ScaleForDpi(160, m.dpi);
     int ctrl_h = DesignSystem::ScaleForDpi(28, m.dpi);
 
     for (auto& it : all_items) {
@@ -2629,15 +2631,15 @@ SettingsCenterViewModel DesktopView::BuildSettingsCenterView() const {
         }
         if (!matches) continue;
 
-        it.row_rect = {vm.content_rect.left + m.space_md, row_y, vm.content_rect.right - m.space_md, row_y + row_h};
+        it.row_rect = {vm.content_rect.left + card_pad, row_y, vm.content_rect.right - card_pad, row_y + row_h};
         it.control_rect = {
-            it.row_rect.right - ctrl_w - m.space_sm,
+            it.row_rect.right - ctrl_w - DesignSystem::ScaleForDpi(16, m.dpi),
             row_y + (row_h - ctrl_h) / 2,
-            it.row_rect.right - m.space_sm,
+            it.row_rect.right - DesignSystem::ScaleForDpi(16, m.dpi),
             row_y + (row_h + ctrl_h) / 2
         };
         vm.visible_items.push_back(it);
-        row_y += row_h + m.space_xs;
+        row_y += row_h;
     }
 
     return vm;
@@ -2750,6 +2752,9 @@ Result<TaskModel> DesktopView::SubmitAddDownloadDialog(const AddDownloadDialogIn
 
     if (input.total_bytes > 0) {
         t.total_bytes = input.total_bytes;
+    }
+    if (input.range_probed) {
+        t.range_supported = input.range_supported;
     }
 
     const std::string selected_dir = t.save_dir;
@@ -3457,6 +3462,7 @@ struct ProbeResultPayload {
     uint64_t request_id{0};
     int64_t content_length{-1};
     bool success{false};
+    bool range_supported{false};
     std::string final_filename;
 };
 constexpr UINT IDT_UI_REFRESH      = 1001;
@@ -4108,6 +4114,8 @@ struct NewDownloadDialogContext {
     std::string initial_filename;
     std::string initial_save_dir;
     int64_t initial_file_size{-1};
+    bool probed_range_supported{false};
+    bool probed_has_range_info{false};
     uint32_t dpi{96};
     bool submitted{false};
     bool is_submitting{false};
@@ -4137,6 +4145,8 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (ctx && ctx->dlg_alive && *(ctx->dlg_alive) && p->request_id == ctx->current_probe_id) {
                 if (p->success && p->content_length > 0) {
                     ctx->initial_file_size = p->content_length;
+                    ctx->probed_range_supported = p->range_supported;
+                    ctx->probed_has_range_info = true;
                     std::string sz_str = DesktopView::FormatSizePretty(static_cast<uint64_t>(p->content_length));
                     std::wstring txt = L"Download Size: " + Utf8ToW(sz_str);
                     SetWindowTextW(ctx->hFileSizeLabel, txt.c_str());
@@ -4692,6 +4702,8 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         if (probe_res.ok()) {
                             payload->success = true;
                             payload->content_length = probe_res.value->has_content_length ? static_cast<int64_t>(probe_res.value->content_length) : -1;
+                            payload->range_supported = (probe_res.value->status_code == 206 && probe_res.value->is_partial_content) ||
+                                                       (probe_res.value->accept_ranges_bytes || (!probe_res.value->accept_ranges_none && probe_res.value->status_code == 206));
                             std::string fn = PathSanitizer::ExtractFromContentDisposition(probe_res.value->content_disposition);
                             if (fn.empty()) {
                                 fn = PathSanitizer::ExtractFromUrl(probe_res.value->final_url.empty() ? u : probe_res.value->final_url);
@@ -4876,7 +4888,11 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 in.audio_filter = afilter;
                 if (chosen_sz > 0) {
                     in.total_bytes = static_cast<uint64_t>(chosen_sz);
+                } else if (ctx->initial_file_size > 0) {
+                    in.total_bytes = static_cast<uint64_t>(ctx->initial_file_size);
                 }
+                in.range_supported = ctx->probed_range_supported;
+                in.range_probed = ctx->probed_has_range_info;
                 bool is_yt = (u.find("youtube.com") != std::string::npos || u.find("youtu.be") != std::string::npos);
                 if (is_yt || u.find(".m3u8") != std::string::npos || u.find(".mpd") != std::string::npos) {
                     in.is_stream = true;
@@ -4917,6 +4933,11 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         t.stream_options.audio_filter = afilter;
                         if (chosen_sz > 0) {
                             t.total_bytes = static_cast<uint64_t>(chosen_sz);
+                        } else if (ctx->initial_file_size > 0) {
+                            t.total_bytes = static_cast<uint64_t>(ctx->initial_file_size);
+                        }
+                        if (ctx->probed_has_range_info) {
+                            t.range_supported = ctx->probed_range_supported;
                         }
 
                         if (cur_sel >= 0 && static_cast<size_t>(cur_sel) < ctx->quality_choices.size()) {
@@ -5998,139 +6019,187 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
     const auto& m = view.GetMetrics();
     auto sv = view.BuildSettingsCenterView();
 
-    // 1. Smooth subtle entrance transition (150ms slide up + scrim fade)
+    // 1. Entrance transition scrim fade
     float p = view.GetAnimationState().ComputeTransitionProgress(view.GetAnimationState().settings_open_start_ms, 150);
-    uint8_t scrim_alpha = static_cast<uint8_t>(175 * p);
+    uint8_t scrim_alpha = static_cast<uint8_t>(200 * p);
     DrawGlassPanelGdi(hdc, client_rc, 0, ColorRgba{0x08, 0x08, 0x0A, scrim_alpha}, ColorRgba{0, 0, 0, 0}, 0, false);
 
-    // 2. Translucent glass modal card with specular highlight
-    int slide_offset_y = static_cast<int>((1.0f - p) * 12.0f);
+    // 2. Clean, dark, minimal settings container window matching reference screenshot
+    int slide_offset_y = static_cast<int>((1.0f - p) * 10.0f);
     RECT modal_rc = ToWinRect(sv.modal_rect);
     modal_rc.top += slide_offset_y;
     modal_rc.bottom += slide_offset_y;
-    DrawGlassPanelGdi(hdc, modal_rc, DesignSystem::ScaleForDpi(12, m.dpi), pal.glass_surface, pal.glass_border, 1, true /* add_top_specular */);
+
+    // Palette tokens tuned to reference design
+    ColorRgba window_bg{0x13, 0x14, 0x18, 255};      // Dark minimal background
+    ColorRgba window_border{0x23, 0x25, 0x2D, 255};  // Subtle boundary
+    ColorRgba card_bg{0x16, 0x17, 0x1C, 255};        // Subtle inner card surface
+    ColorRgba card_border{0x24, 0x26, 0x2E, 255};    // Clean rounded container border
+    ColorRgba divider_col{0x1E, 0x20, 0x27, 255};    // Subtle separator line
+    ColorRgba sel_tab_bg{0x1D, 0x1C, 0x20, 255};     // Selected category dark highlight
+    ColorRgba sel_tab_border{0x2C, 0x2B, 0x30, 255}; // Soft border around selected category
+    ColorRgba coral_red{0xFF, 0x47, 0x57, 255};      // Signature coral red accent
+
+    // Draw main settings window
+    DrawRoundedBoxGdi(hdc, modal_rc, DesignSystem::ScaleForDpi(12, m.dpi), window_bg, window_border, 1);
 
     int header_h = DesignSystem::ScaleForDpi(52, m.dpi);
     int footer_h = DesignSystem::ScaleForDpi(52, m.dpi);
-    RECT hdr_rc{modal_rc.left + 1, modal_rc.top + 1, modal_rc.right - 1, modal_rc.top + header_h};
-    DrawGlassPanelGdi(hdc, hdr_rc, DesignSystem::ScaleForDpi(12, m.dpi), pal.glass_elevated, pal.glass_border, 0, true /* top specular */);
 
+    // Header Title (clean, no heavy gradient/glass box)
+    RECT title_rc{modal_rc.left + DesignSystem::ScaleForDpi(20, m.dpi), modal_rc.top, modal_rc.right - DesignSystem::ScaleForDpi(20, m.dpi), modal_rc.top + header_h};
     SelectObject(hdc, hFontBold);
-    SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-    RECT title_rc = hdr_rc;
-    title_rc.left += m.space_lg;
+    SetTextColor(hdc, RGB(0xEE, 0xEE, 0xF1));
     DrawTextW(hdc, L"Radium Settings & Configuration Center", -1, &title_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // Sidebar categories
-    RECT side_rc = ToWinRect(sv.sidebar_rect);
-    DrawGlassPanelGdi(hdc, side_rc, 0, pal.glass_surface, pal.border_subtle, 0, false);
     SelectObject(hdc, hFontBody);
     for (const auto& cat : sv.categories) {
         RECT crc = ToWinRect(cat.rect);
         if (cat.selected) {
-            DrawGlassPanelGdi(hdc, crc, DesignSystem::ScaleForDpi(6, m.dpi), pal.glass_elevated, pal.accent_primary, 1, false);
+            // Subtle dark highlighted background with rounded corners
+            DrawRoundedBoxGdi(hdc, crc, DesignSystem::ScaleForDpi(8, m.dpi), sel_tab_bg, sel_tab_border, 1);
+
+            // Slim coral red indicator on the left of the selected item
+            int bar_w = DesignSystem::ScaleForDpi(3, m.dpi);
+            int bar_pad = DesignSystem::ScaleForDpi(7, m.dpi);
+            RECT ind_rc{crc.left + DesignSystem::ScaleForDpi(4, m.dpi), crc.top + bar_pad, crc.left + DesignSystem::ScaleForDpi(4, m.dpi) + bar_w, crc.bottom - bar_pad};
+            DrawRoundedBoxGdi(hdc, ind_rc, bar_w / 2, coral_red, coral_red, 0);
+
+            SetTextColor(hdc, RGB(0xF6, 0xF6, 0xF8));
+        } else {
+            SetTextColor(hdc, RGB(0x9E, 0xA2, 0xAE)); // Inactive items muted but readable
         }
-        SetTextColor(hdc, (cat.selected ? pal.text_primary : pal.text_secondary).ToWin32ColorRef());
+
         std::string lbl = cat.label;
         if (cat.modified_count > 0) {
             lbl += " *";
         }
         std::wstring wlbl = Utf8ToW(lbl);
         RECT trc = crc;
-        trc.left += m.space_md;
+        trc.left += DesignSystem::ScaleForDpi(18, m.dpi);
         DrawTextW(hdc, wlbl.c_str(), -1, &trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
-    // Content rows
-    RECT content_rc = ToWinRect(sv.content_rect);
-    DrawGlassPanelGdi(hdc, content_rc, 0, pal.glass_surface, pal.border_subtle, 0, false);
-    for (const auto& item : sv.visible_items) {
-        RECT rrc = ToWinRect(item.row_rect);
-        ColorRgba row_bg = item.is_modified ? pal.glass_elevated : pal.glass_surface;
-        ColorRgba row_border = item.is_modified ? pal.accent_primary : pal.glass_border;
-        DrawGlassPanelGdi(hdc, rrc, DesignSystem::ScaleForDpi(6, m.dpi), row_bg, row_border, 1, false);
+    // Group related settings inside clean, rounded container
+    if (!sv.visible_items.empty()) {
+        RECT group_card_rc{
+            sv.visible_items.front().row_rect.left,
+            sv.visible_items.front().row_rect.top,
+            sv.visible_items.back().row_rect.right,
+            sv.visible_items.back().row_rect.bottom
+        };
+        DrawRoundedBoxGdi(hdc, group_card_rc, DesignSystem::ScaleForDpi(10, m.dpi), card_bg, card_border, 1);
 
-        RECT lbl_rc = rrc;
-        lbl_rc.left += m.space_md;
-        lbl_rc.top += 6;
-        lbl_rc.right = item.control_rect.left - m.space_sm;
-        lbl_rc.bottom = rrc.top + (rrc.bottom - rrc.top) / 2 + 2;
-        SelectObject(hdc, hFontBold);
-        SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-        std::wstring wtitle = Utf8ToW(item.label + (item.is_modified ? "  [Modified]" : ""));
-        DrawTextW(hdc, wtitle.c_str(), -1, &lbl_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        // Render rows and controls
+        for (size_t i = 0; i < sv.visible_items.size(); ++i) {
+            const auto& item = sv.visible_items[i];
+            RECT rrc = ToWinRect(item.row_rect);
 
-        RECT desc_rc = rrc;
-        desc_rc.left += m.space_md;
-        desc_rc.top = lbl_rc.bottom;
-        desc_rc.right = item.control_rect.left - m.space_sm;
-        desc_rc.bottom -= 4;
-        SelectObject(hdc, hFontBody);
-        SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-        std::wstring wdesc = Utf8ToW(item.description);
-        DrawTextW(hdc, wdesc.c_str(), -1, &desc_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            // Subtle divider line between rows (except last item)
+            if (i + 1 < sv.visible_items.size()) {
+                HPEN hDivPen = CreatePen(PS_SOLID, 1, divider_col.ToWin32ColorRef());
+                HGDIOBJ oldDivPen = SelectObject(hdc, hDivPen);
+                MoveToEx(hdc, rrc.left + 1, rrc.bottom, nullptr);
+                LineTo(hdc, rrc.right - 1, rrc.bottom);
+                SelectObject(hdc, oldDivPen);
+                DeleteObject(hDivPen);
+            }
 
-        RECT ctrl_rc = ToWinRect(item.control_rect);
-        if (item.control_type == SettingControlType::kToggleSwitch) {
-            int sw_w = DesignSystem::ScaleForDpi(44, m.dpi);
-            int sw_h = DesignSystem::ScaleForDpi(22, m.dpi);
-            int sw_x = ctrl_rc.right - sw_w - 4;
-            int sw_y = ctrl_rc.top + (ctrl_rc.bottom - ctrl_rc.top - sw_h) / 2;
-            RECT sw_rc{sw_x, sw_y, sw_x + sw_w, sw_y + sw_h};
-            ColorRgba track_bg = item.bool_value ? pal.accent_primary : pal.surface_elevated;
-            ColorRgba track_border = item.bool_value ? pal.accent_hover : pal.border_subtle;
-            DrawRoundedBoxGdi(hdc, sw_rc, sw_h / 2, track_bg, track_border, 1);
+            // Setting label (prominent)
+            RECT lbl_rc = rrc;
+            lbl_rc.left += DesignSystem::ScaleForDpi(18, m.dpi);
+            lbl_rc.top += DesignSystem::ScaleForDpi(10, m.dpi);
+            lbl_rc.right = item.control_rect.left - DesignSystem::ScaleForDpi(16, m.dpi);
+            lbl_rc.bottom = rrc.top + DesignSystem::ScaleForDpi(30, m.dpi);
+            SelectObject(hdc, hFontBold);
+            SetTextColor(hdc, RGB(0xF2, 0xF2, 0xF4));
+            std::wstring wtitle = Utf8ToW(item.label + (item.is_modified ? "  [Modified]" : ""));
+            DrawTextW(hdc, wtitle.c_str(), -1, &lbl_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
-            int thumb_sz = sw_h - 4;
-            int thumb_x = item.bool_value ? (sw_rc.right - thumb_sz - 2) : (sw_rc.left + 2);
-            int thumb_y = sw_y + 2;
-            RECT thumb_rc{thumb_x, thumb_y, thumb_x + thumb_sz, thumb_y + thumb_sz};
-            DrawRoundedBoxGdi(hdc, thumb_rc, thumb_sz / 2, ColorRgba{255, 255, 255, 255}, ColorRgba{240, 240, 240, 255}, 1);
-        } else {
-            ColorRgba ctrl_bg = item.control_type == SettingControlType::kActionButton ? pal.accent_primary : pal.glass_elevated;
-            ColorRgba ctrl_border = item.control_type == SettingControlType::kActionButton ? pal.accent_hover : pal.glass_border;
-            DrawGlassPanelGdi(hdc, ctrl_rc, DesignSystem::ScaleForDpi(6, m.dpi), ctrl_bg, ctrl_border, 1, false);
-            SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-            std::wstring wval = Utf8ToW(item.value_text);
-            if (item.control_type == SettingControlType::kDropdown) {
-                RECT txt_rc = ctrl_rc;
-                txt_rc.right -= 18;
-                txt_rc.left += 8;
-                DrawTextW(hdc, wval.c_str(), -1, &txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-                DrawCaretGlyphGdi(hdc, ctrl_rc.right - 12, ctrl_rc.top + (ctrl_rc.bottom - ctrl_rc.top) / 2, pal.text_muted, false);
+            // Setting description (directly below setting name)
+            RECT desc_rc = rrc;
+            desc_rc.left += DesignSystem::ScaleForDpi(18, m.dpi);
+            desc_rc.top = lbl_rc.bottom;
+            desc_rc.right = item.control_rect.left - DesignSystem::ScaleForDpi(16, m.dpi);
+            desc_rc.bottom = rrc.bottom - DesignSystem::ScaleForDpi(8, m.dpi);
+            SelectObject(hdc, hFontBody);
+            SetTextColor(hdc, RGB(0x94, 0x97, 0xA2));
+            std::wstring wdesc = Utf8ToW(item.description);
+            DrawTextW(hdc, wdesc.c_str(), -1, &desc_rc, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+            // Control element aligned consistently on the right
+            RECT ctrl_rc = ToWinRect(item.control_rect);
+            if (item.control_type == SettingControlType::kToggleSwitch) {
+                // Redesigned modern switch matching reference screenshot
+                int sw_w = DesignSystem::ScaleForDpi(42, m.dpi);
+                int sw_h = DesignSystem::ScaleForDpi(22, m.dpi);
+                int sw_x = ctrl_rc.right - sw_w;
+                int sw_y = ctrl_rc.top + (ctrl_rc.bottom - ctrl_rc.top - sw_h) / 2;
+                RECT sw_rc{sw_x, sw_y, sw_x + sw_w, sw_y + sw_h};
+
+                ColorRgba track_bg = item.bool_value ? coral_red : ColorRgba{0x36, 0x38, 0x42, 255};
+                ColorRgba track_border = item.bool_value ? coral_red : ColorRgba{0x44, 0x46, 0x50, 255};
+                DrawRoundedBoxGdi(hdc, sw_rc, sw_h / 2, track_bg, track_border, 0);
+
+                int thumb_sz = sw_h - 4;
+                int thumb_x = item.bool_value ? (sw_rc.right - thumb_sz - 2) : (sw_rc.left + 2);
+                int thumb_y = sw_y + 2;
+                RECT thumb_rc{thumb_x, thumb_y, thumb_x + thumb_sz, thumb_y + thumb_sz};
+                DrawRoundedBoxGdi(hdc, thumb_rc, thumb_sz / 2, ColorRgba{255, 255, 255, 255}, ColorRgba{255, 255, 255, 255}, 0);
             } else {
-                DrawTextW(hdc, wval.c_str(), -1, &ctrl_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                // Modernized button / dropdown / text field
+                bool is_action = (item.control_type == SettingControlType::kActionButton);
+                ColorRgba ctrl_bg = is_action ? coral_red : ColorRgba{0x22, 0x24, 0x2C, 255};
+                ColorRgba ctrl_border = is_action ? coral_red : ColorRgba{0x34, 0x37, 0x42, 255};
+                DrawRoundedBoxGdi(hdc, ctrl_rc, DesignSystem::ScaleForDpi(6, m.dpi), ctrl_bg, ctrl_border, 1);
+
+                SelectObject(hdc, is_action ? hFontBold : hFontBody);
+                SetTextColor(hdc, is_action ? RGB(255, 255, 255) : RGB(0xE2, 0xE4, 0xEA));
+                std::wstring wval = Utf8ToW(item.value_text);
+                if (item.control_type == SettingControlType::kDropdown) {
+                    RECT txt_rc = ctrl_rc;
+                    txt_rc.right -= DesignSystem::ScaleForDpi(18, m.dpi);
+                    txt_rc.left += DesignSystem::ScaleForDpi(10, m.dpi);
+                    DrawTextW(hdc, wval.c_str(), -1, &txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    DrawCaretGlyphGdi(hdc, ctrl_rc.right - DesignSystem::ScaleForDpi(12, m.dpi), ctrl_rc.top + (ctrl_rc.bottom - ctrl_rc.top) / 2, ColorRgba{0x8E, 0x92, 0xA0, 255}, false);
+                } else {
+                    DrawTextW(hdc, wval.c_str(), -1, &ctrl_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                }
             }
         }
     }
 
-    // Footer bar with status banner and Reset / Cancel / Apply buttons
+    // Footer bar attached to bottom of settings window (clean, minimal, matching screenshot)
     RECT ftr_rc{modal_rc.left + 1, modal_rc.bottom - footer_h, modal_rc.right - 1, modal_rc.bottom - 1};
-    DrawGlassPanelGdi(hdc, ftr_rc, DesignSystem::ScaleForDpi(12, m.dpi), pal.glass_elevated, pal.glass_border, 0, false);
 
+    // Restore Defaults button
     RECT rst_rc = ToWinRect(sv.restore_defaults_rect);
-    DrawGlassPanelGdi(hdc, rst_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.glass_surface, pal.glass_border, 1, false);
-    SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
+    DrawRoundedBoxGdi(hdc, rst_rc, DesignSystem::ScaleForDpi(6, m.dpi), ColorRgba{0x1A, 0x1B, 0x20, 255}, ColorRgba{0x30, 0x32, 0x3A, 255}, 1);
+    SelectObject(hdc, hFontBody);
+    SetTextColor(hdc, RGB(0xDD, 0xDE, 0xE4));
     DrawTextW(hdc, L"Restore Defaults", -1, &rst_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
+    // Cancel button
     RECT can_rc = ToWinRect(sv.cancel_button_rect);
-    DrawGlassPanelGdi(hdc, can_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.glass_surface, pal.glass_border, 1, false);
+    DrawRoundedBoxGdi(hdc, can_rc, DesignSystem::ScaleForDpi(6, m.dpi), ColorRgba{0x1A, 0x1B, 0x20, 255}, ColorRgba{0x30, 0x32, 0x3A, 255}, 1);
     DrawTextW(hdc, L"Cancel", -1, &can_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
+    // Primary Apply & Save button in coral red
     RECT app_rc = ToWinRect(sv.apply_button_rect);
-    ColorRgba app_bg = sv.is_valid ? pal.accent_primary : pal.status_danger;
-    DrawGlassPanelGdi(hdc, app_rc, DesignSystem::ScaleForDpi(6, m.dpi), app_bg, app_bg, 0, false);
+    ColorRgba app_bg = sv.is_valid ? coral_red : pal.status_danger;
+    DrawRoundedBoxGdi(hdc, app_rc, DesignSystem::ScaleForDpi(6, m.dpi), app_bg, app_bg, 0);
     SelectObject(hdc, hFontBold);
     SetTextColor(hdc, RGB(255, 255, 255));
     DrawTextW(hdc, L"Apply & Save", -1, &app_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
-    RECT banner_rc{rst_rc.right + m.space_md, ftr_rc.top, can_rc.left - m.space_md, ftr_rc.bottom};
+    // Status message beside Restore Defaults
+    RECT banner_rc{rst_rc.right + DesignSystem::ScaleForDpi(14, m.dpi), ftr_rc.top, can_rc.left - DesignSystem::ScaleForDpi(14, m.dpi), ftr_rc.bottom};
     SelectObject(hdc, hFontBody);
-    SetTextColor(hdc, (sv.is_valid ? pal.text_secondary : pal.status_danger).ToWin32ColorRef());
+    SetTextColor(hdc, sv.is_valid ? RGB(0x9E, 0xA2, 0xAD) : pal.status_danger.ToWin32ColorRef());
     std::wstring wbanner = Utf8ToW(sv.status_banner);
     DrawTextW(hdc, wbanner.c_str(), -1, &banner_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
-
 void DrawRoundedBoxGdi(HDC hdc, const RECT& rc, int radius, ColorRgba bg, ColorRgba border, int border_w) {
     HPEN hPen = (border_w > 0) ? CreatePen(PS_SOLID, border_w, border.ToWin32ColorRef()) : CreatePen(PS_NULL, 0, 0);
     HBRUSH hBrush = CreateSolidBrush(bg.ToWin32ColorRef());
@@ -9877,9 +9946,15 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             return 0;
         }
         case WM_OPENIDM_TRAYICON: {
-            if (lParam == WM_RBUTTONUP) {
+            UINT tray_msg = LOWORD(lParam);
+            if (tray_msg == WM_CONTEXTMENU || tray_msg == WM_RBUTTONUP) {
                 POINT pt{};
-                GetCursorPos(&pt);
+                if (tray_msg == WM_CONTEXTMENU && (LOWORD(wParam) != 0 || HIWORD(wParam) != 0)) {
+                    pt.x = GET_X_LPARAM(wParam);
+                    pt.y = GET_Y_LPARAM(wParam);
+                } else {
+                    GetCursorPos(&pt);
+                }
                 HMENU hMenu = CreatePopupMenu();
                 AppendMenuW(hMenu, MF_STRING, IDM_TRAY_SHOW, L"Show Radium");
                 AppendMenuW(hMenu, MF_STRING, IDM_TRAY_HIDE, L"Hide to Tray");
@@ -9900,7 +9975,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 } else if (cmd == IDM_TRAY_PAUSE_ALL) ctx->controller->PauseAllTasks();
                 else if (cmd == IDM_TRAY_RESUME_ALL) ctx->controller->ResumeAllTasks();
                 else if (cmd == IDM_TRAY_EXIT) DestroyWindow(hwnd);
-            } else if (lParam == WM_LBUTTONDBLCLK) {
+            } else if (tray_msg == WM_LBUTTONDBLCLK || tray_msg == NIN_SELECT || tray_msg == NIN_KEYSELECT) {
                 ShowWindow(hwnd, SW_RESTORE);
                 ctx->view->SetWindowVisibility(true, false);
                 SetForegroundWindow(hwnd);
