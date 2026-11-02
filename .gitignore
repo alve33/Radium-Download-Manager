@@ -22,11 +22,13 @@ tools/win-x64/*
 third_party/
 idm audit/
 
-# Release archives
+# Release archives and installers
 *.zip
 *.tar.gz
 *.7z
 !release/*.zip
+!release/*.exe
+!release/*.msix
 
 # Visual Studio / MSVC artifacts
 .vs/
@@ -91,9 +93,13 @@ benchmarks/**/summary*.json
 benchmarks/**/*.csv
 
 
-# Local helper scripts and artifacts
+# Local helper scripts and transient images
 *.torrent
 *.png
+!installer/msix/Assets/*.png
+!extension/icons/*.png
+!docs/images/**/*.png
+!docs/images/*.png
 clean_status.py
 patch_tests.py
 update_dialog.py
