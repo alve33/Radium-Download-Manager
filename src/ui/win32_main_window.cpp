@@ -9615,14 +9615,15 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         case WM_OPENIDM_TASK_NOTIFICATION: {
             std::unique_ptr<TaskNotificationPayload> notice(reinterpret_cast<TaskNotificationPayload*>(lParam));
             if (notice && ctx->tray_added) {
-                ctx->nid.uFlags = NIF_INFO;
-                ctx->nid.dwInfoFlags = notice->success ? NIIF_INFO : NIIF_ERROR;
-                wcsncpy_s(ctx->nid.szInfoTitle, notice->title.c_str(), _TRUNCATE);
-                wcsncpy_s(ctx->nid.szInfo, notice->message.c_str(), _TRUNCATE);
-                Shell_NotifyIconW(NIM_MODIFY, &ctx->nid);
-                ctx->nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-                ctx->nid.szInfoTitle[0] = L'\0';
-                ctx->nid.szInfo[0] = L'\0';
+                NOTIFYICONDATAW nid{};
+                nid.cbSize = sizeof(NOTIFYICONDATAW);
+                nid.hWnd = hwnd;
+                nid.uID = 1;
+                nid.uFlags = NIF_INFO;
+                nid.dwInfoFlags = (notice->success ? NIIF_INFO : NIIF_ERROR) | NIIF_RESPECT_QUIET_TIME;
+                wcsncpy_s(nid.szInfoTitle, notice->title.c_str(), _TRUNCATE);
+                wcsncpy_s(nid.szInfo, notice->message.c_str(), _TRUNCATE);
+                Shell_NotifyIconW(NIM_MODIFY, &nid);
             }
             return 0;
         }
@@ -10035,6 +10036,14 @@ int DesktopView::RunWin32MessageLoop() {
     ctx.nid.hIcon = wc.hIcon;
     wcsncpy_s(ctx.nid.szTip, L"Radium Download Manager", _TRUNCATE);
     ctx.tray_added = (Shell_NotifyIconW(NIM_ADD, &ctx.nid) != FALSE);
+    if (ctx.tray_added) {
+        NOTIFYICONDATAW nid_ver{};
+        nid_ver.cbSize = sizeof(NOTIFYICONDATAW);
+        nid_ver.hWnd = hwnd;
+        nid_ver.uID = 1;
+        nid_ver.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &nid_ver);
+    }
 
     SetWindowHwnd(hwnd);
     m_controller.SetTaskNotificationCallback([hwnd](const DownloadController::TaskNotification& notice) {
