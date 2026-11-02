@@ -252,12 +252,32 @@ void DownloadController::LoadPersistedSettingsLocked() {
         m_settings.default_connections_per_task = std::clamp<uint32_t>(
             static_cast<uint32_t>(val["defaultConnectionsPerTask"].as_int64(8)), 1u, 32u);
         std::string saved_dir = val["defaultDownloadDir"].as_string("");
+        const bool saved_dir_user_selected = val["defaultDownloadDirUserSelected"].as_bool(false);
+        bool migrate_legacy_download_default = false;
+#ifdef _WIN32
+        if (!saved_dir.empty() && !saved_dir_user_selected && std::getenv("RADIUM_DOWNLOAD_DIR") == nullptr) {
+            auto saved_path = std::filesystem::path(saved_dir).lexically_normal();
+            std::string leaf = saved_path.filename().string();
+            std::string parent = saved_path.parent_path().filename().string();
+            std::transform(leaf.begin(), leaf.end(), leaf.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            std::transform(parent.begin(), parent.end(), parent.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (leaf == "radium" && parent == "downloads") {
+                saved_dir = PathSanitizer::GetDefaultDownloadsDir(PathSanitizer::GetExecutableDir()).string();
+                migrate_legacy_download_default = true;
+            }
+        }
+#endif
         if (!saved_dir.empty()) {
             m_settings.default_download_dir = saved_dir;
             m_cfg.default_download_dir = saved_dir;
         }
-        m_settings.category_subfolders_enabled = val["categorySubfoldersEnabled"].as_bool(true);
-        m_settings.conflict_policy = ConflictPolicyFromString(val["conflictPolicy"].as_string("auto_rename"));
+        m_settings.default_download_dir_user_selected = saved_dir_user_selected;
+        m_settings.last_download_dir = val["lastDownloadDir"].as_string("");
+        // Keep the legacy preference disabled; category inference remains internal.
+        const auto stored_conflict = val["conflictPolicy"].as_string("auto_rename");
+        const bool migrate_legacy_conflict_default = val["conflictPolicyVersion"].as_int64(0) < 1 && stored_conflict == "auto_rename";
+        m_settings.conflict_policy = migrate_legacy_conflict_default
+            ? ConflictPolicy::kPrompt : ConflictPolicyFromString(stored_conflict);
         m_settings.auto_start_downloads = val["autoStartDownloads"].as_bool(true);
         m_settings.stall_timeout_ms = std::clamp<int>(
             static_cast<int>(val["stallTimeoutMs"].as_int64(m_cfg.stall_timeout_ms)), 500, 60000);
@@ -282,12 +302,6 @@ void DownloadController::LoadPersistedSettingsLocked() {
         m_settings.server_auth_username = val["serverAuthUsername"].as_string("");
         m_settings.server_auth_password_encrypted = val["serverAuthPasswordEncrypted"].as_string("");
 
-        if (val.contains("categoryFolders") && val["categoryFolders"].is_object()) {
-            m_settings.category_folders.clear();
-            for (const auto& [k, v] : val["categoryFolders"].as_object()) {
-                m_settings.category_folders[k] = v.as_string();
-            }
-        }
         if (val.contains("customExtensionCategories") && val["customExtensionCategories"].is_object()) {
             m_settings.custom_extension_categories.clear();
             for (const auto& [k, v] : val["customExtensionCategories"].as_object()) {
@@ -310,6 +324,8 @@ void DownloadController::LoadPersistedSettingsLocked() {
             static_cast<uint32_t>(val["retryIntervalSec"].as_int64(15)), 1u, 3600u);
         m_settings.queue_completion_action = val["queueCompletionAction"].as_string("NONE");
 
+        if (migrate_legacy_conflict_default || migrate_legacy_download_default) SaveSettingsLocked();
+
         m_cfg.stall_timeout_ms = m_settings.stall_timeout_ms;
         m_cfg.min_split_bytes = m_settings.min_split_bytes;
         m_max_concurrent.store(m_settings.max_concurrent_tasks);
@@ -324,8 +340,10 @@ Result<void> DownloadController::SaveSettingsLocked() {
     obj["speedLimitBps"] = static_cast<int64_t>(m_settings.speed_limit_bps);
     obj["defaultConnectionsPerTask"] = static_cast<int64_t>(m_settings.default_connections_per_task);
     obj["defaultDownloadDir"] = m_settings.default_download_dir;
-    obj["categorySubfoldersEnabled"] = m_settings.category_subfolders_enabled;
+    obj["defaultDownloadDirUserSelected"] = m_settings.default_download_dir_user_selected;
+    obj["lastDownloadDir"] = m_settings.last_download_dir;
     obj["conflictPolicy"] = ConflictPolicyToString(m_settings.conflict_policy);
+    obj["conflictPolicyVersion"] = static_cast<int64_t>(1);
     obj["autoStartDownloads"] = m_settings.auto_start_downloads;
     obj["stallTimeoutMs"] = static_cast<int64_t>(m_settings.stall_timeout_ms);
     obj["minSplitBytes"] = static_cast<int64_t>(m_settings.min_split_bytes);
@@ -344,10 +362,6 @@ Result<void> DownloadController::SaveSettingsLocked() {
     obj["proxyPasswordEncrypted"] = m_settings.proxy_password_encrypted;
     obj["serverAuthUsername"] = m_settings.server_auth_username;
     obj["serverAuthPasswordEncrypted"] = m_settings.server_auth_password_encrypted;
-
-    json::Value cat_folders_obj = json::Object{};
-    for (const auto& [k, v] : m_settings.category_folders) cat_folders_obj[k] = v;
-    obj["categoryFolders"] = cat_folders_obj;
 
     json::Value ext_cat_obj = json::Object{};
     for (const auto& [k, v] : m_settings.custom_extension_categories) ext_cat_obj[k] = v;
@@ -425,36 +439,9 @@ std::string DownloadController::DetermineCategory(const std::string& filename, c
 
 std::filesystem::path DownloadController::ResolveCategorySaveDirImpl(
     const AppSettings& settings, const std::filesystem::path& default_dir, const std::string& category, const std::string& url) {
-    // Priority: Site rule (directory) > Category folder > Subfolder > Default dir
-
-    // 1. Site rules (domain -> custom directory)
-    if (!url.empty()) {
-        std::string host = ExtractHostFromUrl(url);
-        if (!host.empty()) {
-            auto it = settings.site_rules.find(host);
-            if (it != settings.site_rules.end()) {
-                const std::string& val = it->second;
-                if (val.find('/') != std::string::npos || val.find('\\') != std::string::npos) {
-                    return std::filesystem::path(val);
-                }
-            }
-        }
-    }
-
-    // 2. Configurable category folders
-    if (!category.empty()) {
-        auto it = settings.category_folders.find(category);
-        if (it != settings.category_folders.end() && !it->second.empty()) {
-            return std::filesystem::path(it->second);
-        }
-    }
-
-    // 3. Subfolder
-    if (settings.category_subfolders_enabled && !category.empty() && category != "General") {
-        return default_dir / category;
-    }
-
-    // 4. Default download directory
+    (void)settings;
+    (void)category;
+    (void)url;
     return default_dir;
 }
 
@@ -632,34 +619,13 @@ Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const 
     }
     std::filesystem::create_directories(task.save_dir, ec);
 
-    std::filesystem::path dest_path = std::filesystem::path(task.save_dir) / task.file_name;
-
-    // Conflict resolution
-    if (std::filesystem::exists(dest_path, ec)) {
-        if (settings_snapshot.conflict_policy == ConflictPolicy::kAutoRename) {
-            std::string stem = dest_path.stem().string();
-            std::string ext = dest_path.extension().string();
-            int counter = 1;
-            while (std::filesystem::exists(dest_path, ec) && counter < 1000) {
-                dest_path = std::filesystem::path(task.save_dir) / (stem + " (" + std::to_string(counter) + ")" + ext);
-                counter++;
-            }
-            task.file_name = dest_path.filename().string();
-        } else if (settings_snapshot.conflict_policy == ConflictPolicy::kFailIfExists) {
-            return Result<TaskModel>::Err("ERR_FILE_EXISTS", "Target file already exists: " + dest_path.string());
-        }
+    auto staged_commit = PathSanitizer::CommitPartFile(
+        staged_file_path, task.save_dir, task.file_name, settings_snapshot.conflict_policy, file_size);
+    if (!staged_commit.ok()) {
+        return Result<TaskModel>::Err(staged_commit.error->code, staged_commit.error->message);
     }
-
-    std::filesystem::rename(staged_file_path, dest_path, ec);
-    if (ec) {
-        ec.clear();
-        std::filesystem::copy_file(staged_file_path, dest_path, std::filesystem::copy_options::overwrite_existing, ec);
-        if (!ec) {
-            std::filesystem::remove(staged_file_path, ec);
-        } else {
-            return Result<TaskModel>::Err("ERR_FILE_MOVE_FAILED", "Failed to move staged file: " + ec.message());
-        }
-    }
+    std::filesystem::path dest_path = *staged_commit.value;
+    task.file_name = dest_path.filename().string();
 
     if (task.created_at_ms <= 0) {
         task.created_at_ms = NowEpochMs();
@@ -725,20 +691,23 @@ Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const 
         }
     }
 
-#ifdef _WIN32
-    if (m_settings.show_completion_notification) {
-        MessageBeep(MB_ICONASTERISK);
+    TaskNotificationCallback notification_callback;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_deleted_tasks.erase(task.task_id);
+        auto db_res = m_store.UpsertTask(task);
+        if (!db_res.ok()) {
+            return Result<TaskModel>::Err(db_res.error->code, db_res.error->message);
+        }
+        m_tasks[task.task_id] = task;
+        if (m_settings.show_completion_notification && m_notified_task_ids.insert(task.task_id).second) {
+            notification_callback = m_task_notification_callback;
+        }
+        m_cv.notify_all();
     }
-#endif
-
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_deleted_tasks.erase(task.task_id);
-    auto db_res = m_store.UpsertTask(task);
-    if (!db_res.ok()) {
-        return Result<TaskModel>::Err(db_res.error->code, db_res.error->message);
-    }
-    m_tasks[task.task_id] = task;
-    m_cv.notify_all();
+    if (notification_callback) notification_callback(TaskNotification{
+        task.task_id, task.file_name, task.state == TaskState::kCompleted,
+        task.state == TaskState::kCompleted ? "Download completed" : task.error_message});
     return Result<TaskModel>::Ok(task);
 }
 
@@ -840,7 +809,7 @@ void DownloadController::ScheduleLoop() {
             // Check scheduled start & stop time strictly on scheduled tasks
             if (t.scheduled) {
                 bool in_window = IsTimeInScheduledWindow(cur_hh_mm, t.schedule_time_local, t.schedule_stop_time_local);
-                if (t.state == TaskState::kPaused && t.pause_reason != PauseReason::kUser && in_window) {
+                if (t.state == TaskState::kPaused && t.pause_reason != PauseReason::kUser && t.pause_reason != PauseReason::kSystemSuspend && in_window) {
                     t.state = TaskState::kQueued;
                     t.status_detail = "Queued (Schedule Started)";
                     if (t.schedule_stop_time_local.empty()) {
@@ -877,7 +846,7 @@ void DownloadController::ScheduleLoop() {
                     if (in_queue_window) {
                         for (auto& [id, t] : m_tasks) {
                             if (t.queue_id == q.queue_id && t.state == TaskState::kPaused &&
-                                t.pause_reason != PauseReason::kUser && !t.scheduled) {
+                                t.pause_reason != PauseReason::kUser && t.pause_reason != PauseReason::kSystemSuspend && !t.scheduled) {
                                 t.state = TaskState::kQueued;
                                 t.status_detail = "Queued (Queue Schedule Started)";
                                 m_store.UpsertTask(t);
@@ -1023,7 +992,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                             local_task.url.find("youtu.be") != std::string::npos ||
                             local_task.page_url.find("youtube.com") != std::string::npos ||
                             local_task.page_url.find("youtu.be") != std::string::npos ||
-                            local_task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
+                            local_task.stream_options.cached_manifest_body.find("\"radiumType\":\"YOUTUBE_STREAM\"") != std::string::npos || local_task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
                             local_task.stream_options.cached_manifest_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos);
     if (is_youtube_task) {
         task_type_str = "YOUTUBE_EXTRACTION";
@@ -1034,7 +1003,27 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
 
     auto last_db_sync = std::chrono::steady_clock::now();
 
-    if (local_task.task_type == TaskType::kFtp) {
+    bool preflight_conflict = false;
+    if (local_task.task_type != TaskType::kTorrent &&
+        (local_task.conflict_policy == ConflictPolicy::kPrompt || local_task.conflict_policy == ConflictPolicy::kFailIfExists)) {
+        auto destination = PathSanitizer::ResolveSafeOutputPath(
+            local_task.save_dir, local_task.file_name, local_task.conflict_policy);
+        if (!destination.ok() && destination.error->code == "ERR_FILE_EXISTS") {
+            preflight_conflict = true;
+            local_task.error_code = local_task.conflict_policy == ConflictPolicy::kPrompt ? "ERR_FILE_EXISTS" : std::string{};
+            local_task.error_message = local_task.conflict_policy == ConflictPolicy::kPrompt
+                ? "Destination file already exists: " + (std::filesystem::path(local_task.save_dir) / local_task.file_name).string()
+                : std::string{};
+            local_task.state = local_task.conflict_policy == ConflictPolicy::kPrompt ? TaskState::kFailed : TaskState::kCanceled;
+            local_task.status_detail = local_task.conflict_policy == ConflictPolicy::kPrompt
+                ? "Waiting for a file conflict choice"
+                : "Canceled because the destination file already exists";
+        }
+    }
+
+    if (preflight_conflict) {
+        // Keep the existing file untouched and let the normal terminal-state persistence run.
+    } else if (local_task.task_type == TaskType::kFtp) {
         auto ftp_url_res = ftp::FtpUrl::Parse(local_task.url);
         if (ftp_url_res.ok()) {
             std::filesystem::path part_p = std::filesystem::path(local_task.save_dir) / (local_task.file_name + "." + local_task.task_id + ".part");
@@ -1409,7 +1398,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                       local_task.url.find("youtube.com/watch") != std::string::npos ||
                       local_task.url.find("youtu.be/") != std::string::npos ||
                       local_task.url.find("youtube.com/shorts/") != std::string::npos ||
-                      local_task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
+                      local_task.stream_options.cached_manifest_body.find("\"radiumType\":\"YOUTUBE_STREAM\"") != std::string::npos || local_task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
                       local_task.stream_options.cached_manifest_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos);
         auto progress_cb = [&](const stream::StreamProgress& sp) {
             if (ctrl->cancel_requested.load() || ctrl->pause_requested.load()) return;
@@ -1541,11 +1530,6 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 local_task.status_detail = "Completed (Not Scanned - Scanner Unavailable)";
             }
         }
-#ifdef _WIN32
-        if (m_settings.show_completion_notification && local_task.state == TaskState::kCompleted) {
-            MessageBeep(MB_ICONASTERISK);
-        }
-#endif
     }
 
     // BUG-007 Fix: Granular merge under m_mutex without resurrecting deleted tasks
@@ -1567,7 +1551,13 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                     local_task.state = TaskState::kPaused;
                     local_task.status_detail = "Paused";
                 }
-                t.state = local_task.state;
+                // BUG-001 Fix: If the task has already been transitioned to kQueued (e.g. by ResumeTask or RefreshTaskUrl),
+                // do NOT clobber it back to kPaused from this unwinding worker thread!
+                if (t.state == TaskState::kQueued && local_task.state == TaskState::kPaused) {
+                    // Retain kQueued so the scheduler can launch a new worker
+                } else {
+                    t.state = local_task.state;
+                }
                 t.file_name = local_task.file_name;
                 t.category = local_task.category;
                 t.part_path = local_task.part_path;
@@ -1598,6 +1588,30 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
     }
     if (should_persist) {
         m_store.UpsertTask(to_save);
+        TaskNotificationCallback callback;
+        bool notify = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const bool terminal_notice = to_save.state == TaskState::kCompleted || to_save.state == TaskState::kFailed;
+            const bool retry_pending = to_save.state == TaskState::kFailed && to_save.retry_count < m_settings.max_auto_retries &&
+                (to_save.error_code == "ERR_NETWORK_TIMEOUT" || to_save.error_code == "ERR_NET_TIMEOUT" ||
+                 to_save.error_code == "ERR_TIMEOUT" || to_save.error_code == "ERR_CONNECTION_RESET" ||
+                 to_save.error_code == "ERR_NET_CONNECTION_RESET" || to_save.error_code == "ERR_NET_CONNECT" ||
+                 to_save.error_code == "ERR_NET_SEND" || to_save.error_code == "ERR_NET_DNS" ||
+                 to_save.error_code == "ERR_HTTP_TIMEOUT" || to_save.error_code == "ERR_HTTP_5XX_TRANSIENT" ||
+                 to_save.error_code == "ERR_HTTP_429_RATE_LIMITED" || to_save.error_code == "ERR_HTTP_503" ||
+                 to_save.error_code == "ERR_HTTP_502" || to_save.error_code == "ERR_HTTP_504" ||
+                 to_save.error_code == "ERR_FTP_TIMEOUT" || to_save.error_code == "ERR_FTP_DISCONNECTED" ||
+                 to_save.error_code == "ERR_FTP_CONNECT" || to_save.error_code == "ERR_STREAM_WORKER_CRASH");
+            if (terminal_notice && !retry_pending && m_settings.show_completion_notification &&
+                m_notified_task_ids.insert(task_id).second) {
+                callback = m_task_notification_callback;
+                notify = static_cast<bool>(callback);
+            }
+        }
+        if (notify) callback(TaskNotification{task_id, to_save.file_name,
+            to_save.state == TaskState::kCompleted,
+            to_save.state == TaskState::kCompleted ? "Download completed" : to_save.error_message});
     }
 
     ctrl->finished.store(true);
@@ -1615,6 +1629,7 @@ Result<void> DownloadController::StartTask(const std::string& task_id) {
         it->second.schedule_stop_time_local.clear();
         it->second.pause_reason = PauseReason::kNone;
         it->second.state = TaskState::kQueued;
+        m_notified_task_ids.erase(task_id);
         it->second.status_detail = "Queued";
         it->second.error_code.clear();
         it->second.error_message.clear();
@@ -1694,6 +1709,8 @@ Result<void> DownloadController::CancelTask(const std::string& task_id) {
             it->second.speed_bps = 0;
             it->second.state = TaskState::kCanceled;
             it->second.status_detail = "Canceled";
+            it->second.error_code.clear();
+            it->second.error_message.clear();
             it->second.auth_headers.clear();
             m_store.UpsertTask(it->second);
             return Result<void>::Ok();
@@ -1716,6 +1733,8 @@ Result<void> DownloadController::CancelTask(const std::string& task_id) {
             it->second.speed_bps = 0;
             it->second.state = TaskState::kCanceled;
             it->second.status_detail = "Canceled";
+            it->second.error_code.clear();
+            it->second.error_message.clear();
             it->second.auth_headers.clear();
             m_store.UpsertTask(it->second);
         }
@@ -2057,6 +2076,7 @@ Result<void> DownloadController::RefreshTaskUrl(
     for (const auto& [k, v] : new_headers) it->second.headers[k] = v;
 
     it->second.retry_count = 0;
+    m_notified_task_ids.erase(task_id);
     it->second.state = TaskState::kQueued;
     it->second.status_detail = "Queued (Refreshed URL)";
     it->second.error_code.clear();
@@ -2190,10 +2210,36 @@ AppSettings DownloadController::GetSettings() const {
     return m_settings;
 }
 
+Result<void> DownloadController::RememberDownloadDirectory(const std::string& directory) {
+    if (directory.empty()) return Result<void>::Err("ERR_INVALID_DOWNLOAD_DIR", "Download directory cannot be empty");
+    std::error_code ec;
+    const auto path = std::filesystem::weakly_canonical(std::filesystem::path(directory), ec);
+    if (ec || !std::filesystem::is_directory(path, ec))
+        return Result<void>::Err("ERR_INVALID_DOWNLOAD_DIR", "Selected download directory is not available");
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_settings.last_download_dir = path.string();
+    return SaveSettingsLocked();
+}
+
+void DownloadController::SetTaskNotificationCallback(TaskNotificationCallback callback) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_task_notification_callback = std::move(callback);
+}
+
 Result<void> DownloadController::UpdateSettings(const AppSettings& settings) {
+    if (settings.proxy_mode != "direct" && settings.proxy_mode != "system" && settings.proxy_mode != "manual")
+        return Result<void>::Err("ERR_SETTINGS_PROXY_MODE", "Proxy mode must be direct, system, or manual");
+    if (settings.proxy_mode == "manual" && settings.proxy_server.empty())
+        return Result<void>::Err("ERR_SETTINGS_PROXY_SERVER", "Manual proxy mode requires a server address");
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        const bool directory_changed = settings.default_download_dir != m_settings.default_download_dir;
         m_settings = settings;
+        if (directory_changed) {
+            const auto factory_dir = PathSanitizer::GetDefaultDownloadsDir(PathSanitizer::GetExecutableDir()).string();
+            m_settings.default_download_dir_user_selected = settings.default_download_dir != factory_dir;
+            m_settings.last_download_dir = settings.default_download_dir;
+        }
         m_settings.max_concurrent_tasks = std::clamp(m_settings.max_concurrent_tasks, 1u, 16u);
         m_settings.default_connections_per_task = std::clamp(m_settings.default_connections_per_task, 1u, 32u);
         m_settings.stall_timeout_ms = std::clamp(m_settings.stall_timeout_ms, 500, 60000);
@@ -2227,8 +2273,8 @@ Result<AppSettings> DownloadController::RestoreDefaultSettings() {
     defaults.speed_limit_bps = 0;
     defaults.default_connections_per_task = 8;
     defaults.default_download_dir = PathSanitizer::GetDefaultDownloadsDir(PathSanitizer::GetExecutableDir()).string();
-    defaults.category_subfolders_enabled = true;
-    defaults.conflict_policy = ConflictPolicy::kAutoRename;
+    defaults.default_download_dir_user_selected = false;
+    defaults.conflict_policy = ConflictPolicy::kPrompt;
     defaults.auto_start_downloads = true;
     defaults.stall_timeout_ms = 3000;
     defaults.min_split_bytes = 131072;
@@ -2246,7 +2292,6 @@ Result<AppSettings> DownloadController::RestoreDefaultSettings() {
     defaults.proxy_password_encrypted = "";
     defaults.server_auth_username = "";
     defaults.server_auth_password_encrypted = "";
-    defaults.category_folders = {};
     defaults.custom_extension_categories = {};
     defaults.site_rules = {};
     defaults.max_auto_retries = 5;

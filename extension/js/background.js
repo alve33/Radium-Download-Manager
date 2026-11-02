@@ -25,6 +25,25 @@ var SourceType = globalThis.SourceType || (G && G.SourceType) || {
 
 let rpcRequestCounter = 1;
 let sessionRestorePromise = null;
+let captureSettingsPromise = null;
+let captureSettingsUpdatedAt = 0;
+const PASSIVE_DOWNLOAD_REQUEST_TYPES = new Set([
+  "xmlhttprequest", "script", "stylesheet", "font", "image", "ping", "websocket"
+]);
+
+async function refreshNativeCaptureSettings(force = false) {
+  if (!force && Date.now() - captureSettingsUpdatedAt < 30000) return;
+  if (captureSettingsPromise) return captureSettingsPromise;
+  captureSettingsPromise = sendNativeRpc("system.handshake", { protocolVersion: "1.0" })
+    .then((settings) => {
+      const minBytes = Number(settings && settings.minCaptureSizeBytes);
+      if (Number.isFinite(minBytes) && minBytes >= 0) G.minFileSizeBytes = minBytes;
+      captureSettingsUpdatedAt = Date.now();
+    })
+    .catch(() => {})
+    .finally(() => { captureSettingsPromise = null; });
+  return captureSettingsPromise;
+}
 
 function getStorageStore(customStore = null) {
   if (customStore) return customStore;
@@ -121,7 +140,7 @@ async function restoreSessionState(storageArea = null) {
     "flux_redirectChains",
     "flux_reverseRedirects"
   ]);
-  const cacheSource = data ? data.flux_cacheData : null;
+  const cacheSource = data ? (data.radium_cacheData || data.flux_cacheData) : null;
   if (cacheSource) {
     for (const [k, v] of Object.entries(cacheSource)) {
       if (Array.isArray(v)) {
@@ -137,13 +156,13 @@ async function restoreSessionState(storageArea = null) {
       }
     }
   }
-  const disabledSource = data ? data.flux_disabledHosts : null;
+  const disabledSource = data ? (data.radium_disabledHosts || data.flux_disabledHosts) : null;
   if (Array.isArray(disabledSource)) {
     for (const h of disabledSource) {
       G.disabledHosts.add(h);
     }
   }
-  const tabUrlsSource = data ? data.flux_tabUrls : null;
+  const tabUrlsSource = data ? (data.radium_tabUrls || data.flux_tabUrls) : null;
   if (tabUrlsSource && G.tabUrlMap) {
     for (const [k, v] of Object.entries(tabUrlsSource)) {
       const tid = Number(k);
@@ -152,7 +171,7 @@ async function restoreSessionState(storageArea = null) {
       }
     }
   }
-  const clicksSource = data ? data.flux_recentClicks : null;
+  const clicksSource = data ? (data.radium_recentClicks || data.flux_recentClicks) : null;
   if (Array.isArray(clicksSource) && G.clickedLinksByUrl) {
     const now = Date.now();
     for (const item of clicksSource) {
@@ -172,7 +191,7 @@ async function restoreSessionState(storageArea = null) {
       }
     }
   }
-  const respSource = data ? data.flux_recentResponses : null;
+  const respSource = data ? (data.radium_recentResponses || data.flux_recentResponses) : null;
   if (Array.isArray(respSource) && G.recentDownloadResponses) {
     const now = Date.now();
     for (const entry of respSource) {
@@ -181,13 +200,13 @@ async function restoreSessionState(storageArea = null) {
       }
     }
   }
-  const chainSource = data ? data.flux_redirectChains : null;
+  const chainSource = data ? (data.radium_redirectChains || data.flux_redirectChains) : null;
   if (Array.isArray(chainSource) && G.redirectChainMap) {
     for (const [from, to] of chainSource) {
       if (from && to) G.redirectChainMap.set(from, to);
     }
   }
-  const revSource = data ? data.flux_reverseRedirects : null;
+  const revSource = data ? (data.radium_reverseRedirects || data.flux_reverseRedirects) : null;
   if (Array.isArray(revSource) && G.reverseRedirectMap) {
     for (const [to, root] of revSource) {
       if (to && root) G.reverseRedirectMap.set(to, root);
@@ -720,7 +739,18 @@ function onHeadersReceivedHandler(details) {
   const reqMeta = (details.requestId && G.requestMetaMap && G.requestMetaMap.get(details.requestId)) || null;
   const originalUrl = (reqMeta && reqMeta.initialUrl) || resolveInitialUrlFromRedirects(details.url) || details.url;
 
-  if (isAttachment || G.InterceptFileExts.has(ext) || (G.InterceptMimeTypes && G.InterceptMimeTypes.has(contentType))) {
+  const passiveResource = PASSIVE_DOWNLOAD_REQUEST_TYPES.has(String(details.type || "").toLowerCase());
+  const binaryOrMediaMime = contentType.startsWith("video/") || contentType.startsWith("audio/") ||
+    (contentType !== "" && !contentType.startsWith("text/") &&
+      !/(?:json|xml|javascript|ecmascript|graphql)(?:$|\+)/i.test(contentType));
+  const matchesDownloadExtension = G.InterceptFileExts.has(ext);
+  const matchesDownloadMime = G.InterceptMimeTypes && G.InterceptMimeTypes.has(contentType);
+  // Ordinary page XHR/XML, scripts, and stylesheets are not user downloads.
+  // Keep attachment responses and binary/media XHRs so download correlation and media capture work.
+  const shouldTrackDownloadResponse = isAttachment ||
+    ((!passiveResource || binaryOrMediaMime) && (matchesDownloadExtension || matchesDownloadMime));
+
+  if (shouldTrackDownloadResponse) {
     const respMeta = {
       url: details.url,
       originalUrl,
@@ -898,7 +928,8 @@ class DownloadStateMachine {
 const downloadStateMachine = new DownloadStateMachine();
 
 
-async function transferBlobToFlux(tabId, blobUrl, filename, mime, correlationId, customTransport = null) {
+var transferBlobToFlux = transferBlobToRadium;
+async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationId, customTransport = null) {
   let directDataB64 = "";
   let directTotalBytes = 0;
   let directMime = mime || "application/octet-stream";
@@ -1015,7 +1046,7 @@ async function transferBlobToFlux(tabId, blobUrl, filename, mime, correlationId,
       return reject(new Error("chrome.tabs.sendMessage not available in environment"));
     }
     chrome.tabs.sendMessage(resolvedTabId, {
-      action: "fluxFetchBlobData",
+      action: "radiumFetchBlobData",
       blobUrl,
       filename,
       correlationId
@@ -1070,6 +1101,8 @@ async function transferBlobToFlux(tabId, blobUrl, filename, mime, correlationId,
     });
   });
 }
+
+var transferBlobToFlux = transferBlobToRadium;
 
 async function onDownloadCreatedHandler(
   downloadItem,
@@ -1284,6 +1317,7 @@ async function onDownloadCreatedHandler(
     stage: "OBSERVED"
   });
 
+  if (!customTransport) await refreshNativeCaptureSettings();
   const eligibility = isDownloadEligible({
     url: downloadItem.url,
     finalUrl: targetUrl,
@@ -1388,7 +1422,7 @@ async function onDownloadCreatedHandler(
           url: targetUrl.slice(0, 80),
           filename: cleanFilename
         });
-        result = await transferBlobToFlux(effectiveTabId, targetUrl, cleanFilename, mime, rec.correlationId, customTransport);
+        result = await transferBlobToRadium(effectiveTabId, targetUrl, cleanFilename, mime, rec.correlationId, customTransport);
       } else {
         result = await sendNativeRpc("download.offer", {
           url: targetUrl,
@@ -1437,7 +1471,7 @@ async function onDownloadCreatedHandler(
           mechanism: rec.mechanism,
           stage: "STAGE_DESKTOP_ACCEPTANCE"
         });
-        logPipelineStage(rec.correlationId, "DOWNLOAD_ACCEPTED_BY_FLUX", {
+        logPipelineStage(rec.correlationId, "DOWNLOAD_ACCEPTED_BY_RADIUM", {
           downloadId: rec.downloadId,
           taskId: result.taskId,
           fileName: result.fileName || cleanFilename,
@@ -1458,12 +1492,12 @@ async function onDownloadCreatedHandler(
         logPipelineStage(rec.correlationId, "BROWSER_HANDOFF", {
           downloadId: rec.downloadId,
           taskId: rec.taskId,
-          status: "HANDED_OFF_TO_FLUX"
+          status: "HANDED_OFF_TO_RADIUM"
         });
         logPipelineStage(rec.correlationId, "HANDED_OFF", {
           downloadId: rec.downloadId,
           taskId: rec.taskId,
-          status: "HANDED_OFF_TO_FLUX"
+          status: "HANDED_OFF_TO_RADIUM"
         });
 
         // Cancel browser download shelf cleanly.
@@ -1559,7 +1593,7 @@ async function onDownloadCreatedHandler(
 }
 
 // 4. Submit a detected video or stream candidate to Flux with explicit 5-way typed source handling (Defect B fix)
-async function submitMediaCandidateToFlux(candidate, options = {}, customTransport = null, browserDownloadFn = null) {
+async function submitMediaCandidateToRadium(candidate, options = {}, customTransport = null, browserDownloadFn = null) {
   if (!candidate || typeof candidate !== "object") {
     throw new Error("Invalid media candidate");
   }
@@ -1792,7 +1826,7 @@ async function submitMediaCandidateToFlux(candidate, options = {}, customTranspo
   }
 }
 
-var submitMediaCandidateToRadium = submitMediaCandidateToFlux;
+var submitMediaCandidateToFlux = submitMediaCandidateToRadium;
 var submitMediaCandidateToOpenIDM = submitMediaCandidateToFlux;
 
 function resolveCandidateForDownloadRequest(tabId, msg, sender) {
@@ -2228,11 +2262,14 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
       });
 
       G.inFlightMediaDownloads.set(inFlightKey, dlPromise);
-      dlPromise.finally(() => {
+      const cleanupInFlight = () => {
         setTimeout(() => {
           if (G.inFlightMediaDownloads) G.inFlightMediaDownloads.delete(inFlightKey);
         }, 8000);
-      });
+      };
+      // `finally()` creates a new promise that rejects with dlPromise. Handle both
+      // branches explicitly so a failed handoff cannot become an unhandled rejection.
+      dlPromise.then(cleanupInFlight, cleanupInFlight);
 
       try {
         const result = await dlPromise;
@@ -2242,6 +2279,13 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
       } catch (err) {
         sendResponse({ success: false, error: err.message || "Failed to submit download to Radium", correlationId });
       }
+    }).catch((err) => {
+      const error = err && err.message ? err.message : String(err || "Unknown media download error");
+      logPipelineStage(msg.correlationId || generateCorrelationId("dlmedia"), "MEDIA_REQUEST_FAILED", {
+        tabId,
+        error
+      });
+      sendResponse({ success: false, error, correlationId: msg.correlationId || "" });
     });
     return true;
   }
@@ -2447,7 +2491,7 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
       totalBytes: msg.totalBytes
     }).then(res => {
       if (res && res.success) {
-        logPipelineStage(correlationId, "CAPTURED_BY_FLUX", {
+        logPipelineStage(correlationId, "CAPTURED_BY_RADIUM", {
           taskId: res.taskId,
           fileName: res.fileName,
           saveDir: res.saveDir,
@@ -2606,14 +2650,14 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
             mechanism,
             stage: "STAGE_DESKTOP_ACCEPTANCE"
           });
-          logPipelineStage(correlationId, "DOWNLOAD_ACCEPTED_BY_FLUX", {
+          logPipelineStage(correlationId, "DOWNLOAD_ACCEPTED_BY_RADIUM", {
             url: targetUrl,
             taskId: result.taskId,
             fileName: result.fileName,
             mechanism,
             stage: "STAGE_DESKTOP_ACCEPTANCE"
           });
-          logPipelineStage(correlationId, "CAPTURED_BY_FLUX", {
+          logPipelineStage(correlationId, "CAPTURED_BY_RADIUM", {
             url: targetUrl,
             taskId: result.taskId,
             fileName: result.fileName,

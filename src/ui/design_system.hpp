@@ -120,7 +120,7 @@ struct ThemePalette {
     ColorRgba accent_cyan;         // Restrained cosmic cyan accent (#06B6D4)
     ColorRgba accent_violet;       // Celestial violet accent (#8B5CF6)
     ColorRgba badge_stream;        // HLS/DASH stream indicator (#8B5CF6)
-    ColorRgba badge_file;          // Ordinary HTTP file indicator (#2563EB)
+    ColorRgba badge_file;          // Ordinary HTTP file indicator (Radium Coral in the branded palette)
     ColorRgba status_success;      // Completed muted neutral (#A9B4C2)
     ColorRgba status_warning;      // Paused / Retrying (#F2B84B)
     ColorRgba status_danger;       // Failed / Error orange (#FF9F43)
@@ -150,11 +150,11 @@ struct LayoutMetrics {
     int min_window_width{900};
     int min_window_height{560};
     int compact_width_threshold{1024};
-    int toolbar_height{48};
-    int sidebar_width{216};
-    int table_header_height{34};
-    int table_row_height{44};
-    int details_panel_height{188};
+    int toolbar_height{56};
+    int sidebar_width{192};
+    int table_header_height{38};
+    int table_row_height{52};
+    int details_panel_height{142};
     int status_bar_height{28};
     int button_height{32};
     int progress_bar_height{6};
@@ -245,11 +245,11 @@ public:
         m.min_window_width = ScaleForDpi(900, dpi);
         m.min_window_height = ScaleForDpi(560, dpi);
         m.compact_width_threshold = ScaleForDpi(1024, dpi);
-        m.toolbar_height = ScaleForDpi(48, dpi);
-        m.sidebar_width = ScaleForDpi(216, dpi);
-        m.table_header_height = ScaleForDpi(34, dpi);
-        m.table_row_height = ScaleForDpi(44, dpi);
-        m.details_panel_height = ScaleForDpi(188, dpi);
+        m.toolbar_height = ScaleForDpi(56, dpi);
+        m.sidebar_width = ScaleForDpi(192, dpi);
+        m.table_header_height = ScaleForDpi(38, dpi);
+        m.table_row_height = ScaleForDpi(52, dpi);
+        m.details_panel_height = ScaleForDpi(142, dpi);
         m.status_bar_height = ScaleForDpi(28, dpi);
         m.button_height = ScaleForDpi(32, dpi);
         m.progress_bar_height = ScaleForDpi(6, dpi);
@@ -275,21 +275,21 @@ public:
         p.surface_primary  = {0x1E, 0x29, 0x3B, 255}; // #1E293B Dark Navy Surface
         p.surface_elevated = {0x33, 0x41, 0x55, 255}; // #334155 Elevated Surface
         p.surface_hover    = {0x47, 0x55, 0x69, 255}; // #475569 Interactive Hover
-        p.surface_selected = {0x1E, 0x3A, 0x8A, 255}; // #1E3A8A Deep Blue Selection
+        p.surface_selected = {0x30, 0x23, 0x28, 255}; // #302328 Radium selection
         p.surface_pressed  = {0x16, 0x22, 0x38, 255};
         p.border_subtle    = {0x33, 0x41, 0x55, 255}; // #334155 Hairline Divider
-        p.border_focus     = {0x38, 0xBD, 0xF8, 255}; // #38BDF8 Cosmic Cyan Focus Ring
+        p.border_focus     = {0xFF, 0x47, 0x57, 255}; // #FF4757 Radium Coral focus ring
         p.text_primary     = {0xF8, 0xFA, 0xFC, 255}; // #F8FAFC Crisp Off-White
         p.text_secondary   = {0x94, 0xA3, 0xB8, 255}; // #94A3B8 Secondary Metadata
         p.text_muted       = {0x64, 0x74, 0x8B, 255}; // #64748B Disabled / Hint
-        p.accent_primary   = {0x25, 0x63, 0xEB, 255}; // #2563EB Radium Blue Accent
-        p.accent_hover     = {0x3B, 0x82, 0xF6, 255}; // #3B82F6 Accent Hover
+        p.accent_primary   = {0xFF, 0x47, 0x57, 255}; // #FF4757 Radium Coral
+        p.accent_hover     = {0xFF, 0x5F, 0x6A, 255}; // #FF5F6A Coral hover
         p.accent_cyan      = {0x06, 0xB6, 0xD4, 255}; // #06B6D4 Cosmic Cyan Accent
         p.accent_violet    = {0x8B, 0x5C, 0xF6, 255}; // #8B5CF6 Celestial Violet
         p.badge_stream     = {0x8B, 0x5C, 0xF6, 255}; // #8B5CF6 Media Stream Badge
-        p.badge_file       = {0x25, 0x63, 0xEB, 255}; // #2563EB Direct File Badge
+        p.badge_file       = {0xFF, 0x47, 0x57, 255}; // #FF4757 Direct File Badge
         p.status_success   = {0xA9, 0xB4, 0xC2, 255}; // #A9B4C2 Muted completed state
-        p.status_warning   = {0xF5, 0x9E, 0x0B, 255}; // #F59E0B Paused / Warning Amber
+        p.status_warning   = {0xF2, 0xB8, 0x4B, 255}; // #F2B84B Paused Amber
         p.status_danger    = {0xFF, 0x9F, 0x43, 255}; // #FF9F43 Failed / Error Orange
         p.progress_track   = {0x1E, 0x29, 0x3B, 255}; // #1E293B Progress Track
         p.star_bright      = {0xE2, 0xE8, 0xF0, 210}; // #E2E8F0 Bright Starlight
@@ -309,17 +309,17 @@ public:
         p.surface_primary  = {0xFF, 0xFF, 0xFF, 255};
         p.surface_elevated = {0xF1, 0xF5, 0xF9, 255};
         p.surface_hover    = {0xE2, 0xE8, 0xF0, 255};
-        p.surface_selected = {0xDB, 0xEA, 0xFE, 255};
+        p.surface_selected = {0x30, 0x23, 0x28, 255};
         p.surface_pressed  = {0xC8, 0xD4, 0xEE, 255};
         p.border_subtle    = {0xCB, 0xD5, 0xE1, 255};
-        p.border_focus     = {0x25, 0x63, 0xEB, 255};
+        p.border_focus     = {0xFF, 0x47, 0x57, 255};
         p.text_primary     = {0x0F, 0x17, 0x2A, 255};
         p.text_secondary   = {0x47, 0x55, 0x69, 255};
         p.text_muted       = {0x94, 0xA3, 0xB8, 255};
-        p.accent_primary   = {0x25, 0x63, 0xEB, 255};
-        p.accent_hover     = {0x1D, 0x4E, 0xD8, 255};
+        p.accent_primary   = {0xFF, 0x47, 0x57, 255};
+        p.accent_hover     = {0xFF, 0x5F, 0x6A, 255};
         p.badge_stream     = {0x7C, 0x3A, 0xED, 255};
-        p.badge_file       = {0x25, 0x63, 0xEB, 255};
+        p.badge_file       = {0xFF, 0x47, 0x57, 255};
         p.status_success   = {0x7D, 0x8A, 0x99, 255};
         p.status_warning   = {0xD9, 0x77, 0x06, 255};
         p.status_danger    = {0xD9, 0x7A, 0x24, 255};
@@ -363,7 +363,7 @@ public:
 
     static ThemePalette ResolvePalette(std::string_view theme_setting, bool os_prefers_light = false) {
         if (theme_setting == "light") return GetLightPalette();
-        if (theme_setting == "classic_blue" || theme_setting == "cosmic_blue") return GetDarkPalette();
+        if (theme_setting == "classic_blue" || theme_setting == "cosmic_blue") return GetRedesignPalette();
         if (theme_setting == "system") return os_prefers_light ? GetLightPalette() : GetRedesignPalette();
         // "coral_dark", "coral", "charcoal", "dark", or any unrecognized string maps to the Coral Charcoal Redesign Palette
         return GetRedesignPalette();

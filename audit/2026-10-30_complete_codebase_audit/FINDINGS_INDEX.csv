@@ -1,0 +1,70 @@
+finding_id,category,severity,priority,confidence,file_path,symbol,status,short_description
+BUG-001,Core / State Machine,CRITICAL,P0,CONFIRMED,src/core/download_controller.cpp:1476,PauseTask/RunTaskWorker,FIXED AND VERIFIED,Async PauseTask overwrites immediate ResumeTask or RefreshTaskUrl
+BUG-002,Storage / Crash Recovery,CRITICAL,P0,CONFIRMED,src/storage/sqlite_store.cpp:382,UpdateTaskProgressAndSegments,FIXED AND VERIFIED,Fails to persist part_path/file_name/etag breaking crash recovery
+BUG-003,Core / Concurrency,HIGH,P0,CONFIRMED,src/core/download_controller.cpp:794,ScheduleLoop,FIXED AND VERIFIED,Lock convoy: ScheduleLoop queries SQLite ListQueues at 20Hz under m_mutex
+BUG-004,Core / Lifecycle,HIGH,P1,CONFIRMED,src/core/download_controller.cpp:1791,RemoveTask,FIXED AND VERIFIED,RemoveTask 3s timeout join race with Shutdown and ScheduleLoop
+BUG-005,Core / Integrity,HIGH,P1,CONFIRMED,src/core/download_controller.cpp:1481,RunTaskWorker,FIXED AND VERIFIED,CancelTask during post-download antivirus scan corrupts completed task
+BUG-006,Core / Failover,HIGH,P1,CONFIRMED,src/core/download_controller.cpp:1296,RunTaskWorker,FIXED AND VERIFIED,Mirror failover overwrites task.url and skips working mirror on resume
+BUG-007,Core / Queues,HIGH,P1,CONFIRMED,src/core/download_controller.cpp:843,ScheduleLoop,FIXED AND VERIFIED,Multi-queue schedule overrides system suspend; MoveTaskToQueue ignores FK errors
+BUG-008,Core / Concurrency,MEDIUM,P1,CONFIRMED,src/core/download_controller.cpp:695,GetConfig,FIXED AND VERIFIED,Data race on m_settings and m_cfg between UI and worker threads
+BUG-009,Storage / Unicode,HIGH,P1,CONFIRMED,src/storage/sqlite_store.cpp:37,SqliteStore::Open,FIXED AND VERIFIED,Uses ANSI db_path.string() instead of UTF-8 or sqlite3_open16
+BUG-010,Storage / JSON,HIGH,P1,CONFIRMED,src/storage/import_export.cpp:142,ExportTasksToString,FIXED AND VERIFIED,Casts 64-bit sizes/timestamps to double losing precision on export
+BUG-011,Common / JSON,HIGH,P1,CONFIRMED,src/common/json_mini.hpp:198,json_mini::Parse,FIXED AND VERIFIED,Corrupts UTF-16 surrogate pairs and lacks recursion depth limit
+BUG-012,Common / Sanitization,MEDIUM,P1,CONFIRMED,src/common/path_sanitizer.cpp:35,SanitizeFilename,FIXED AND VERIFIED,Truncates at colons and replaces + with space in URL paths
+BUG-013,Core / Deduplication,MEDIUM,P2,CONFIRMED,src/core/duplicate_detector.hpp:200,FindDuplicate,FIXED AND VERIFIED,Misses kVerifying and kFinalizing states during duplicate check
+BUG-014,Common / Crypto,MEDIUM,P2,CONFIRMED,src/common/crypto_utils.cpp:103,ComputeFileSha256Hex,FIXED AND VERIFIED,Unchecked BCrypt return codes and partial stream reads
+BUG-015,HTTP Engine / Integrity,CRITICAL,P0,CONFIRMED,src/brisk_engine/http_download_engine.cpp:732,Execute,FIXED AND VERIFIED,Truncated single-stream downloads silently marked 100% Completed
+BUG-016,HTTP Engine / Network,HIGH,P0,CONFIRMED,src/brisk_engine/http_client.cpp:204,IsLoopbackHost,FIXED AND VERIFIED,False-positive SSRF block on public domains starting with fc or fd
+BUG-017,HTTP Engine / Errors,HIGH,P1,CONFIRMED,src/brisk_engine/http_download_engine.cpp:893,Execute,FIXED AND VERIFIED,HTTP 401/403/404 misclassified as non-resumable ERR_HTTP_RANGE_PROTOCOL
+BUG-018,HTTP Engine / Protocol,HIGH,P1,CONFIRMED,src/brisk_engine/http_download_engine.cpp:463,Execute,FIXED AND VERIFIED,Weak ETag sent in If-Range header due to checking probe_meta.etag
+BUG-019,HTTP Engine / Scheduler,HIGH,P1,CONFIRMED,src/brisk_engine/http_download_engine.cpp:885,Execute,FIXED AND VERIFIED,Rollback of unstarted stolen segments races with worker start on 200 OK
+BUG-020,HTTP Engine / Timeouts,MEDIUM,P1,CONFIRMED,src/brisk_engine/http_client.cpp:300,StreamGet,FIXED AND VERIFIED,Unclamped body delivery past Content-Length and 5000ms minimum timeout
+BUG-021,Stream / Process,HIGH,P1,CONFIRMED,src/engine_stream/nm3u8dl_re_adapter.cpp:366,run_ytdlp_proc,FIXED AND VERIFIED,Blocking pipe deadlock in run_ytdlp_proc and missing Job Object
+BUG-022,Stream / Decryption,HIGH,P1,CONFIRMED,src/worker_stream/nm3u8dl_re_worker.cpp:541,DownloadStream,FIXED AND VERIFIED,HLS AES-128 decryption omitted on final live segments
+BUG-023,Stream / Unicode,HIGH,P1,CONFIRMED,src/worker_stream/nm3u8dl_re_worker.cpp:2052,main,FIXED AND VERIFIED,Broken UTF-8 to wstring conversion mangles non-ASCII file paths
+BUG-024,FTP Engine / Protocol,HIGH,P1,CONFIRMED,src/engine_ftp/ftp_client.cpp:141,ReadFtpResponse,FIXED AND VERIFIED,Unbounded FTP response buffer and destructive .part truncation on REST fail
+BUG-025,Crawler / URLs,MEDIUM,P1,CONFIRMED,src/crawler/site_grabber.cpp:34,ResolveUrl,FIXED AND VERIFIED,Corrupts base URLs containing query strings and discards pages > 4 MiB
+BUG-026,BitTorrent / Overflow,CRITICAL,P0,CONFIRMED,src/engine_torrent/torrent_engine.cpp:200,peer_worker,FIXED AND VERIFIED,32-bit unsigned overflow in 4 + payload_len causes infinite CPU loop
+BUG-027,BitTorrent / Integrity,CRITICAL,P0,CONFIRMED,src/engine_torrent/torrent_engine.cpp:264,FetchMetadataFromPeer,FIXED AND VERIFIED,Magnet BEP 9 metadata exchange never verifies SHA-1 of info_bytes
+BUG-028,BitTorrent / Protocol,CRITICAL,P0,CONFIRMED,src/engine_torrent/piece_manager.hpp:195,ProcessBlock,FIXED AND VERIFIED,Unvalidated begin offset and block length allows piece corruption
+BUG-029,BitTorrent / Concurrency,CRITICAL,P0,CONFIRMED,src/engine_torrent/torrent_engine.cpp:573,peer_worker,FIXED AND VERIFIED,Unsynchronized TaskModel mutation across 64 worker threads
+BUG-030,BitTorrent / Bencode,HIGH,P1,CONFIRMED,src/engine_torrent/torrent_parser.cpp:206,ParseTorrentBuffer,FIXED AND VERIFIED,Naive 4:info substring search computes wrong info_hash
+BUG-031,BitTorrent / Metadata,HIGH,P1,CONFIRMED,src/engine_torrent/torrent_engine.cpp:226,peer_worker,FIXED AND VERIFIED,BEP 9 ut_metadata assembly 32-bit offset overflow and partial parsing
+BUG-032,BitTorrent / Storage,HIGH,P1,CONFIRMED,src/engine_torrent/multi_file_storage.hpp:118,ReadBytes/WriteBytes,FIXED AND VERIFIED,MultiFileStorage has no mutex and ignores EOF short reads
+BUG-033,BitTorrent / State,HIGH,P1,CONFIRMED,src/engine_torrent/torrent_engine.cpp:696,peer_worker,FIXED AND VERIFIED,kChoke and kRejectRequest never release in-flight block requests
+BUG-034,BitTorrent / Privacy,HIGH,P1,CONFIRMED,src/engine_torrent/torrent_engine.cpp:655,peer_worker,FIXED AND VERIFIED,Outbound peer_worker uploads zero-filled unselected boundary bytes
+BUG-035,BitTorrent / Network,HIGH,P1,CONFIRMED,src/engine_torrent/torrent_engine.cpp:826,TorrentEngine::Execute,FIXED AND VERIFIED,Monitor loop hammers all trackers every 1s ignoring interval
+BUG-036,Archive / Parsing,HIGH,P1,CONFIRMED,src/archive/zip_preview.cpp:105,InspectBuffer,FIXED AND VERIFIED,Returns Ok on corrupt ZIPs and lacks ZIP64 extra field support
+BUG-037,Win32 GUI / Memory,CRITICAL,P0,CONFIRMED,src/ui/win32_main_window.cpp:9012,IDM_CTX_OPEN_TORRENT,FALSE POSITIVE,Buffer over-read: GetOpenFileNameW filter missing embedded nulls
+BUG-038,IPC / Handles,CRITICAL,P0,CONFIRMED,src/ipc/ipc_server.cpp:189,IpcServer::Stop,FIXED AND VERIFIED,Pipe handle use-after-close and double-close race with client threads
+BUG-039,Browser / Firefox,CRITICAL,P0,CONFIRMED,extension/manifest.firefox.json:26,background,FIXED BUT UNVERIFIED,Firefox background script immediate crash: G is not defined
+BUG-040,Win32 GUI / Modals,HIGH,P0,CONFIRMED,src/ui/win32_main_window.cpp:4546,ShowNewDownloadModal,FIXED AND VERIFIED,Reentrant modal loops drop concurrent browser download offers
+BUG-041,Win32 GUI / Performance,HIGH,P0,CONFIRMED,src/ui/win32_main_window.cpp:4689,ShowTaskPropertiesModal,FIXED AND VERIFIED,Synchronous UI thread file hashing and cross-drive moves freeze window
+BUG-042,Browser / Memory,HIGH,P1,CONFIRMED,extension/catch-script/catch.js:789,revokeObjectURL,FIXED AND VERIFIED,Global 60s revokeObjectURL suppression leaks hundreds of MB per tab
+BUG-043,Browser / NMH,HIGH,P1,CONFIRMED,extension/js/background.js:267,sendNativeRpc,FIXED AND VERIFIED,Cold-start timeout mismatch between extension (5s) and NMH (11.25s)
+BUG-044,Browser / Lifecycle,HIGH,P1,CONFIRMED,extension/js/background.js:29,onDownloadCreated,FIXED AND VERIFIED,MV3 service worker session restore race drops download rules on wake-up
+BUG-045,NMH / Parsing,HIGH,P1,CONFIRMED,src/nmh/main.cpp:61,ExtractJsonRpcId,FIXED AND VERIFIED,Naive substring search for id matches inside URLs or parameters
+BUG-046,Win32 GUI / Layout,MEDIUM,P1,CONFIRMED,src/ui/win32_main_window.cpp:218,LayoutCalc,FIXED AND VERIFIED,Details panel height math desynchronized clipping bottom task rows
+BUG-047,Win32 GUI / Paint,MEDIUM,P1,CONFIRMED,src/ui/design_system.hpp:182,UiAnimationState,FIXED AND VERIFIED,Clock epoch mismatch and full task vector copies in paint loop
+BUG-048,Win32 GUI / Settings,MEDIUM,P1,CONFIRMED,src/ui/win32_main_window.cpp:6722,SettingsDlgProc,FIXED AND VERIFIED,Disconnected extension install controls and uncaught CLI stoul
+BUG-049,Browser / Filenames,MEDIUM,P2,CONFIRMED,extension/js/popup.js:454,LinkGrabber,FIXED AND VERIFIED,Doubled file extensions on batch page link downloads (.exe.exe / .mp4.mp4)
+SEC-001,Security / Extension,CRITICAL,P0,CONFIRMED,extension/js/content-script.js:837,onMessage,FIXED AND VERIFIED,Zero-click arbitrary file write via unauthenticated window.postMessage
+SEC-002,Security / Stream,CRITICAL,P0,CONFIRMED,src/engine_stream/nm3u8dl_re_adapter.cpp:1381,BuildResponseFileContent,FIXED AND VERIFIED,Command-line flag injection via unquoted stream filters in @job.rsp
+SEC-003,Security / AV,CRITICAL,P0,CONFIRMED,src/security/antivirus_scanner.cpp:200,ScanWithDefender,FIXED AND VERIFIED,False-negative Defender bypass via filename matching found no threats
+SEC-004,Security / SSRF,CRITICAL,P0,CONFIRMED,src/engine_stream/nm3u8dl_re_adapter.cpp:781,ValidateManifestSafety,FIXED AND VERIFIED,SSRF bypasses in stream manifest safety for https private IPs and IPv6
+SEC-005,Security / IPC,HIGH,P0,CONFIRMED,src/ipc/ipc_server.cpp:563,addDownload,FIXED AND VERIFIED,Weak saveDir validation allows writing outside Downloads and UNC SMB leaks
+SEC-006,Security / Stream,HIGH,P0,CONFIRMED,src/worker_stream/nm3u8dl_re_worker.cpp:836,ExtractManifestInfo,FIXED AND VERIFIED,Arbitrary local file read in worker via recursive is_manifest_input
+SEC-007,Security / HTTP,HIGH,P0,CONFIRMED,src/brisk_engine/http_client.cpp:948,StreamGet,FIXED AND VERIFIED,Cross-origin redirect credential leak via WinHttpSetCredentials & case erase
+SEC-008,Security / SSRF,HIGH,P1,CONFIRMED,src/brisk_engine/http_client.cpp:141,IsPrivateOrLoopbackHost,FIXED AND VERIFIED,DNS rebinding TOCTOU SSRF and data race on static wsa_init
+SEC-009,Security / Credentials,HIGH,P1,CONFIRMED,src/engine_stream/nm3u8dl_re_adapter.cpp:1418,Execute,FIXED AND VERIFIED,Plaintext credentials left in job.rsp on early error and export leak
+SEC-010,Security / Torrent,HIGH,P1,CONFIRMED,src/engine_torrent/dht_client.hpp:81,DhtClient::Query,FIXED AND VERIFIED,Predictable DHT transaction IDs and uninitialized UDP stack read
+SEC-011,Security / AV,HIGH,P1,CONFIRMED,src/security/antivirus_scanner.cpp:240,ScanWithCustomExecutable,FIXED AND VERIFIED,Command-line quoting and unquoted application path injection in scanner
+SEC-012,Security / Hardening,MEDIUM,P2,CONFIRMED,src/app/main.cpp:62,main,FIXED AND VERIFIED,Missing SetDefaultDllDirectories and missing Mark-of-the-Web zone writing
+BLD-01,Build System,HIGH,P1,CONFIRMED,CMakeLists.txt:71,add_executable,UNRESOLVED,Triplicate target compilation and duplicate ctest execution
+BLD-02,Build System,MEDIUM,P2,CONFIRMED,CMakeLists.txt:75,radium_core_tests,FIXED AND VERIFIED,Core unit tests binary omitted from ctest and 100% redundant
+BLD-03,Build System,MEDIUM,P1,CONFIRMED,CMakeLists.txt:16,CMakeLists,FIXED AND VERIFIED,Dynamic CRT /MD default instead of static /MT and warning suppressions
+CI-01,CI/CD,CRITICAL,P0,CONFIRMED,.github/workflows/windows-release.yml:674,publish-release,FIXED AND VERIFIED,Force-stages and pushes 50 MB compiled binaries directly to origin main
+PKG-01,Packaging,CRITICAL,P0,CONFIRMED,installer/radium.iss:63,ResolveWorkerSource,FIXED AND VERIFIED,ARM64 installer packages x64 N_m3u8DL-RE.exe into tools win-x64
+DOC-01,Legal / License,CRITICAL,P0,CONFIRMED,LICENSE:1,Root License,UNRESOLVED,Apache-2.0 in LICENSE vs GPL-3.0 in ADR-0006 and AGENTS.md contradiction
+ART-01,Artifacts / Bloat,CRITICAL,P0,CONFIRMED,release/*.exe,Tracked Binaries,UNRESOLVED,50.6 MB of binary installers tracked in git index under release
+ART-02,Artifacts / Bloat,CRITICAL,P0,CONFIRMED,tools/benchmarks/,Disk Bloat,FIXED AND VERIFIED,1.0 GB adult video and personal PDFs untracked in tools directory

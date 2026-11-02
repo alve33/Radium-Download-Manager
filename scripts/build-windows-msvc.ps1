@@ -95,23 +95,14 @@ if (Test-Path (Join-Path $BuildDir "Release\radium.exe")) {
     $BuiltDir = Join-Path $BuildDir "Release"
 }
 
-# Create compatibility aliases from primary Radium binaries
-Copy-Item -Force (Join-Path $BuiltDir "radium.exe") (Join-Path $BuiltDir "flux.exe")
-Copy-Item -Force (Join-Path $BuiltDir "radium.exe") (Join-Path $BuiltDir "openidm.exe")
-Copy-Item -Force (Join-Path $BuiltDir "radium-nmh.exe") (Join-Path $BuiltDir "flux-nmh.exe")
-Copy-Item -Force (Join-Path $BuiltDir "radium-nmh.exe") (Join-Path $BuiltDir "openidm-nmh.exe")
-Copy-Item -Force (Join-Path $BuiltDir "radium_unit_tests.exe") (Join-Path $BuiltDir "flux_unit_tests.exe")
-Copy-Item -Force (Join-Path $BuiltDir "radium_unit_tests.exe") (Join-Path $BuiltDir "openidm_unit_tests.exe")
-
-$Targets = @("radium.exe", "radium-nmh.exe", "radium_unit_tests.exe", "flux.exe", "flux-nmh.exe", "flux_unit_tests.exe", "N_m3u8DL-RE.exe")
+$Targets = @("radium.exe", "radium-nmh.exe", "radium_unit_tests.exe", "radium_core_tests.exe", "N_m3u8DL-RE.exe")
 foreach ($t in $Targets) {
     $srcPath = Join-Path $BuiltDir $t
-    Copy-Item -Force $srcPath (Join-Path $BuildDir $t)
-    Copy-Item -Force $srcPath (Join-Path $RepoRoot "build\$t")
+    if (Test-Path $srcPath) {
+        Copy-Item -Force $srcPath (Join-Path $BuildDir $t)
+        Copy-Item -Force $srcPath (Join-Path $RepoRoot "build\$t")
+    }
 }
-Copy-Item -Force (Join-Path $BuiltDir "openidm.exe") (Join-Path $BuildDir "openidm.exe")
-Copy-Item -Force (Join-Path $BuiltDir "openidm-nmh.exe") (Join-Path $BuildDir "openidm-nmh.exe")
-Copy-Item -Force (Join-Path $BuiltDir "openidm_unit_tests.exe") (Join-Path $BuildDir "openidm_unit_tests.exe")
 
 # -----------------------------------------------------------------------------
 # 4. Verify PE32+ Headers and Subsystems

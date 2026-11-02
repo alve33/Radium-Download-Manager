@@ -50,6 +50,12 @@ Every GitHub Release (`vX.Y.Z`) publishes the following complete artifact set:
 
 ## 4. Cryptographic Update Verification & Rollback Procedure (`FR-028`, `THREAT-010`)
 
+### Current implementation boundary (2026-11-01)
+
+The Settings action queries `https://api.github.com/repos/sayedalve/Radium-Download-Manager/releases/latest`, rejects draft/prerelease/malformed responses, compares the release tag to `RADIUM_VERSION_STRING` using SemVer, displays release notes, and reports whether an x64/ARM64 installer asset is attached. “Open release page” opens only a URL under the official repository releases path.
+
+Automatic installer download or execution is intentionally not implemented. Repository inspection found no published `update-manifest.json`/signature asset, no Ed25519 public key in source or release configuration, no signing workflow/key configuration, and no configured expected Authenticode publisher identity. SHA256SUMS alone is not an authenticated trust root. Until those inputs are provisioned and the release workflow publishes verifiable metadata, the updater must not execute downloaded binaries.
+
 ### 4.1 Update Verification Sequence
 When the user triggers **Check for Updates** (or enables periodic background checks):
 1. `radium.exe` fetches `update-manifest.json` over HTTPS (`WinHTTP` with TLS 1.2/1.3).

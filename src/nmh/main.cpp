@@ -245,27 +245,12 @@ int main(int argc, char* argv[]) {
     if (argc > 0 && argv[0]) {
         std::filesystem::path self_path = std::filesystem::path(argv[0]);
 #ifdef _WIN32
-        std::filesystem::path candidate = self_path.parent_path() / "Radium.exe";
+        std::filesystem::path candidate = self_path.parent_path() / "radium.exe";
         if (!std::filesystem::exists(candidate)) {
-            candidate = self_path.parent_path() / "radium.exe";
-        }
-        if (!std::filesystem::exists(candidate)) {
-            candidate = self_path.parent_path() / "Flux.exe";
-        }
-        if (!std::filesystem::exists(candidate)) {
-            candidate = self_path.parent_path() / "flux.exe";
-        }
-        if (!std::filesystem::exists(candidate)) {
-            candidate = self_path.parent_path() / "openidm.exe";
+            candidate = self_path.parent_path() / "Radium.exe";
         }
 #else
         std::filesystem::path candidate = self_path.parent_path() / "radium";
-        if (!std::filesystem::exists(candidate)) {
-            candidate = self_path.parent_path() / "flux";
-        }
-        if (!std::filesystem::exists(candidate)) {
-            candidate = self_path.parent_path() / "openidm";
-        }
 #endif
         if (std::filesystem::exists(candidate)) {
             daemon_bin = candidate;

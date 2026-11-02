@@ -40,6 +40,7 @@ Implemented in `extension/src/background/MediaSniffer.ts`:
      - Extracted request headers: `Referer`, `Origin`, `User-Agent`, `Cookie`, `Authorization`
 2. **`onHeadersReceived` Listener (`['responseHeaders']`):**
    - Evaluates the response status (`200` or `206`), `Content-Type`, `Content-Length`, `Content-Range`, and URL path against the **Classification Rules**:
+   - Download correlation ignores generic XML/JSON and non-binary responses from passive XHR, script, stylesheet, font, image, and beacon requests. Explicit attachments and binary/media responses remain eligible; streaming media classification runs independently.
    - **Segment Suppression Filter (Anti-Flooding):**
      - Immediately ignore URLs matching `.ts`, `.m4s`, `.cmfv`, `.cmfa`, `.vtt` segment patterns or `206 Partial Content` requests whose `Content-Range` span is `< 4 MiB` when an HLS/DASH manifest has already been recorded for the same `(tabId, frameId)` within the last 5 minutes.
      - Immediately ignore responses with `Content-Length < 512 KiB` for `video/*` or `< 128 KiB` for `audio/*` (filters out UI sound effects and hover preview clips), while allowing all `.m3u8`/`.mpd` manifests regardless of size (since manifests are typically `1–50 KB`).

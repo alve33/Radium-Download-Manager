@@ -42,7 +42,7 @@ jobs:
 
       - name: Build Flux Targets
         run: |
-          cmake --build build --config Release --target flux flux-nmh radium radium-nmh
+          cmake --build build --config Release --target radium radium-nmh
 
       - name: Provision Upstream Stream Workers
         shell: powershell

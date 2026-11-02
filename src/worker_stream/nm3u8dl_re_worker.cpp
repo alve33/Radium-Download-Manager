@@ -832,7 +832,7 @@ bool ParseYouTubeJsonIntoMeta(const openidm::json::Value& root, const WorkerOpti
     if (!root.is_object()) return false;
 
     // Case A: Structured YOUTUBE_STREAM descriptor emitted by Flux extension catch.js
-    if (root["fluxType"].as_string() == "YOUTUBE_STREAM") {
+    if (root["radiumType"].as_string() == "YOUTUBE_STREAM" || root["fluxType"].as_string() == "YOUTUBE_STREAM") {
         std::string hls_url = root["hlsManifestUrl"].as_string();
         if (!hls_url.empty()) {
             WorkerOptions sub = opts;

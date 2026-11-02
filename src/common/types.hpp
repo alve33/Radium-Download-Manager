@@ -36,6 +36,7 @@ enum class TaskState {
 };
 
 enum class ConflictPolicy {
+    kPrompt,
     kAutoRename,
     kOverwrite,
     kFailIfExists
@@ -214,8 +215,9 @@ struct AppSettings {
     uint64_t speed_limit_bps{0};
     uint32_t default_connections_per_task{8};
     std::string default_download_dir;
-    bool category_subfolders_enabled{true};
-    ConflictPolicy conflict_policy{ConflictPolicy::kAutoRename};
+    bool default_download_dir_user_selected{false};
+    std::string last_download_dir;
+    ConflictPolicy conflict_policy{ConflictPolicy::kPrompt};
     bool auto_start_downloads{true};
     int stall_timeout_ms{3000};
     uint64_t min_split_bytes{131072};
@@ -237,7 +239,6 @@ struct AppSettings {
     std::string server_auth_password_encrypted;       // DPAPI-encrypted blob/base64
 
     // Configurable Categories & Destination Folders (Phase 2 Feature E)
-    std::map<std::string, std::string> category_folders;           // Category -> Custom Directory Path
     std::map<std::string, std::string> custom_extension_categories;// Extension (lowercase) -> Category Name
     std::map<std::string, std::string> site_rules;                 // Domain -> Category or Directory Path
 
@@ -253,7 +254,8 @@ struct AppSettings {
                speed_limit_bps == other.speed_limit_bps &&
                default_connections_per_task == other.default_connections_per_task &&
                default_download_dir == other.default_download_dir &&
-               category_subfolders_enabled == other.category_subfolders_enabled &&
+               default_download_dir_user_selected == other.default_download_dir_user_selected &&
+               last_download_dir == other.last_download_dir &&
                conflict_policy == other.conflict_policy &&
                auto_start_downloads == other.auto_start_downloads &&
                stall_timeout_ms == other.stall_timeout_ms &&
@@ -272,7 +274,6 @@ struct AppSettings {
                proxy_password_encrypted == other.proxy_password_encrypted &&
                server_auth_username == other.server_auth_username &&
                server_auth_password_encrypted == other.server_auth_password_encrypted &&
-               category_folders == other.category_folders &&
                custom_extension_categories == other.custom_extension_categories &&
                site_rules == other.site_rules &&
                max_auto_retries == other.max_auto_retries &&

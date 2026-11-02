@@ -198,13 +198,11 @@ Result<ScanReport> AntivirusScanner::ScanWithDefender(
     if (rep.exit_code == 0) {
         rep.status = ScanStatus::kClean;
     } else if (rep.exit_code == 2) {
-        // Exit code 2 is returned both for genuine threat detections and for execution errors (e.g. hr = 0x80508023).
-        // Confirm whether threats were actually reported in the scanner output or if an error occurred.
-        if (rep.output_message.find("found no threats") != std::string::npos) {
-            rep.status = ScanStatus::kClean;
-        } else if (rep.output_message.find("Failed with hr =") != std::string::npos ||
-                   rep.output_message.find("ERROR:") != std::string::npos ||
-                   rep.output_message.find("error") != std::string::npos) {
+        // Exit code 2 indicates a threat was detected by Windows Defender MpCmdRun.exe.
+        // We only downgrade to kScannerError if Defender explicitly emitted a COM/HRESULT failure code.
+        // We NEVER downgrade exit_code == 2 to kClean based on substring checks, preventing SEC-003 bypass.
+        if (rep.output_message.find("Failed with hr =") != std::string::npos ||
+            rep.output_message.find("MpCmdRun: hr =") != std::string::npos) {
             rep.status = ScanStatus::kScannerError;
         } else {
             rep.status = ScanStatus::kThreatDetected;

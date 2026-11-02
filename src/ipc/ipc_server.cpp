@@ -506,7 +506,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         }
         auto s = m_controller.GetSettings();
         json::Value res = json::Object{};
-        res["appVersion"] = FLUX_VERSION_STRING;
+        res["appVersion"] = RADIUM_VERSION_STRING;
         res["protocolVersion"] = "1.0";
         res["captureEnabled"] = m_capture_enabled.load();
         res["workersAvailable"] = m_controller.AreWorkersAvailable();
@@ -562,7 +562,8 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         }
         if (params.contains("saveDir")) {
             std::string sd = params["saveDir"].as_string();
-            bool safe = !sd.empty() && sd.find("..") == std::string::npos;
+            bool safe = !sd.empty() && sd.find("..") == std::string::npos &&
+                        sd.rfind("\\\\", 0) != 0 && sd.rfind("//", 0) != 0;
 #ifdef _WIN32
             for (size_t i = 0; safe && i < sd.size(); ++i) {
                 if (sd[i] == ':') {
@@ -677,7 +678,8 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         std::string custom_save_dir;
         if (params.contains("saveDir")) {
             std::string sd = params["saveDir"].as_string();
-            bool safe = !sd.empty() && sd.find("..") == std::string::npos;
+            bool safe = !sd.empty() && sd.find("..") == std::string::npos &&
+                        sd.rfind("\\\\", 0) != 0 && sd.rfind("//", 0) != 0;
 #ifdef _WIN32
             for (size_t i = 0; safe && i < sd.size(); ++i) {
                 if (sd[i] == ':') {
@@ -1012,6 +1014,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             if (!vu.empty() || !au.empty()) {
                 if (is_explicit_youtube) {
                     json::Object jdesc;
+                    jdesc["radiumType"] = "YOUTUBE_STREAM";
                     jdesc["fluxType"] = "YOUTUBE_STREAM";
                     jdesc["videoUrl"] = vu;
                     jdesc["audioUrl"] = au;
@@ -1055,8 +1058,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
                                  low_url.find("youtube.com/shorts/") != std::string::npos ||
                                  low_url.find("googlevideo.com") != std::string::npos ||
                                  low_url.find("videoplayback") != std::string::npos ||
-                                 (!cached_body.empty() && cached_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos) ||
-                                 (!cached_body.empty() && cached_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos));
+                                 (!cached_body.empty() && (cached_body.find("\"radiumType\":\"YOUTUBE_STREAM\"") != std::string::npos || cached_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos || cached_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos)));
 
         bool is_direct_video = !is_youtube_watch &&
                                (stream_type == "HTTP_FILE" || source_type == "DIRECT_PROGRESSIVE" ||

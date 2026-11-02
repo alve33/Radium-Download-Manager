@@ -44,7 +44,7 @@ Radium employs a modern Windows 11 palette characterized by a **deep charcoal da
 | `surface_primary` | `#1E1E22` | `#FFFFFF` | Toolbar, sidebar, table header, details panel |
 | `surface_elevated` | `#28282E` | `#F1F5F9` | Button backgrounds, badges, cards |
 | `surface_hover` | `#2B2B32` | `#E2E8F0` | Hovered list rows and toolbar buttons |
-| `surface_selected` | `#302328` | `#DBEAFE` | Selected task row with restrained coral tint |
+| `surface_selected` | `#302328` | `#302328` | Selected task row and active navigation state |
 | `surface_pressed` | `#3A2B30` | — | Pressed controls |
 | `accent_primary` | `#FF4757` | `#FF4757` | Primary actions, active downloads, progress fills |
 | `accent_hover` | `#FF5F6A` | `#FF353E` | Hover state for coral actions |

@@ -12,6 +12,7 @@
 #include "common/json_mini.hpp"
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
+#include "common/semver.hpp"
 #include "common/version.hpp"
 #include "core/download_controller.hpp"
 #include "engine_stream/nm3u8dl_re_adapter.hpp"
@@ -25,6 +26,8 @@
 #include "engine_torrent/piece_manager.hpp"
 #include "engine_torrent/torrent_engine.hpp"
 #include "engine_torrent/torrent_parser.hpp"
+#include <array>
+#include <utility>
 #include "engine_torrent/dht_client.hpp"
 
 bool TestBitTorrentEngineTransferAndIntegrity();
@@ -90,6 +93,8 @@ bool TestPathSanitizerAndContentDisposition() {
     }
     auto res = PathSanitizer::ResolveSafeOutputPath(tmp_dir, "archive.zip", openidm::ConflictPolicy::kAutoRename);
     ASSERT_TRUE(res.ok() && res.value->filename() == "archive (1).zip", "Auto-Rename (1) conflict resolution");
+    auto prompt = PathSanitizer::ResolveSafeOutputPath(tmp_dir, "archive.zip", openidm::ConflictPolicy::kPrompt);
+    ASSERT_TRUE(!prompt.ok() && prompt.error->code == "ERR_FILE_EXISTS", "Prompt policy surfaces a destination conflict");
     std::filesystem::remove_all(tmp_dir);
     return true;
 }
@@ -367,14 +372,14 @@ bool TestDesktopUiDesignSystemAndHighDpiLayout() {
     using openidm::ui::DesignSystem;
     using openidm::ui::ThemeMode;
 
-    // Verify Cosmic Dark tokens and palette helpers
+    // Verify Radium Coral/Charcoal palette helpers
     auto dark = DesignSystem::ResolvePalette("classic_blue", false);
     auto light = DesignSystem::ResolvePalette("light", false);
     auto sys_light = DesignSystem::ResolvePalette("system", true);
-    ASSERT_TRUE(dark.mode == ThemeMode::kDark && dark.app_background.ToCssHex() == "#0F172A", "Radium Deep Slate #0F172A background");
-    ASSERT_TRUE(dark.cosmic_void.ToCssHex() == "#070B14", "Cosmic Void #070B14 token");
-    ASSERT_TRUE(dark.accent_primary.ToCssHex() == "#2563EB", "Radium Blue #2563EB accent");
-    ASSERT_TRUE(dark.accent_cyan.ToCssHex() == "#06B6D4", "Cosmic Cyan #06B6D4 accent");
+    ASSERT_TRUE(dark.mode == ThemeMode::kDark && dark.app_background.ToCssHex() == "#161618", "Radium charcoal #161618 background");
+    ASSERT_TRUE(dark.cosmic_void.ToCssHex() == "#121214", "Radium deep background #121214 token");
+    ASSERT_TRUE(dark.accent_primary.ToCssHex() == "#FF4757", "Radium Coral #FF4757 accent");
+    ASSERT_TRUE(dark.accent_hover.ToCssHex() == "#FF5F6A", "Radium Coral hover #FF5F6A");
     ASSERT_TRUE(light.mode == ThemeMode::kLight && light.surface_primary.ToCssHex() == "#FFFFFF", "Light theme white surface");
     ASSERT_TRUE(sys_light.mode == ThemeMode::kLight, "System theme honors OS light preference");
 
@@ -384,9 +389,9 @@ bool TestDesktopUiDesignSystemAndHighDpiLayout() {
     auto m150 = DesignSystem::ComputeMetrics(144);
     auto m200 = DesignSystem::ComputeMetrics(192);
     ASSERT_TRUE(m100.min_window_width == 900 && m100.min_window_height == 560, "100% DPI min window 900x560");
-    ASSERT_TRUE(m125.toolbar_height == 60, "125% DPI toolbar height scaled 48 -> 60");
-    ASSERT_TRUE(m150.sidebar_width == 324, "150% DPI sidebar width scaled 216 -> 324");
-    ASSERT_TRUE(m200.min_window_width == 1800 && m200.table_row_height == 88, "200% DPI 2x exact scaling");
+    ASSERT_TRUE(m125.toolbar_height == 70, "125% DPI toolbar height scaled 56 -> 70");
+    ASSERT_TRUE(m150.sidebar_width == 288, "150% DPI sidebar width scaled 192 -> 288");
+    ASSERT_TRUE(m200.min_window_width == 1800 && m200.table_row_height == 104, "200% DPI 2x exact scaling");
     ASSERT_TRUE(m100.font_caption_px >= 11 && m100.font_body_px >= 13, "Enforces >=11px caption and >=13px body floor");
 
     // Verify graceful filename truncation preserves extension
@@ -640,6 +645,7 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
     {
         openidm::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for Settings Center test");
+        ASSERT_TRUE(ctrl.GetSettings().last_download_dir.empty(), "Canceled dialogs leave remembered folder unchanged");
         openidm::ui::DesktopView view(ctrl);
         view.SetWindowDimensions(1280, 720, 96);
 
@@ -648,7 +654,20 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
         ASSERT_TRUE(view.IsSettingsCenterOpen(), "Settings Center is open");
 
         auto sv = view.BuildSettingsCenterView();
-        ASSERT_TRUE(sv.categories.size() == 9, "Settings Center exposes 9 logical categories");
+        ASSERT_TRUE(sv.categories.size() == 8, "Settings Center omits the removed File Types category");
+        for (const auto& category : sv.categories) ASSERT_TRUE(category.label != "File Types", "File Types category is absent");
+        view.SelectSettingsCategory(openidm::ui::SettingsCategory::kAboutAndDiagnostics);
+        view.SetSettingsSearchQuery("Check for Updates");
+        sv = view.BuildSettingsCenterView();
+        ASSERT_TRUE(sv.visible_items.size() == 1 && sv.visible_items[0].key == "check_for_updates" &&
+                    sv.visible_items[0].control_type == openidm::ui::SettingControlType::kActionButton,
+                    "About settings exposes a functional GitHub update check action");
+        view.SetSettingsSearchQuery("");
+        const auto stable_compare = openidm::CompareSemanticVersions("v1.0.1", "1.0.0");
+        const auto pre_compare = openidm::CompareSemanticVersions("2.0.0-rc.1", "2.0.0");
+        ASSERT_TRUE(stable_compare.has_value() && *stable_compare > 0 && pre_compare.has_value() && *pre_compare < 0,
+                    "Semantic release comparison handles tags and prereleases");
+        ASSERT_TRUE(!openidm::CompareSemanticVersions("1.0", "1.0.0").has_value(), "Malformed semantic versions are rejected");
         ASSERT_TRUE(!sv.has_unsaved_changes && sv.is_valid, "Clean initial state in Settings Center");
 
         // Test Settings Search across categories
@@ -673,13 +692,13 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
         ASSERT_TRUE(view.SetDraftSettingByKey("max_concurrent_tasks", "6").ok(), "Set max_concurrent_tasks = 6");
         ASSERT_TRUE(view.SetDraftSettingByKey("default_connections_per_task", "16").ok(), "Set default_connections_per_task = 16");
         ASSERT_TRUE(view.SetDraftSettingByKey("speed_limit_bps", "10485760").ok(), "Set speed_limit_bps = 10 MiB/s");
-        ASSERT_TRUE(view.SetDraftSettingByKey("category_subfolders_enabled", "false").ok(), "Disable category subfolders");
         ASSERT_TRUE(view.SetDraftSettingByKey("conflict_policy", "overwrite").ok(), "Set conflict_policy = overwrite");
         ASSERT_TRUE(view.SetDraftSettingByKey("reduced_motion", "true").ok(), "Enable reduced_motion");
         ASSERT_TRUE(view.HasUnsavedSettingsChanges(), "Detects unsaved draft changes");
 
         ASSERT_TRUE(view.ApplySettingsChanges().ok(), "ApplySettingsChanges persists valid draft");
         ASSERT_TRUE(!view.HasUnsavedSettingsChanges(), "No unsaved changes after Apply");
+        ASSERT_TRUE(ctrl.RememberDownloadDirectory(cfg.default_download_dir.string()).ok(), "Persist selected download directory");
         ASSERT_TRUE(view.GetAnimationState().reduced_motion, "Reduced motion setting immediately reflected in animation state");
 
         ctrl.Shutdown();
@@ -693,7 +712,8 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
         ASSERT_TRUE(s.max_concurrent_tasks == 6, "Persisted max_concurrent_tasks == 6");
         ASSERT_TRUE(s.default_connections_per_task == 16, "Persisted default_connections_per_task == 16");
         ASSERT_TRUE(s.speed_limit_bps == 10485760ULL, "Persisted speed_limit_bps == 10 MiB/s");
-        ASSERT_TRUE(!s.category_subfolders_enabled, "Persisted category_subfolders_enabled == false");
+        ASSERT_TRUE(s.last_download_dir == std::filesystem::weakly_canonical(cfg.default_download_dir).string(),
+                    "Last selected download directory survives controller restart");
         ASSERT_TRUE(s.conflict_policy == openidm::ConflictPolicy::kOverwrite, "Persisted conflict_policy == kOverwrite");
         ASSERT_TRUE(s.reduced_motion, "Persisted reduced_motion == true");
         ctrl2.Shutdown();
@@ -738,6 +758,15 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
                 "Minimum-width layout compresses columns without drawing beyond the client area");
     view.SetWindowDimensions(1280, 720, 96);
     ASSERT_TRUE(!view.IsCompactColumnsMode() && view.GetVisibleColumns().size() == 8, "Full mode (>=1024px) shows 8 columns");
+    for (const auto& [width, height] : std::array<std::pair<int, int>, 4>{{{1024, 576}, {1280, 720}, {1366, 768}, {1920, 1080}}}) {
+        view.SetWindowDimensions(width, height, 96);
+        auto responsive = view.ComputeLayoutGeometry();
+        ASSERT_TRUE(responsive.sidebar_rect.width() == 192 && responsive.table_header_rect.left == 192,
+                    "Responsive layout keeps the sidebar fixed at the requested widths");
+        ASSERT_TRUE(responsive.table_columns[5].rect.right <= width - 12 && responsive.sidebar_settings_rect.bottom <= height,
+                    "Responsive layout keeps the table and bottom settings inside the client area");
+    }
+    view.SetWindowDimensions(1280, 720, 96);
 
     // 2. Empty state on first launch
     ASSERT_TRUE(view.GetEmptyStateMessage().find("Add URL") != std::string::npos, "First launch empty state guides user");
@@ -898,23 +927,46 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
 
     auto geom = view.ComputeLayoutGeometry(0);
     ASSERT_TRUE(geom.toolbar_buttons.size() == 10, "All 10 toolbar buttons laid out");
-    ASSERT_TRUE(geom.sidebar_items.size() == 7, "All 7 sidebar categories laid out");
+    ASSERT_TRUE(geom.sidebar_items.size() == 4, "All four primary navigation categories laid out");
+    ASSERT_TRUE(geom.sidebar_rect.width() == 192 && geom.table_header_rect.left == geom.sidebar_rect.right,
+                "Fixed 192px sidebar precedes the main content region");
+    ASSERT_TRUE(geom.sidebar_settings_rect.bottom == 708 && geom.sidebar_settings_rect.top > geom.sidebar_items.back().rect.bottom,
+                "Settings is anchored below sidebar navigation at the window bottom");
     ASSERT_TRUE(geom.table_columns.size() == 8, "All 8 table columns laid out at 1280px width");
     ASSERT_TRUE(geom.task_rows.size() == 2, "Both task rows laid out");
 
-    // 1. Click Sidebar 'Video Downloads' category (index 5) via pixel coordinates
-    const auto& video_cat_rc = geom.sidebar_items[5].rect;
-    int click_x = (video_cat_rc.left + video_cat_rc.right) / 2;
-    int click_y = (video_cat_rc.top + video_cat_rc.bottom) / 2;
-    ASSERT_TRUE(view.HandleMouseClick(click_x, click_y, false), "Click Video Downloads category");
+    view.SelectCategory(openidm::ui::SidebarCategory::kPaused);
+    ASSERT_TRUE(view.BuildVisibleTaskRows().size() == 2, "Paused navigation filters the actual paused task objects");
+    view.SelectCategory(openidm::ui::SidebarCategory::kInProgress);
+    ASSERT_TRUE(view.BuildVisibleTaskRows().empty(), "Active navigation excludes paused tasks");
+    view.SelectCategory(openidm::ui::SidebarCategory::kCompleted);
+    ASSERT_TRUE(view.BuildVisibleTaskRows().empty(), "Completed navigation excludes paused tasks");
+    view.SelectCategory(openidm::ui::SidebarCategory::kAllDownloads);
+
+    // 1. Legacy categories remain filterable through the view model.
+    view.SelectCategory(openidm::ui::SidebarCategory::kVideoDownloads);
     ASSERT_TRUE(view.GetSelectedCategory() == openidm::ui::SidebarCategory::kVideoDownloads, "Category switched to Video Downloads");
     ASSERT_TRUE(view.BuildVisibleTaskRows().size() == 1, "Filtered to 1 video task");
 
     // 2. Click Sidebar 'All Downloads' category (index 0)
     const auto& all_cat_rc = geom.sidebar_items[0].rect;
+    ASSERT_TRUE(view.HitTestPoint((all_cat_rc.left + all_cat_rc.right) / 2,
+                                  (all_cat_rc.top + all_cat_rc.bottom) / 2, 0).type ==
+                    openidm::ui::HitTargetType::kSidebarCategory,
+                "All Downloads is hit-tested as sidebar navigation, not the toolbar filter dropdown");
     ASSERT_TRUE(view.HandleMouseClick((all_cat_rc.left + all_cat_rc.right) / 2, (all_cat_rc.top + all_cat_rc.bottom) / 2, false),
                 "Click All Downloads category");
     ASSERT_TRUE(view.BuildVisibleTaskRows().size() == 2, "Restored all 2 tasks");
+
+    // Settings remains a functional bottom-anchored sidebar target.
+    ASSERT_TRUE(view.HitTestPoint((geom.sidebar_settings_rect.left + geom.sidebar_settings_rect.right) / 2,
+                                  (geom.sidebar_settings_rect.top + geom.sidebar_settings_rect.bottom) / 2).type ==
+                    openidm::ui::HitTargetType::kSidebarSettingsButton,
+                "Bottom sidebar Settings hit target is reachable");
+    ASSERT_TRUE(view.HandleMouseClick((geom.sidebar_settings_rect.left + geom.sidebar_settings_rect.right) / 2,
+                                      (geom.sidebar_settings_rect.top + geom.sidebar_settings_rect.bottom) / 2, false) &&
+                    view.IsSettingsCenterOpen(), "Sidebar Settings opens the existing Settings Center");
+    view.CloseSettingsCenter(true);
 
     // 3. Hover over truncated filename in Row 0 and verify full-filename tooltip is populated
     geom = view.ComputeLayoutGeometry(0);
@@ -942,6 +994,37 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
     ASSERT_TRUE(view.GetSortColumn() == openidm::ui::SortColumn::kFileName && view.IsSortAscending(), "Sorted by Filename ascending via sort control");
     view.ToggleSortColumn(openidm::ui::SortColumn::kFileName);
     ASSERT_TRUE(!view.IsSortAscending(), "Toggled Filename sort to descending via sort control");
+
+    // Near a row boundary, reclaim the otherwise unusable strip and keep
+    // completed-history actions wide enough to show their full labels.
+    for (int i = 0; i < 6; ++i) {
+        openidm::TaskModel extra;
+        extra.url = "https://example.com/extra_" + std::to_string(i) + ".bin";
+        extra.file_name = "extra_" + std::to_string(i) + ".bin";
+        extra.created_at_ms = 3000 + i;
+        ASSERT_TRUE(ctrl.AddTask(std::move(extra), false, true).ok(), "Add extra task for dense table geometry");
+    }
+    openidm::TaskModel completed;
+    completed.url = "https://example.com/completed.bin";
+    completed.file_name = "completed.bin";
+    completed.save_dir = (work_dir / "downloads").string();
+    completed.state = openidm::TaskState::kCompleted;
+    completed.total_bytes = 10;
+    completed.downloaded_bytes = 10;
+    completed.created_at_ms = 10000;
+    auto completed_result = ctrl.AddTask(std::move(completed), false, true);
+    ASSERT_TRUE(completed_result.ok(), "Add completed task for history action layout");
+    view.SetWindowDimensions(1280, 539, 96);
+    ASSERT_TRUE(view.ScrollTaskIntoView(completed_result.value->task_id, true), "Select completed task for details actions");
+    auto compact_geom = view.ComputeLayoutGeometry(view.GetScrollOffset());
+    ASSERT_TRUE(compact_geom.task_row_height == 51 && compact_geom.task_rows.size() == 6,
+                "Slightly reduce row height to show the next file instead of leaving a near-row-sized blank strip");
+    auto remove_action = std::find_if(compact_geom.details_action_buttons.begin(), compact_geom.details_action_buttons.end(),
+        [](const openidm::ui::DetailsActionButtonLayout& action) {
+            return action.action_id == openidm::ui::DetailsActionId::kRemoveHistory;
+        });
+    ASSERT_TRUE(remove_action != compact_geom.details_action_buttons.end() && remove_action->rect.width() == 152,
+                "Remove from History button gets enough width to show its complete label");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(work_dir);
@@ -1004,7 +1087,12 @@ bool TestRadiumBrandingAndLegacyDataMigration() {
     ASSERT_TRUE(app_data.string().find("Radium") != std::string::npos, "AppData dir contains Radium");
 
     std::filesystem::path downloads = PathSanitizer::GetDefaultDownloadsDir(PathSanitizer::GetExecutableDir());
-    ASSERT_TRUE(downloads.string().find("Radium") != std::string::npos, "Downloads dir contains Radium");
+#ifdef _WIN32
+    ASSERT_TRUE(downloads.filename() == L"Downloads", "Windows default is the actual Downloads known folder");
+    ASSERT_TRUE(downloads.string().find("Flux") == std::string::npos, "Windows default contains no legacy Flux folder");
+#else
+    ASSERT_TRUE(downloads.filename() == "Radium_Downloads", "Non-Windows fallback uses Radium_Downloads");
+#endif
 
     openidm::ui::AboutDialogView about;
     ASSERT_TRUE(about.app_name == "Radium Download Manager", "About dialog app name is Radium Download Manager");
@@ -1188,6 +1276,8 @@ bool TestResourceAwareResumeAndValidatorMismatch() {
     t_cancel.file_name = "cancel_me.bin";
     t_cancel.save_dir = (work_dir / "downloads").string();
     t_cancel.state = openidm::TaskState::kPaused;
+    t_cancel.error_code = "ERR_FILE_EXISTS";
+    t_cancel.error_message = "Destination file already exists";
     std::filesystem::path c_part = (work_dir / "downloads") / ("cancel_me.bin." + t_cancel.task_id + ".part");
     {
         std::ofstream ofs(c_part, std::ios::binary);
@@ -1205,6 +1295,8 @@ bool TestResourceAwareResumeAndValidatorMismatch() {
     ASSERT_TRUE(c_retrieved->segments.empty(), "Segments cleared on cancel");
     ASSERT_TRUE(c_retrieved->downloaded_bytes == 0, "Downloaded bytes reset to 0 on cancel");
     ASSERT_TRUE(c_retrieved->auth_headers.empty(), "Auth headers scrubbed on cancel");
+    ASSERT_TRUE(c_retrieved->error_code.empty(), "User-canceled task clears the previous conflict error code");
+    ASSERT_TRUE(c_retrieved->error_message.empty(), "User-canceled task clears the previous conflict error message");
     ASSERT_TRUE(!std::filesystem::exists(c_part), "Part file deleted on cancel");
 
     ctrl.Shutdown();
@@ -1287,7 +1379,7 @@ bool TestIpcSecurityDaclAndPathTraversal() {
     ASSERT_TRUE(!sock.empty(), "Default socket path is non-empty");
 
 #ifdef _WIN32
-    ASSERT_TRUE(sock.find("\\\\.\\pipe\\Flux_IPC_") == 0, "Named pipe is in Flux_IPC_ namespace");
+    ASSERT_TRUE(sock.find("\\\\.\\pipe\\Radium_IPC_") == 0 || sock.find("\\\\.\\pipe\\Flux_IPC_") == 0, "Named pipe is in Radium_IPC_ namespace");
 #else
     ASSERT_TRUE(sock.find("/tmp/flux_ipc_") == 0, "Unix socket is in /tmp/flux_ipc_ namespace");
 #endif
@@ -1574,6 +1666,17 @@ bool TestConflictPolicies() {
     }
     auto res_fail = openidm::PathSanitizer::CommitPartFile(part_fail, work_dir, fname, openidm::ConflictPolicy::kFailIfExists);
     ASSERT_TRUE(!res_fail.ok() && res_fail.error->code == "ERR_FILE_EXISTS", "kFailIfExists rejects existing destination");
+
+    std::filesystem::path part_prompt = work_dir / "prompt.part";
+    { std::ofstream ofs(part_prompt); ofs << "Incoming content"; }
+    auto res_prompt = openidm::PathSanitizer::CommitPartFile(part_prompt, work_dir, fname, openidm::ConflictPolicy::kPrompt);
+    ASSERT_TRUE(!res_prompt.ok() && res_prompt.error->code == "ERR_FILE_EXISTS", "kPrompt rejects replacement until user chooses");
+    ASSERT_TRUE(std::filesystem::exists(part_prompt), "kPrompt keeps the incoming part available for retry");
+    {
+        std::ifstream ifs(existing);
+        std::string s; std::getline(ifs, s);
+        ASSERT_TRUE(s == "Original content", "kPrompt leaves the existing destination untouched");
+    }
 
     // 2. Overwrite
     std::filesystem::path part_ovw = work_dir / "ovw.part";
@@ -2308,10 +2411,8 @@ bool TestDynamicCategorizationAndSiteRulesPriority() {
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
 
     auto settings = ctrl.GetSettings();
-    settings.category_subfolders_enabled = true;
     settings.custom_extension_categories["custompkg"] = "Programs";
     settings.custom_extension_categories["myvideo"] = "Video";
-    settings.category_folders["Audio"] = (work_dir / "CustomAudio").string();
     settings.site_rules["special-music.org"] = "Audio";
     settings.site_rules["direct-dump.net"] = (work_dir / "DumpFolder").string();
     ASSERT_TRUE(ctrl.UpdateSettings(settings).ok(), "Updated settings");
@@ -2327,21 +2428,29 @@ bool TestDynamicCategorizationAndSiteRulesPriority() {
     ASSERT_TRUE(ctrl.DetermineCategory("track.unknown", "https://special-music.org/track.unknown") == "Audio", "special-music.org -> Audio");
 
     // 4. Resolve category save dir priority
-    // 4a. Site rule directory override
+    // 4a. Legacy site directory rule cannot override the selected root.
     auto dump_dir = ctrl.ResolveCategorySaveDir("General", "https://direct-dump.net/file.bin");
-    ASSERT_TRUE(dump_dir == (work_dir / "DumpFolder"), "Site rule directory override matches DumpFolder");
+    ASSERT_TRUE(dump_dir == cfg.default_download_dir, "Legacy site directory rule does not redirect selected destination");
 
     // 4b. Category custom folder
     auto audio_dir = ctrl.ResolveCategorySaveDir("Audio", "https://example.com/song.mp3");
-    ASSERT_TRUE(audio_dir == (work_dir / "CustomAudio"), "Custom Category Folder matches CustomAudio");
+    ASSERT_TRUE(audio_dir == cfg.default_download_dir, "Category folder is not appended to chosen directory");
 
     // 4c. Category subfolder
     auto video_dir = ctrl.ResolveCategorySaveDir("Video", "https://example.com/clip.mp4");
-    ASSERT_TRUE(video_dir == (cfg.default_download_dir / "Video"), "Video subfolder under default dir");
+    ASSERT_TRUE(video_dir == cfg.default_download_dir, "No automatic Video subfolder is appended");
 
     // 4d. Default dir
     auto gen_dir = ctrl.ResolveCategorySaveDir("General", "https://example.com/data.bin");
     ASSERT_TRUE(gen_dir == cfg.default_download_dir, "General category maps to default dir");
+
+    openidm::TaskModel explicit_destination;
+    explicit_destination.url = "https://example.com/explicit.bin";
+    explicit_destination.file_name = "explicit.bin";
+    explicit_destination.save_dir = (work_dir / "SelectedFolder").string();
+    auto explicit_task = ctrl.AddTask(std::move(explicit_destination), false, false);
+    ASSERT_TRUE(explicit_task.ok() && explicit_task.value->save_dir == (work_dir / "SelectedFolder").string(),
+                "Explicitly selected directory is preserved by task creation");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(work_dir, ec);
@@ -3098,9 +3207,7 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
                 pal_dark.accent_primary.b == 0x57, "legacy dark resolves to coral red #FF4757");
 
     auto pal_classic = openidm::ui::DesignSystem::ResolvePalette("classic_blue");
-    ASSERT_TRUE(pal_classic.accent_primary.r == 0x25 &&
-                pal_classic.accent_primary.g == 0x63 &&
-                pal_classic.accent_primary.b == 0xEB, "classic_blue resolves to legacy blue #2563EB");
+    ASSERT_TRUE(pal_classic.accent_primary.ToCssHex() == "#FF4757", "legacy theme alias retains Radium Coral #FF4757");
 
     // 3. Modern Windows 11 Typography ramp floors
     auto metrics_96 = openidm::ui::DesignSystem::ComputeMetrics(96);
@@ -4441,7 +4548,7 @@ bool TestQualitySelectionSizeAndColumnDocking() {
         ASSERT_TRUE(controller.Initialize().ok(), "Initialize controller");
         openidm::ui::DesktopView view(controller);
 
-        const int test_widths[] = {800, 1024, 1280, 1600, 1920};
+        const int test_widths[] = {800, 900, 931, 1024, 1280, 1600, 1920};
         for (int w : test_widths) {
             view.SetWindowDimensions(w, 720);
             auto geom = view.ComputeLayoutGeometry(0);
@@ -4464,6 +4571,21 @@ bool TestQualitySelectionSizeAndColumnDocking() {
             for (size_t c = 1; c <= 5; ++c) {
                 ASSERT_TRUE(geom.table_columns[c].rect.left == geom.table_columns[c - 1].rect.right,
                     "Table columns are strictly contiguous without gaps or overlaps");
+            }
+
+            if (w == 900) {
+                ASSERT_TRUE(geom.table_columns[5].rect.width() > 0,
+                    "Added date remains visible at the minimum supported window width");
+                ASSERT_TRUE(geom.table_columns[4].rect.width() == 0,
+                    "Upload speed yields its space to keep Added visible at compact widths");
+            }
+            if (w == 931) {
+                ASSERT_TRUE(geom.table_columns[5].rect.width() > 0,
+                    "Added date remains visible in the user's compact-width layout");
+            }
+            if (w == 1024) {
+                ASSERT_TRUE(geom.table_columns[5].rect.width() > 0,
+                    "Added date remains visible at the supported 1024px layout width");
             }
         }
 
@@ -6444,6 +6566,8 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
 
         DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
+        std::vector<DownloadController::TaskNotification> notices;
+        ctrl.SetTaskNotificationCallback([&](const DownloadController::TaskNotification& notice) { notices.push_back(notice); });
 
         auto create_test_file = [&](const std::string& name) -> std::filesystem::path {
             auto p = work_dir / name;
@@ -6464,6 +6588,14 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
             ASSERT_TRUE(res.ok(), "Ingest clean task");
             ASSERT_TRUE(res.value->state == TaskState::kCompleted, "Clean file is Completed");
             ASSERT_TRUE(res.value->status_detail == "Completed (Antivirus Clean)", "Clean detail");
+            ASSERT_TRUE(notices.size() == 1 && notices.back().success && notices.back().file_name == "clean.txt",
+                        "Successful browser-ingested file sends one filename notification");
+            TaskModel duplicate_notice;
+            duplicate_notice.task_id = res.value->task_id;
+            duplicate_notice.file_name = "clean-copy.txt";
+            auto second_staged = create_test_file("clean-copy.tmp");
+            ASSERT_TRUE(ctrl.IngestCompletedTask(duplicate_notice, second_staged).ok(), "Reingest same task identity");
+            ASSERT_TRUE(notices.size() == 1, "Repeated terminal updates for one task do not duplicate notifications");
         }
 
         // 2. Threat detected: both strict and non-strict must FAIL task and delete file!
@@ -6477,6 +6609,8 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
             ASSERT_TRUE(res.ok(), "Ingest processed");
             ASSERT_TRUE(res.value->state == TaskState::kFailed, "Threat file marked Failed");
             ASSERT_TRUE(res.value->error_code == "ERR_THREAT_DETECTED", "Threat error code");
+            ASSERT_TRUE(notices.size() == 2 && !notices.back().success && notices.back().file_name == "infected.txt",
+                        "Failed browser-ingested file sends an error notification");
             std::filesystem::path dest = cfg.default_download_dir / "infected.txt";
             ASSERT_TRUE(!std::filesystem::exists(dest, ec), "Infected file deleted from disk");
         }
@@ -6539,6 +6673,20 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
             auto staged2 = create_test_file("scanner_unavail2.tmp");
             auto res2 = ctrl.IngestCompletedTask(t2, staged2);
             ASSERT_TRUE(res2.ok() && res2.value->state == TaskState::kCompleted, "Non-strict allows unavailable scanner as Completed");
+        }
+
+        // Notifications setting gates the callback for browser-originated completed files.
+        {
+            auto s = ctrl.GetSettings();
+            s.show_completion_notification = false;
+            ASSERT_TRUE(ctrl.UpdateSettings(s).ok(), "Disable desktop notifications");
+            const size_t notice_count = notices.size();
+            TaskModel t;
+            t.file_name = "muted.txt";
+            auto staged = create_test_file("muted.tmp");
+            auto res = ctrl.IngestCompletedTask(t, staged);
+            ASSERT_TRUE(res.ok(), "Ingest notification-muted task");
+            ASSERT_TRUE(notices.size() == notice_count, "Disabled notifications do not invoke callback");
         }
 
         ctrl.Shutdown();

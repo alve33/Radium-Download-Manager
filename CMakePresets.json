@@ -12,7 +12,7 @@
       "description": "Target Windows 64-bit with MSVC in Release configuration",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/win-x64",
+      "binaryDir": "${sourceDir}/build/radium-x64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_TESTING": "ON"

@@ -54,16 +54,16 @@ inline std::string GetDefaultIpcSocketPath() {
 #ifdef _WIN32
     std::string user_sid = GetCurrentUserSidString();
     if (!user_sid.empty()) {
-        return "\\\\.\\pipe\\Flux_IPC_" + user_sid;
+        return "\\\\.\\pipe\\Radium_IPC_" + user_sid;
     }
     char uname[256] = {0};
     DWORD ulen = sizeof(uname);
     if (GetUserNameA(uname, &ulen) && uname[0] != '\0') {
-        return "\\\\.\\pipe\\Flux_IPC_" + std::string(uname);
+        return "\\\\.\\pipe\\Radium_IPC_" + std::string(uname);
     }
-    return "\\\\.\\pipe\\Flux_IPC_Default";
+    return "\\\\.\\pipe\\Radium_IPC_Default";
 #else
-    return "/tmp/flux_ipc_" + std::to_string(geteuid()) + ".sock";
+    return "/tmp/radium_ipc_" + std::to_string(geteuid()) + ".sock";
 #endif
 }
 

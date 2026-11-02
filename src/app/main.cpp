@@ -91,7 +91,7 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--version" || arg == "-v") {
-            WriteConsoleOutput(FLUX_FULL_VERSION_STRING, false);
+            WriteConsoleOutput(RADIUM_FULL_VERSION_STRING, false);
             return 0;
         } else if (arg == "--db" && i + 1 < argc) {
             cfg.state_db_path = argv[++i];

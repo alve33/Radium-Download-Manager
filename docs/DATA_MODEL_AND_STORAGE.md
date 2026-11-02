@@ -26,6 +26,12 @@ Task removal is serialized against worker completion. A worker is asked to stop 
 
 ## 2. SQLite 3 Schema Definition (`SCHEMA_VERSION = 1`)
 
+### Persisted output conflict preference
+
+The `app_settings` JSON stores `conflictPolicy` as `prompt`, `auto_rename`, `overwrite`, or `fail_if_exists`, plus `conflictPolicyVersion: 1`. New profiles default to `prompt`. On first load, legacy `auto_rename` defaults without a policy version migrate to `prompt`; explicit legacy `overwrite` and `fail_if_exists` preferences are preserved. A per-dialog remembered choice updates this setting for future tasks. The per-task `conflict_policy` is retained in task state so retries use the selected resolution.
+
+The same JSON object stores `defaultDownloadDir`, `defaultDownloadDirUserSelected`, and `lastDownloadDir`. The default uses the Windows Downloads known folder (or an explicit `RADIUM_DOWNLOAD_DIR` override). The legacy `FLUX_DOWNLOAD_DIR` and `OPENIDM_DOWNLOAD_DIR` download overrides are no longer read. Exact legacy automatic `Downloads\\Radium` defaults migrate to the current known folder only when the selected-directory marker is false. A confirmed Add Download submission writes the chosen directory to `lastDownloadDir`; dialog cancellation performs no write. Category routing fields are no longer read or written, and category classification does not change the output directory.
+
 ```sql
 -- Executed on connection open:
 PRAGMA journal_mode = WAL;

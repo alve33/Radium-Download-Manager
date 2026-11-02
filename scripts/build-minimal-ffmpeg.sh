@@ -6,7 +6,7 @@
 # from pinned sources and configurations on Linux / POSIX cross-compilation environments.
 #
 # Pinned Source: FFmpeg 7.1 (Tag: n7.1, Commit: 04706f3, Tarball: ffmpeg-7.1.tar.xz)
-# Pinned Source SHA-256: 40973d44d00a8999824ff4ec27549efdbdc7667a488e14603954625b5a79667
+# Pinned Source SHA-256: 40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6
 # Pinned Toolchain: LLVM-MinGW or MinGW-w64 (x86_64-w64-mingw32)
 
 set -euo pipefail
@@ -21,7 +21,7 @@ JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 FFMPEG_VERSION="7.1"
 FFMPEG_TARBALL="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 FFMPEG_URL="https://ffmpeg.org/releases/${FFMPEG_TARBALL}"
-FFMPEG_EXPECTED_SHA256="40973d44d00a8999824ff4ec27549efdbdc7667a488e14603954625b5a79667"
+FFMPEG_EXPECTED_SHA256="40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6"
 
 echo "================================================================="
 echo "   Flux Download Manager -- Minimal FFmpeg Cross-Compilation    "

@@ -26,7 +26,8 @@ enum class SidebarCategory {
     kCompleted,
     kFailed,
     kVideoDownloads,
-    kScheduled
+    kScheduled,
+    kPaused
 };
 
 enum class SortColumn {
@@ -61,7 +62,6 @@ enum class SettingsCategory {
     kSaveLocations,
     kConnectionsAndSpeed,
     kBrowserIntegration,
-    kFileTypes,
     kNotifications,
     kAboutAndDiagnostics,
     kKeyboardShortcuts
@@ -72,6 +72,7 @@ enum class SettingControlType {
     kNumericStepper,
     kDropdown,
     kFolderSelector,
+    kActionButton,
     kDiagnosticReadOnly
 };
 
@@ -97,7 +98,9 @@ enum class HitTargetType {
     kSearchSlidersButton,
     kStatusToggleOff,
     kRowCheckbox,
-    kRowInlineAction
+    kRowInlineAction,
+    kDetailsActionButton,
+    kSidebarSettingsButton
 };
 
 struct HitTestResult {
@@ -139,6 +142,22 @@ struct TaskRowLayout {
     RectI action_icon_rect;
 };
 
+enum class DetailsActionId {
+    kOpenFolder = 0,
+    kResume,
+    kPause,
+    kCancel,
+    kOpenFile,
+    kRemoveHistory
+};
+
+struct DetailsActionButtonLayout {
+    DetailsActionId action_id;
+    std::string label;
+    bool is_primary{false};
+    RectI rect;
+};
+
 struct WindowLayoutGeometry {
     RectI toolbar_rect;
     RectI search_box_rect;
@@ -158,6 +177,9 @@ struct WindowLayoutGeometry {
     std::vector<SidebarCategoryLayout> sidebar_items;
     std::vector<TableColumnLayout> table_columns;
     std::vector<TaskRowLayout> task_rows;
+    int task_row_height{0};
+    RectI sidebar_settings_rect;
+    std::vector<DetailsActionButtonLayout> details_action_buttons;
 };
 
 struct ToolbarState {
@@ -185,6 +207,7 @@ struct CategoryCounts {
     size_t failed{0};
     size_t video_downloads{0};
     size_t scheduled{0};
+    size_t paused{0};
 };
 
 struct FormattedTaskRow {
@@ -302,12 +325,6 @@ struct AboutDialogView {
     std::vector<std::string> upstream_attributions;
 };
 
-struct FileCategoryRuleView {
-    std::string category_name;
-    std::string extensions_display;
-    std::string target_subfolder;
-};
-
 struct SettingItemView {
     std::string key;
     SettingsCategory category{SettingsCategory::kGeneral};
@@ -344,7 +361,6 @@ struct SettingsCenterViewModel {
     std::string status_banner;
     std::vector<SettingsCategoryTabView> categories;
     std::vector<SettingItemView> visible_items;
-    std::vector<FileCategoryRuleView> file_category_rules;
     BrowserIntegrationStatusView browser_status;
     AboutDialogView about_info;
     RectI modal_rect;
@@ -388,6 +404,7 @@ public:
     int GetHoveredToolbarIndex() const { return m_hovered_toolbar_index; }
     int GetHoveredSidebarIndex() const { return m_hovered_sidebar_index; }
     int GetHoveredRowIndex() const { return m_hovered_row_index; }
+    int GetHoveredDetailsBtnIndex() const { return m_hovered_details_btn_index; }
 
     void SetTheme(std::string_view theme_name, bool os_prefers_light = false);
     std::string GetThemeName() const { return m_theme_name; }
@@ -582,6 +599,7 @@ private:
 
     int m_hovered_toolbar_index{-1};
     int m_hovered_sidebar_index{-1};
+    int m_hovered_details_btn_index{-1};
     int m_hovered_row_index{-1};
     std::string m_active_tooltip;
     bool m_select_all_checked{false};

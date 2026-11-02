@@ -108,13 +108,18 @@ std::string ExtractBalancedJsonObject(const std::string& s, size_t start_pos) {
 
 std::string EscapeRspArg(std::string_view s) {
     std::string out;
-    out.reserve(s.size());
+    out.reserve(s.size() * 2);
     for (char c : s) {
         if (c == '\r' || c == '\n' || c == '\0') continue;
-        if (c == '"') out += "\\\"";
+        if (c == '\\') out += "\\\\";
+        else if (c == '\"') out += "\\\"";
         else out.push_back(c);
     }
     return out;
+}
+
+std::string QuoteRspToken(std::string_view s) {
+    return "\"" + EscapeRspArg(s) + "\"";
 }
 
 std::string EscapeMuxPath(const std::filesystem::path& p) {
@@ -819,13 +824,40 @@ Result<void> Nm3u8dlReAdapter::ValidateManifestSafety(std::string_view url, std:
             line.find("\\\\") != std::string::npos) {
             return Result<void>::Err("ERR_SEC_HOSTILE_MANIFEST", "Manifest contains forbidden local file/UNC URI");
         }
-        if (!m_cfg.allow_loopback_manifests &&
-            (line.find("http://127.0.0.1") != std::string::npos ||
-             line.find("http://localhost") != std::string::npos ||
-             line.find("http://169.254.") != std::string::npos ||
-             line.find("http://10.") != std::string::npos ||
-             line.find("http://192.168.") != std::string::npos)) {
-            return Result<void>::Err("ERR_SEC_HOSTILE_MANIFEST", "Manifest contains loopback/link-local SSRF segment URI");
+        if (!m_cfg.allow_loopback_manifests) {
+            bool is_private_or_loopback = false;
+            // Check both http and https for loopback, RFC 1918, link-local, and IPv6
+            const char* bad_prefixes[] = {
+                "http://127.", "https://127.",
+                "http://localhost", "https://localhost",
+                "http://169.254.", "https://169.254.",
+                "http://10.", "https://10.",
+                "http://192.168.", "https://192.168.",
+                "http://[::1]", "https://[::1]",
+                "http://[fe80:", "https://[fe80:"
+            };
+            for (const char* bp : bad_prefixes) {
+                if (line.find(bp) != std::string::npos) {
+                    is_private_or_loopback = true;
+                    break;
+                }
+            }
+            if (!is_private_or_loopback && (line.find("http://172.") != std::string::npos || line.find("https://172.") != std::string::npos)) {
+                auto pos = line.find("://172.");
+                if (pos != std::string::npos) {
+                    size_t oct_start = pos + 7;
+                    size_t oct_end = line.find('.', oct_start);
+                    if (oct_end != std::string::npos) {
+                        try {
+                            int oct = std::stoi(line.substr(oct_start, oct_end - oct_start));
+                            if (oct >= 16 && oct <= 31) is_private_or_loopback = true;
+                        } catch (...) {}
+                    }
+                }
+            }
+            if (is_private_or_loopback) {
+                return Result<void>::Err("ERR_SEC_HOSTILE_MANIFEST", "Manifest contains loopback/link-local SSRF segment URI");
+            }
         }
     }
     return Result<void>::Ok();
@@ -1238,6 +1270,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
                   task.url.find("youtube.com/watch") != std::string::npos ||
                   task.url.find("youtu.be/") != std::string::npos ||
                   task.url.find("youtube.com/shorts/") != std::string::npos ||
+                  task.stream_options.cached_manifest_body.find("\"radiumType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
                   task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
                   task.stream_options.cached_manifest_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos);
     if (is_yt) {
@@ -1380,16 +1413,16 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
 
     if (is_audio_only) {
         rsp_lines.push_back("--drop-video");
-        rsp_lines.push_back("-sa " + EscapeRspArg(task.stream_options.audio_filter.empty() || task.stream_options.audio_filter == "all" ? "best" : task.stream_options.audio_filter));
+        rsp_lines.push_back("-sa " + QuoteRspToken(task.stream_options.audio_filter.empty() || task.stream_options.audio_filter == "all" ? "best" : task.stream_options.audio_filter));
     } else if (is_video_only) {
         rsp_lines.push_back("--drop-audio");
-        rsp_lines.push_back("-sv " + EscapeRspArg(task.stream_options.video_filter.empty() ? "best" : task.stream_options.video_filter));
+        rsp_lines.push_back("-sv " + QuoteRspToken(task.stream_options.video_filter.empty() ? "best" : task.stream_options.video_filter));
     } else {
         rsp_lines.push_back("--auto-select");
-        rsp_lines.push_back("-sv " + EscapeRspArg(task.stream_options.video_filter.empty() ? "best" : task.stream_options.video_filter));
-        rsp_lines.push_back("-sa " + EscapeRspArg(task.stream_options.audio_filter.empty() ? "best" : task.stream_options.audio_filter));
+        rsp_lines.push_back("-sv " + QuoteRspToken(task.stream_options.video_filter.empty() ? "best" : task.stream_options.video_filter));
+        rsp_lines.push_back("-sa " + QuoteRspToken(task.stream_options.audio_filter.empty() ? "best" : task.stream_options.audio_filter));
     }
-    rsp_lines.push_back("-ss " + EscapeRspArg(task.stream_options.subtitle_filter.empty() ? "all" : task.stream_options.subtitle_filter));
+    rsp_lines.push_back("-ss " + QuoteRspToken(task.stream_options.subtitle_filter.empty() ? "all" : task.stream_options.subtitle_filter));
     rsp_lines.push_back("-M format=" + fmt + ":muxer=ffmpeg:bin_path=\"" + EscapeMuxPath(m_cfg.ffmpeg_binary_path) + "\":keep=false");
 
     if (!task.stream_options.custom_hls_key_hex.empty()) {
