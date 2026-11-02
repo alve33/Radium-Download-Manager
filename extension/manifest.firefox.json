@@ -5,7 +5,7 @@
   "description": "Automatic download capture and multi-layered video/stream detection (HLS/DASH/MP4/WebM/YouTube) for Radium Download Manager.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "flux-extension@fluxdownloadmanager.org",
+      "id": "radium-extension@radiumdownloadmanager.org",
       "strict_min_version": "115.0"
     }
   },

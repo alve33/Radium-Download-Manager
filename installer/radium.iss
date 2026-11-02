@@ -59,11 +59,13 @@
   #endif
 #endif
 
-; Resolve N_m3u8DL-RE worker: prioritize staged worker from tools\win-x64 (or build output fallback)
-#if FileExists("..\tools\win-x64\N_m3u8DL-RE.exe")
-  #define Nm3u8dlSource "..\tools\win-x64\N_m3u8DL-RE.exe"
-#elif FileExists(SourceDir + "\N_m3u8DL-RE.exe")
+; Resolve N_m3u8DL-RE worker: prioritize target arch build output from SourceDir
+#if FileExists(SourceDir + "\N_m3u8DL-RE.exe")
   #define Nm3u8dlSource SourceDir + "\N_m3u8DL-RE.exe"
+#elif FileExists("..\tools\win-" + MyAppArch + "\N_m3u8DL-RE.exe")
+  #define Nm3u8dlSource "..\tools\win-" + MyAppArch + "\N_m3u8DL-RE.exe"
+#elif FileExists("..\tools\win-x64\N_m3u8DL-RE.exe")
+  #define Nm3u8dlSource "..\tools\win-x64\N_m3u8DL-RE.exe"
 #elif FileExists("..\build\win-x64\Release\N_m3u8DL-RE.exe")
   #define Nm3u8dlSource "..\build\win-x64\Release\N_m3u8DL-RE.exe"
 #elif FileExists("..\build\Release\N_m3u8DL-RE.exe")
@@ -159,7 +161,7 @@ Source: "manifests\org.openidm.native.firefox.json"; DestDir: "{app}\manifests";
 Name: "{app}\tools\win-x64"; Components: stream_workers; Flags: uninsalwaysuninstall
 Name: "{app}\manifests"; Components: core; Flags: uninsalwaysuninstall
 Name: "{app}\scripts"; Components: core; Flags: uninsalwaysuninstall
-Name: "{app}\extension"; Components: core
+Name: "{app}\extension"; Components: core; Flags: uninsalwaysuninstall
 
 [InstallDelete]
 ; Clean up legacy duplicate worker binaries from older installations that installed into {app}\tools

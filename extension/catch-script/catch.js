@@ -7,8 +7,8 @@
 
 (function () {
   function installDeepSearchHooks(win, sessionNonce, emitEvent) {
-    if (!win || win.__fluxCatchScriptInstalled) return;
-    win.__fluxCatchScriptInstalled = true;
+    if (!win || win.__radiumCatchScriptInstalled) return;
+    win.__radiumCatchScriptInstalled = true;
 
     const seenUrls = new Set();
     const blobRegistry = new Map();
@@ -291,6 +291,7 @@
                           (parseInt(chosenVideo.contentLength || "0", 10) + (canMuxAdaptive ? audioByteLen : 0));
 
         const descriptor = {
+          radiumType: "YOUTUBE_STREAM",
           fluxType: "YOUTUBE_STREAM",
           sourceType: "YOUTUBE_EXTRACTION",
           videoId,
@@ -335,6 +336,7 @@
       if (formats.length > 0 || adaptive.length > 0 || streamingData.serverAbrStreamingUrl) {
         const resolution = primaryRes;
         const descriptor = {
+          radiumType: "YOUTUBE_STREAM",
           fluxType: "YOUTUBE_STREAM",
           sourceType: "YOUTUBE_EXTRACTION",
           videoId,
@@ -448,7 +450,8 @@
 
           const primaryFallbackSize = fallbackQualities[0] ? fallbackQualities[0].size : 0;
           const descriptor = {
-            fluxType: "YOUTUBE_STREAM",
+            radiumType: "YOUTUBE_STREAM",
+          fluxType: "YOUTUBE_STREAM",
             sourceType: "YOUTUBE_EXTRACTION",
             videoId: vid,
             title: rawTitle,
@@ -756,8 +759,8 @@
 
       win.XMLHttpRequest.prototype.open = function (method, url, ...rest) {
         try {
-          this.__fluxUrl = (typeof url === "string") ? url : String(url);
-          inspectUrl(this.__fluxUrl);
+          this.__radiumUrl = (typeof url === "string") ? url : String(url);
+          inspectUrl(this.__radiumUrl);
         } catch (_) {}
         return origOpen.apply(this, [method, url, ...rest]);
       };
@@ -766,7 +769,7 @@
         if (typeof this.addEventListener === "function") {
           this.addEventListener("load", function () {
             try {
-              const url = this.responseURL || this.__fluxUrl;
+              const url = this.responseURL || this.__radiumUrl;
               if (!url) return;
               inspectUrl(url);
               const rType = this.responseType;
@@ -940,6 +943,9 @@
       };
 
       const deliverPayload = (b64, bType = (mimeType || "application/octet-stream"), bSize = 0) => {
+        const authToken = (anchor && typeof anchor.getAttribute === "function")
+          ? (anchor.getAttribute("data-radium-auth-token") || anchor.getAttribute("data-auth-token") || "")
+          : "";
         postToExtension({
           action: "radiumDirectBlobDownload",
           url: href,
@@ -948,6 +954,7 @@
           size: bSize,
           dataBase64: b64,
           correlationId,
+          authToken,
           pageTitle: win.document ? win.document.title : "",
           pageUrl: win.location ? win.location.href : ""
         });
@@ -1010,7 +1017,7 @@
 
           if (href && (href.startsWith("blob:") || href.startsWith("http://") || href.startsWith("https://") || href.startsWith("data:"))) {
             postToExtension({
-              action: "fluxAnchorClicked",
+              action: "radiumAnchorClicked",
               url: href,
               download: downloadAttr,
               pageTitle: win.document ? win.document.title : "",
@@ -1042,7 +1049,7 @@
 
             if (href && (href.startsWith("blob:") || href.startsWith("http://") || href.startsWith("https://") || href.startsWith("data:"))) {
               postToExtension({
-                action: "fluxAnchorClicked",
+                action: "radiumAnchorClicked",
                 url: href,
                 download: downloadAttr,
                 pageTitle: win.document ? win.document.title : "",
@@ -1155,7 +1162,7 @@
           scanDomMediaElements();
           return;
         }
-        if (ev.data.action === "fluxGetBlobData") {
+        if (ev.data.action === "radiumGetBlobData" || ev.data.action === "fluxGetBlobData") {
           const blobUrl = ev.data.blobUrl || "";
           const requestId = ev.data.requestId || "";
           const blobEntry = blobRegistry.get(blobUrl);
@@ -1172,7 +1179,8 @@
 
           const processBlob = (blobObj, mimeType) => {
             if (!blobObj) {
-              postToExtension({ action: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "INVALID_BLOB" });
+              postToExtension({ action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "INVALID_BLOB" });
               return;
             }
             if (typeof win.FileReader === "function") {
@@ -1182,7 +1190,8 @@
                 const commaIdx = res.indexOf(",");
                 const b64 = commaIdx >= 0 ? res.slice(commaIdx + 1) : res;
                 postToExtension({
-                  action: "fluxBlobDataResponse",
+                  action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse",
                   requestId,
                   blobUrl,
                   success: true,
@@ -1196,7 +1205,8 @@
                   blobObj.arrayBuffer().then(buf => {
                     const b64 = arrayBufferToBase64(buf);
                     postToExtension({
-                      action: "fluxBlobDataResponse",
+                      action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse",
                       requestId,
                       blobUrl,
                       success: true,
@@ -1205,10 +1215,12 @@
                       size: blobObj.size || 0
                     });
                   }).catch(err => {
-                    postToExtension({ action: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: String(err) });
+                    postToExtension({ action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: String(err) });
                   });
                 } else {
-                  postToExtension({ action: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "READER_ERROR" });
+                  postToExtension({ action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "READER_ERROR" });
                 }
               };
               reader.readAsDataURL(blobObj);
@@ -1218,7 +1230,8 @@
               blobObj.arrayBuffer().then(buf => {
                 const b64 = arrayBufferToBase64(buf);
                 postToExtension({
-                  action: "fluxBlobDataResponse",
+                  action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse",
                   requestId,
                   blobUrl,
                   success: true,
@@ -1227,17 +1240,20 @@
                   size: blobObj.size || 0
                 });
               }).catch(err => {
-                postToExtension({ action: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: String(err) });
+                postToExtension({ action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: String(err) });
               });
             } else {
-              postToExtension({ action: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "CANNOT_READ_BLOB" });
+              postToExtension({ action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "CANNOT_READ_BLOB" });
             }
           };
 
           if (blobEntry && blobEntry.blob) {
             processBlob(blobEntry.blob, blobEntry.mimeType);
           } else {
-            postToExtension({ action: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "BLOB_NOT_IN_REGISTRY" });
+            postToExtension({ action: "radiumBlobDataResponse",
+                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "BLOB_NOT_IN_REGISTRY" });
           }
           return;
         }

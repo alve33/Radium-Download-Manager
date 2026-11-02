@@ -6,7 +6,7 @@
 # and encoders required by Radium's stream download and muxing workflows.
 #
 # Pinned Source: FFmpeg 7.1 (Tag: n7.1, Commit: 04706f3, Tarball: ffmpeg-7.1.tar.xz)
-# Pinned Source SHA-256: 40973d44d00a8999824ff4ec27549efdbdc7667a488e14603954625b5a79667
+# Pinned Source SHA-256: 40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6
 # Pinned Toolchain: LLVM-MinGW 20240917 (UCRT runtime, Clang 19.1.0)
 # Pinned Toolchain SHA-256: e06da87ec42a8b3e85e053fcab68fe53ec220302c0c704ca9f4a1fa62a096c46
 #

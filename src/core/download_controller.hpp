@@ -52,6 +52,8 @@ struct ControllerConfig {
 
 class DownloadController {
 public:
+    struct TaskNotification { std::string task_id; std::string file_name; bool success{false}; std::string message; };
+    using TaskNotificationCallback = std::function<void(const TaskNotification&)>;
     explicit DownloadController(ControllerConfig cfg);
     ~DownloadController();
 
@@ -141,6 +143,8 @@ public:
     AppSettings GetSettings() const;
     Result<void> UpdateSettings(const AppSettings& settings);
     Result<AppSettings> RestoreDefaultSettings();
+    Result<void> RememberDownloadDirectory(const std::string& directory);
+    void SetTaskNotificationCallback(TaskNotificationCallback callback);
 
     const ControllerConfig& GetConfig() const { return m_cfg; }
     // Installs the UI-side selector used when a magnet link obtains multi-file metadata.
@@ -208,6 +212,8 @@ private:
     std::atomic<uint64_t> m_global_speed_limit_bps{0};
     std::shared_ptr<brisk::TokenBucketLimiter> m_global_limiter{std::make_shared<brisk::TokenBucketLimiter>()};
     AppSettings m_settings;
+    TaskNotificationCallback m_task_notification_callback;
+    std::set<std::string> m_notified_task_ids;
     std::thread m_scheduler_thread;
 };
 

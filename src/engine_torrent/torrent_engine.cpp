@@ -203,6 +203,9 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                         recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4);
                         continue;
                     }
+                    if (payload_len > 2 * 1024 * 1024) {
+                        break;
+                    }
                     if (recv_buf.size() < 4 + payload_len) break;
 
                     auto msg_opt = PeerWireProtocol::ParseMessage(recv_buf.data(), 4 + payload_len);
@@ -685,6 +688,9 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                 if (payload_len == 0) {
                     recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4);
                     continue;
+                }
+                if (payload_len > 2 * 1024 * 1024) {
+                    break;
                 }
                 if (recv_buf.size() < 4 + payload_len) break;
 

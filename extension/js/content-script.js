@@ -28,19 +28,10 @@ function positionOverlayHost(video, hostEl) {
   if (!video || !hostEl) return;
   const doc = (video && video.ownerDocument) ? video.ownerDocument : (typeof document !== "undefined" ? document : null);
 
-  const isFullscreen = isVideoOrDocFullscreen(video, doc);
-  if (isFullscreen) {
-    // When video or player is in fullscreen, completely hide the overlay so it never obstructs viewing
-    const fsCss = "display:none;opacity:0;pointer-events:none;visibility:hidden;";
-    if (hostEl.__fluxLastCss !== fsCss) {
-      hostEl.__fluxLastCss = fsCss;
-      hostEl.style.cssText = fsCss;
-    }
-    return;
-  }
-
-  if (doc && doc.body && hostEl.parentElement !== doc.body) {
-    try { doc.body.appendChild(hostEl); } catch (_) {}
+  const fsElement = doc && (doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement);
+  const parent = fsElement || (doc && doc.body);
+  if (parent && hostEl.parentElement !== parent) {
+    try { parent.appendChild(hostEl); } catch (_) {}
   }
 
   const rect = typeof video.getBoundingClientRect === "function"
@@ -51,17 +42,23 @@ function positionOverlayHost(video, hostEl) {
   const isCollapsed = (rect.width !== undefined && rect.width < 120) || (rect.height !== undefined && rect.height < 80);
   const isOffscreen = (rect.bottom !== undefined && rect.bottom < 28) || (rect.right !== undefined && rect.right < 48);
 
-  // Keep the compact control in a small toolbar just above the player, outside
-  // the video image and aligned to the player's left edge.
-  const topPx = Math.max(8, Math.round((Number.isFinite(rect.top) ? rect.top : 20) - 34));
-  const leftPx = Math.max(8, Math.round(Number.isFinite(rect.left) ? rect.left : 20));
+  const viewport = doc && doc.defaultView ? doc.defaultView : (typeof window !== "undefined" ? window : null);
+  const maxLeft = Math.max(8, (viewport && viewport.innerWidth ? viewport.innerWidth : 1920) - (hostEl.offsetWidth || 240) - 8);
+  const maxTop = Math.max(8, (viewport && viewport.innerHeight ? viewport.innerHeight : 1080) - (hostEl.offsetHeight || 40) - 8);
+  // Manual placement persists across player movement and fullscreen transitions.
+  const desiredLeft = hostEl.__radiumManualPosition ? hostEl.__radiumManualPosition.left
+    : Math.round(Number.isFinite(rect.left) ? rect.left : 20);
+  const desiredTop = hostEl.__radiumManualPosition ? hostEl.__radiumManualPosition.top
+    : Math.round((Number.isFinite(rect.top) ? rect.top : 20) - 34);
+  const leftPx = Math.max(8, Math.min(maxLeft, desiredLeft));
+  const topPx = Math.max(8, Math.min(maxTop, desiredTop));
 
-  const visCss = (isCollapsed || isOffscreen)
+  const visCss = (!hostEl.__radiumManualPosition && (isCollapsed || isOffscreen))
     ? "display:none;opacity:0;pointer-events:none;"
-    : "display:inline-flex;pointer-events:auto;";
+      : "display:inline-flex;opacity:1;visibility:visible;pointer-events:auto;";
   const nextCss = `position:fixed;top:${topPx}px;left:${leftPx}px;z-index:2147483647;${visCss}`;
-  if (hostEl.__fluxLastCss !== nextCss) {
-    hostEl.__fluxLastCss = nextCss;
+  if (hostEl.__radiumLastCss !== nextCss) {
+    hostEl.__radiumLastCss = nextCss;
     hostEl.style.cssText = nextCss;
   }
 }
@@ -119,7 +116,7 @@ function cleanupContentScript() {
       g_videoObserver = null;
     }
     if (typeof document !== "undefined" && document.querySelectorAll) {
-      const badges = document.querySelectorAll("[data-flux-shadow-host]");
+      const badges = document.querySelectorAll("[data-radium-shadow-host], [data-flux-shadow-host]");
       badges.forEach(b => { try { b.remove(); } catch (_) {} });
     }
   } catch (_) {}
@@ -160,8 +157,8 @@ function notifyDirectVideoElementDiscovered(video, doc) {
   try {
     const src = extractVideoElementSrc(video);
     if (!src || src.startsWith("blob:") || src.startsWith("data:")) return;
-    if (video.__fluxLastReportedSrc === src) return;
-    video.__fluxLastReportedSrc = src;
+    if (video.__radiumLastReportedSrc === src) return;
+    video.__radiumLastReportedSrc = src;
 
     const lower = src.toLowerCase();
     const streamType = lower.includes(".m3u8") ? "HLS" : (lower.includes(".mpd") ? "DASH" : "HTTP_FILE");
@@ -206,39 +203,42 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     const isDrm = Boolean(video.mediaKeys);
 
     // If host element is already attached and in DOM, ensure it's positioned correctly
-    if (video.__fluxHostEl && video.__fluxHostEl.isConnected) {
-      positionOverlayHost(video, video.__fluxHostEl);
+    if (video.__radiumHostEl && video.__radiumHostEl.isConnected) {
+      positionOverlayHost(video, video.__radiumHostEl);
       continue;
     }
 
     // If host element was previously created but detached during DOM updates/SPA navigation, re-append it
-    if (video.__fluxHostEl) {
+    if (video.__radiumHostEl) {
       const targetContainer = doc.fullscreenElement || doc.body;
       if (targetContainer && targetContainer.appendChild) {
-        targetContainer.appendChild(video.__fluxHostEl);
-        positionOverlayHost(video, video.__fluxHostEl);
+        targetContainer.appendChild(video.__radiumHostEl);
+        positionOverlayHost(video, video.__radiumHostEl);
         attached.push({
           video,
-          hostEl: video.__fluxHostEl,
-          btn: video.__fluxBtn,
+          hostEl: video.__radiumHostEl,
+          btn: video.__radiumBtn,
           isBlob,
           isDrm,
           src,
-          reposition: () => positionOverlayHost(video, video.__fluxHostEl)
+          reposition: () => positionOverlayHost(video, video.__radiumHostEl)
         });
         continue;
       }
     }
 
     video.dataset.radiumOverlayAttached = "true";
+    video.dataset.radiumOverlayAttached = "true";
     video.dataset.fluxOverlayAttached = "true";
     video.dataset.openidmOverlayAttached = "true";
 
     const hostEl = doc.createElement("div");
     hostEl.setAttribute("data-radium-shadow-host", "true");
+    hostEl.setAttribute("data-radium-shadow-host", "true");
     hostEl.setAttribute("data-flux-shadow-host", "true");
     hostEl.setAttribute("data-openidm-shadow-host", "true");
-    if (isDrm) hostEl.setAttribute("data-flux-drm", "true");
+    if (isDrm) hostEl.setAttribute("data-radium-drm", "true");
+    hostEl.setAttribute("data-flux-drm", "true");
     positionOverlayHost(video, hostEl);
 
     // Closed Shadow DOM ensures zero CSS leakage into or from the host webpage
@@ -261,6 +261,16 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
         font-family: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
       }
+      .radium-drag-handle {
+        color: #A7A8AF;
+        cursor: grab;
+        user-select: none;
+        touch-action: none;
+        padding: 2px 3px;
+        font: 700 12px "Segoe UI", sans-serif;
+        line-height: 1;
+      }
+      .radium-drag-handle:active { cursor: grabbing; }
       button {
         display: inline-flex;
         align-items: center;
@@ -334,8 +344,42 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
 
     const container = doc.createElement("div");
     container.className = "radium-overlay-container";
+    const dragHandle = doc.createElement("span");
+    dragHandle.className = "radium-drag-handle";
+    dragHandle.textContent = "⠿";
+    dragHandle.title = "Drag to move Radium controls";
+    dragHandle.setAttribute("aria-label", "Drag to move Radium controls");
+    dragHandle.addEventListener("pointerdown", (ev) => {
+      if (!ev || ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const startX = ev.clientX, startY = ev.clientY;
+      const startLeft = parseInt(hostEl.style.left, 10) || 8;
+      const startTop = parseInt(hostEl.style.top, 10) || 8;
+      const move = (moveEvent) => {
+        const viewport = doc.defaultView || window;
+        const maxLeft = Math.max(8, viewport.innerWidth - (hostEl.offsetWidth || 240) - 8);
+        const maxTop = Math.max(8, viewport.innerHeight - (hostEl.offsetHeight || 40) - 8);
+        const left = Math.max(8, Math.min(maxLeft, startLeft + moveEvent.clientX - startX));
+        const top = Math.max(8, Math.min(maxTop, startTop + moveEvent.clientY - startY));
+        hostEl.__radiumManualPosition = { left, top };
+        hostEl.style.left = `${left}px`;
+        hostEl.style.top = `${top}px`;
+        hostEl.style.display = "inline-flex";
+        hostEl.style.visibility = "visible";
+        hostEl.style.opacity = "1";
+      };
+      const end = () => {
+        doc.removeEventListener("pointermove", move, true);
+        doc.removeEventListener("pointerup", end, true);
+        doc.removeEventListener("pointercancel", end, true);
+      };
+      doc.addEventListener("pointermove", move, true);
+      doc.addEventListener("pointerup", end, true);
+      doc.addEventListener("pointercancel", end, true);
+    });
 
-    const lastCand = (typeof window !== "undefined" && window.__fluxLastCandidate) ? window.__fluxLastCandidate : null;
+    const lastCand = (typeof window !== "undefined" && window.__radiumLastCandidate) ? window.__radiumLastCandidate : null;
     const topQ = (lastCand && Array.isArray(lastCand.qualities) && lastCand.qualities.length > 0)
       ? (lastCand.qualities.find(q => !q.isAudioOnly && String(q.resolution || "").toLowerCase().includes("1080")) ||
          lastCand.qualities.find(q => !q.isAudioOnly) ||
@@ -372,8 +416,8 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       const liveSrc = extractVideoElementSrc(video);
       const liveIsBlob = liveSrc.startsWith("blob:");
 
-      const cand = (typeof window !== "undefined" && window.__fluxLastCandidate) ? window.__fluxLastCandidate : null;
-      let chosenQ = hostEl.__fluxSelectedQuality || null;
+      const cand = (typeof window !== "undefined") ? (window.__radiumLastCandidate || window.__fluxLastCandidate) : null;
+      let chosenQ = hostEl.__radiumSelectedQuality || null;
       if (!chosenQ && selectEl && selectEl.value && cand && Array.isArray(cand.qualities)) {
         chosenQ = cand.qualities.find(q =>
           String(q.id || "").toLowerCase() === String(selectEl.value).toLowerCase() ||
@@ -406,7 +450,7 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       hostEl.addEventListener("click", (ev) => {
         // If clicking on select element, let native select handle it without triggering download
         const target = ev.target;
-        if (target === selectEl || (target && target.tagName === "SELECT")) return;
+        if (target === selectEl || (target && (target.tagName === "SELECT" || target.className === "radium-drag-handle"))) return;
         invokeClick(ev);
       });
     }
@@ -414,14 +458,14 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     selectEl.addEventListener("change", (ev) => {
       if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
       const val = selectEl.value;
-      const cand = (typeof window !== "undefined" && window.__fluxLastCandidate) ? window.__fluxLastCandidate : null;
+      const cand = (typeof window !== "undefined") ? (window.__radiumLastCandidate || window.__fluxLastCandidate) : null;
       if (cand && Array.isArray(cand.qualities)) {
         const found = cand.qualities.find(q =>
           String(q.id || "").toLowerCase() === String(val).toLowerCase() ||
           String(q.resolution || "").toLowerCase() === String(val).toLowerCase()
         );
         if (found) {
-          hostEl.__fluxSelectedQuality = found;
+          hostEl.__radiumSelectedQuality = found;
           const qText = found.resolution || found.label || "";
           const szStr = found.size > 0 ? ` (~${(found.size / 1048576).toFixed(0)} MB)` : "";
           btn.textContent = `Download [${qText}${szStr}]`;
@@ -435,6 +479,7 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     });
 
     if (container.appendChild) {
+      container.appendChild(dragHandle);
       container.appendChild(btn);
       container.appendChild(selectEl);
     }
@@ -444,12 +489,12 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       targetContainer.appendChild(hostEl);
     }
 
-    video.__fluxHostEl = hostEl;
-    video.__fluxBtn = btn;
-    video.__fluxSelect = selectEl;
-    hostEl.__fluxVideo = video;
-    hostEl.__fluxBtn = btn;
-    hostEl.__fluxSelect = selectEl;
+    video.__radiumHostEl = video.__fluxHostEl = hostEl;
+    video.__radiumBtn = video.__fluxBtn = btn;
+    video.__radiumSelect = video.__fluxSelect = selectEl;
+    hostEl.__radiumVideo = hostEl.__fluxVideo = video;
+    hostEl.__radiumBtn = hostEl.__fluxBtn = btn;
+    hostEl.__radiumSelect = hostEl.__fluxSelect = selectEl;
 
     attached.push({
       video,
@@ -531,7 +576,7 @@ function observeDynamicVideosAndFullscreen(doc, win, onDownloadClick) {
     const observer = new MutationObserver((mutations) => {
       if (Array.isArray(mutations)) {
         const onlyOverlayChange = mutations.every(m =>
-          m.target && m.target.getAttribute && m.target.getAttribute("data-flux-shadow-host") === "true"
+          m.target && m.target.getAttribute && (m.target.getAttribute("data-radium-shadow-host") === "true" || m.target.getAttribute("data-flux-shadow-host") === "true")
         );
         if (onlyOverlayChange) return;
       }
@@ -572,6 +617,7 @@ function findAnchorFromEvent(ev) {
 function triggerBrowserFallback(anchor, href) {
   try {
     if (anchor && anchor.dataset) {
+      anchor.dataset.radiumBypass = "true";
       anchor.dataset.fluxBypass = "true";
     }
     safeSendRuntimeMessage({ action: "bypassNextDownload", url: href });
@@ -582,6 +628,11 @@ function triggerBrowserFallback(anchor, href) {
     }
   } catch (_) {}
 }
+
+// SEC-001: Explicit Authorization Token Registry for Blob Downloads.
+// Authorization is strictly bound to the exact DOM anchor clicked by the user, its URL, and target filename.
+// Static nonces or global gesture time windows are never trusted.
+const g_authorizedBlobTokens = new Map(); // token -> { href, filename, timestamp }
 
 function handleLinkClick(ev) {
   if (!isExtensionContextValid() || g_contentScriptCleanedUp) {
@@ -594,7 +645,34 @@ function handleLinkClick(ev) {
     const anchor = findAnchorFromEvent(ev);
     if (!anchor) return;
 
-    if (anchor.dataset && (anchor.dataset.fluxBypass === "true" || anchor.dataset.fluxBypass === true)) {
+    // SEC-001 Hardening: If this is a trusted user click on a blob or data URL anchor, issue a single-use
+    // authorization token bound specifically to this exact anchor element, its href, and target filename.
+    let preHref = anchor.href || (typeof anchor.getAttribute === "function" ? (anchor.getAttribute("data-download-url") || anchor.getAttribute("data-href") || anchor.getAttribute("href")) : "") || "";
+    if (ev && ev.isTrusted && preHref && (preHref.startsWith("blob:") || preHref.startsWith("data:"))) {
+      try {
+        const randHex = (typeof crypto !== "undefined" && crypto.getRandomValues)
+          ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")
+          : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+        const authToken = "radium-auth-" + Date.now().toString(36) + "-" + randHex;
+        const targetFilename = anchor.download ||
+          (typeof extractFilenameFromUrlQuery === "function" ? extractFilenameFromUrlQuery(preHref) : "") || "";
+        anchor.setAttribute("data-radium-auth-token", authToken);
+        g_authorizedBlobTokens.set(authToken, {
+          href: preHref,
+          filename: targetFilename,
+          timestamp: Date.now()
+        });
+        if (g_authorizedBlobTokens.size > 20) {
+          const now = Date.now();
+          for (const [k, v] of g_authorizedBlobTokens.entries()) {
+            if (now - v.timestamp > 30000) g_authorizedBlobTokens.delete(k);
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (anchor.dataset && (anchor.dataset.radiumBypass === "true" || anchor.dataset.radiumBypass === true || anchor.dataset.fluxBypass === "true" || anchor.dataset.fluxBypass === true)) {
+      delete anchor.dataset.radiumBypass;
       delete anchor.dataset.fluxBypass;
       return;
     }
@@ -706,11 +784,11 @@ function handleLinkClick(ev) {
     }
 
     // Prevent duplicate click recordings from rapid multi-clicks (brief debounce)
-    if (anchor.__fluxClickInFlight) {
+    if (anchor.__radiumClickInFlight) {
       return;
     }
-    anchor.__fluxClickInFlight = true;
-    setTimeout(() => { delete anchor.__fluxClickInFlight; }, 800);
+    anchor.__radiumClickInFlight = true;
+    setTimeout(() => { delete anchor.__radiumClickInFlight; }, 800);
 
     // Record link click metadata for correlation in chrome.downloads.onDeterminingFilename.
     // User gesture is strictly preserved: we NEVER call ev.preventDefault() or ev.stopPropagation()
@@ -825,6 +903,7 @@ function initContentScript() {
   if (typeof document === "undefined" || typeof window === "undefined") return;
 
   // 1. Intercept link clicks with capture phase at window level
+  // Pointerdown listener for generic interactions (SEC-001 enforces strict anchor token binding in handleLinkClick)
   window.addEventListener("click", handleLinkClick, { capture: true, passive: false });
 
   // 2. Listen to media playback events with capture phase
@@ -845,12 +924,12 @@ function initContentScript() {
 
       if (ev.data.action === "catCatchAddMedia") {
         if (typeof window !== "undefined") {
-          window.__fluxLastCandidate = ev.data;
+          window.__radiumLastCandidate = ev.data;
         }
         // Dynamically update overlay badge label and quality selector with detected qualities and estimated size
         try {
           if (typeof document !== "undefined" && document.querySelectorAll) {
-            const hosts = document.querySelectorAll("[data-flux-shadow-host]");
+            const hosts = document.querySelectorAll("[data-radium-shadow-host], [data-flux-shadow-host]");
             const qualities = Array.isArray(ev.data.qualities) ? ev.data.qualities : [];
             const topQ = (qualities.length > 0)
               ? (qualities.find(q => !q.isAudioOnly && String(q.resolution || "").toLowerCase().includes("1080")) ||
@@ -865,20 +944,20 @@ function initContentScript() {
               const szStr = topQ.size > 0 ? ` (~${(topQ.size / 1048576).toFixed(0)} MB)` : "";
 
               hosts.forEach(h => {
-                if (!h.__fluxSelectedQuality) {
-                  h.__fluxSelectedQuality = topQ;
+                if (!h.__radiumSelectedQuality) {
+                  h.__radiumSelectedQuality = topQ;
                 }
-                const chosen = h.__fluxSelectedQuality || topQ;
+                const chosen = h.__radiumSelectedQuality || topQ;
                 const chosenText = chosen.resolution || chosen.label || "";
                 const chosenSz = chosen.size > 0 ? ` (~${(chosen.size / 1048576).toFixed(0)} MB)` : "";
 
-                if (h.__fluxBtn && !h.getAttribute("data-flux-status") && !h.getAttribute("data-flux-drm")) {
-                  h.__fluxBtn.textContent = `Download [${chosenText}${chosenSz}]`;
-                  h.__fluxBtn.title = `Download ${chosenText} with Radium Download Manager`;
+                if (h.__radiumBtn && !h.getAttribute("data-flux-status") && !h.getAttribute("data-flux-drm")) {
+                  h.__radiumBtn.textContent = `Download [${chosenText}${chosenSz}]`;
+                  h.__radiumBtn.title = `Download ${chosenText} with Radium Download Manager`;
                 }
 
                 // Populate or update the compact quality selection dropdown
-                const sel = h.__fluxSelect;
+                const sel = h.__radiumSelect;
                 if (sel) {
                   if (qualities.length > 1) {
                     sel.innerHTML = "";
@@ -929,8 +1008,8 @@ function initContentScript() {
           tabUrl: location.href,
           pageTitle: ev.data.pageTitle || document.title || "video"
         }, (resp) => {
-          if (resp && resp.candidate && resp.candidate.candidateId && typeof window !== "undefined" && window.__fluxLastCandidate) {
-            window.__fluxLastCandidate.candidateId = resp.candidate.candidateId;
+          if (resp && resp.candidate && resp.candidate.candidateId && typeof window !== "undefined" && window.__radiumLastCandidate) {
+            window.__radiumLastCandidate.candidateId = resp.candidate.candidateId;
           }
         });
       } else if (ev.data.action === "catCatchAddKey") {
@@ -946,6 +1025,35 @@ function initContentScript() {
           url: ev.data.url || location.href
         });
       } else if (ev.data.action === "radiumDirectBlobDownload") {
+        // SEC-001 Strict Per-Anchor Authorization Verification:
+        // 1. Must carry an explicit authorization token issued during a trusted user click on the exact anchor
+        // 2. The authorization token must exist in g_authorizedBlobTokens registry
+        // 3. The authorization token is single-use and immediately revoked upon consumption
+        // 4. The requested blob URL and filename must strictly match the authorized anchor data
+        // 5. Must originate from same window
+        const authToken = ev.data.authToken;
+        if (!authToken || typeof authToken !== "string" || !g_authorizedBlobTokens.has(authToken)) {
+          console.warn("[Radium Security] SEC-001 BLOCKED: Unauthenticated radiumDirectBlobDownload attempt without anchor authorization token.", { url: ev.data.url });
+          return;
+        }
+        const authRecord = g_authorizedBlobTokens.get(authToken);
+        g_authorizedBlobTokens.delete(authToken); // Revoke token immediately
+
+        if (Date.now() - authRecord.timestamp > 15000) {
+          console.warn("[Radium Security] SEC-001 BLOCKED: Expired blob authorization token.");
+          return;
+        }
+        if (ev.data.url !== authRecord.href) {
+          console.warn("[Radium Security] SEC-001 BLOCKED: Token URL mismatch. Expected: " + authRecord.href + ", got: " + ev.data.url);
+          return;
+        }
+        if (authRecord.filename && ev.data.filename && authRecord.filename !== ev.data.filename) {
+          console.warn("[Radium Security] SEC-001 BLOCKED: Token filename mismatch. Expected: " + authRecord.filename + ", got: " + ev.data.filename);
+          return;
+        }
+        if (!ev.data.dataBase64 || typeof ev.data.dataBase64 !== "string") {
+          return;
+        }
         safeSendRuntimeMessage({
           action: "interceptBlobDownload",
           url: ev.data.url,
@@ -990,20 +1098,21 @@ function initContentScript() {
         cleanupContentScript();
         return false;
       }
-      if (request && request.action === "fluxFetchBlobData") {
+      if (request && (request.action === "radiumFetchBlobData" || request.action === "fluxFetchBlobData")) {
         const blobUrl = request.blobUrl || "";
         const requestId = request.requestId || ("blob-req-" + Date.now().toString(36));
 
         const queryCatchScript = () => {
           let resolved = false;
           const handler = (ev) => {
-            if (!ev || !ev.data || ev.data.action !== "fluxBlobDataResponse" || ev.data.requestId !== requestId) return;
+            if (!ev || !ev.data || (ev.data.action !== "radiumBlobDataResponse" && ev.data.action !== "fluxBlobDataResponse") || ev.data.requestId !== requestId) return;
             if (resolved) return;
             resolved = true;
             window.removeEventListener("message", handler, true);
             sendResponse(ev.data);
           };
           window.addEventListener("message", handler, true);
+          window.postMessage({ action: "radiumGetBlobData", blobUrl, requestId }, "*");
           window.postMessage({ action: "fluxGetBlobData", blobUrl, requestId }, "*");
           setTimeout(() => {
             if (!resolved) {
@@ -1037,8 +1146,9 @@ function initContentScript() {
         return true;
       }
 
-      if (request && request.action === "probePageMedia") {
+      if (request && (request.action === "probePageMedia" || request.action === "radiumProbePageMedia")) {
         try {
+          window.postMessage({ action: "radiumScanPageMedia" }, "*");
           window.postMessage({ action: "fluxScanPageMedia" }, "*");
           sendResponse({ success: true });
         } catch (e) {
@@ -1072,11 +1182,11 @@ function initContentScript() {
       btn.disabled = true;
     }
     if (hostEl && hostEl.setAttribute) {
-      hostEl.setAttribute("data-flux-status", "starting");
+      hostEl.setAttribute("data-radium-status", "starting");
     }
 
-    const lastCand = (typeof window !== "undefined" && window.__fluxLastCandidate) ? window.__fluxLastCandidate : null;
-    let chosenQ = mediaMeta.selectedQuality || (hostEl && hostEl.__fluxSelectedQuality) || null;
+    const lastCand = (typeof window !== "undefined" && window.__radiumLastCandidate) ? window.__radiumLastCandidate : null;
+    let chosenQ = mediaMeta.selectedQuality || (hostEl && hostEl.__radiumSelectedQuality) || null;
     if (!chosenQ && lastCand && Array.isArray(lastCand.qualities)) {
       chosenQ = lastCand.qualities.find(q => !q.isAudioOnly && String(q.resolution || "").toLowerCase().includes("1080")) ||
                 lastCand.qualities.find(q => !q.isAudioOnly) ||
@@ -1114,8 +1224,8 @@ function initContentScript() {
           if (btn.style) btn.style.cssText = baseStyle + "border-color:#EF4444;color:#FCA5A5;";
         }
         if (hostEl && hostEl.setAttribute) {
-          hostEl.setAttribute("data-flux-status", "error");
-          hostEl.setAttribute("data-flux-error", errText);
+          hostEl.setAttribute("data-radium-status", "error");
+          hostEl.setAttribute("data-radium-error", errText);
         }
       } else {
         const isFallback = Boolean(resp.result && resp.result.fallbackToBrowser);
@@ -1127,8 +1237,8 @@ function initContentScript() {
           if (btn.style) btn.style.cssText = baseStyle + "border-color:#22C55E;color:#86EFAC;";
         }
         if (hostEl && hostEl.setAttribute) {
-          hostEl.setAttribute("data-flux-status", isFallback ? "browser_fallback" : "queued");
-          if (taskId) hostEl.setAttribute("data-flux-task-id", taskId);
+          hostEl.setAttribute("data-radium-status", isFallback ? "browser_fallback" : "queued");
+          if (taskId) hostEl.setAttribute("data-radium-task-id", taskId);
         }
       }
 

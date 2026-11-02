@@ -41,7 +41,7 @@ std::string Logger::RedactSensitiveData(std::string_view input) {
 
     // 3. Redact sensitive URL query string tokens
     static const std::regex kQueryTokenRegex(
-        R"(([?&](?:token|access_token|auth|sig|signature|hdnea|Policy|Signature|Key-Pair-Id|X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token)=)([^&\s"']+))",
+        R"(([?&](?:token|access_token|auth|key|sig|signature|hdnea|Policy|Signature|Key-Pair-Id|X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token)=)([^&\s"']+))",
         std::regex_constants::icase);
     out = std::regex_replace(out, kQueryTokenRegex, "$1[REDACTED]");
 

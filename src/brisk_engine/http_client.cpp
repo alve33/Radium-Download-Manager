@@ -205,9 +205,16 @@ bool IsLoopbackHost(std::string_view host) {
     std::string h = ToLower(host);
     if (h == "localhost" || h == "127.0.0.1" || h == "::1") return true;
     if (h.rfind("127.", 0) == 0 || h.rfind("169.254.", 0) == 0 ||
-        h.rfind("10.", 0) == 0 || h.rfind("192.168.", 0) == 0 ||
-        h.rfind("fe80:", 0) == 0 || h.rfind("fc", 0) == 0 || h.rfind("fd", 0) == 0) {
+        h.rfind("10.", 0) == 0 || h.rfind("192.168.", 0) == 0) {
         return true;
+    }
+    // IPv6 link-local and unique local address (ULA: fc00::/7) must have a colon or brackets
+    if (h.find(':') != std::string::npos || (!h.empty() && h.front() == '[')) {
+        if (h.rfind("fe80:", 0) == 0 || h.rfind("[fe80:", 0) == 0 ||
+            h.rfind("fc", 0) == 0 || h.rfind("[fc", 0) == 0 ||
+            h.rfind("fd", 0) == 0 || h.rfind("[fd", 0) == 0) {
+            return true;
+        }
     }
     // Check 172.16.x.x - 172.31.x.x (RFC 1918)
     if (h.rfind("172.", 0) == 0) {

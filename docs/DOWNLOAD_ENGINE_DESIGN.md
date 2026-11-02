@@ -101,6 +101,8 @@ When a worker asks the scheduler for work and there is no unassigned segment:
    - If the user provided an expected checksum (`SHA-256` / `MD5`), stream `.openidm.part` through Windows CNG (`BCryptHashData`).
    - Atomically rename `<filename>.openidm.part` to `<filename>` via `SetFileInformationByHandle` (`FileRenameInfoEx`), applying the configured conflict policy (`Auto-Rename`, `Overwrite`, or `Prompt`).
 
+For the Win32 `prompt` policy, single-file tasks preflight the destination before network work. The commit operation still performs an atomic no-replace attempt to catch a file created during transfer; `ERR_FILE_EXISTS` then follows the same user-choice flow. A selected Overwrite uses a same-volume atomic replacement or a destination-side temporary copy followed by atomic replacement, so a failed copy cannot truncate the previous file.
+
 ---
 
 ## 6. C++20 Engine Interface (`src/engine_http/IFileDownloadEngine.hpp`)

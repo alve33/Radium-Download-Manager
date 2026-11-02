@@ -43,6 +43,15 @@ const {
 } = require("../extension/js/popup.js");
 
 async function runTests() {
+  console.log("[0/20] Testing the native minimum-size preference controls size-only interception...");
+  const priorMinSize = G.minFileSizeBytes;
+  G.minFileSizeBytes = 10 * 1024 * 1024;
+  const sizeOnly = { url: "https://cdn.example.com/resource?id=44", filename: "resource", mime: "", phase: "network" };
+  assert.strictEqual(isDownloadEligible({ ...sizeOnly, fileSize: 5 * 1024 * 1024 }).eligible, false, "Below configured threshold is not intercepted by size fallback");
+  G.minFileSizeBytes = 1024;
+  assert.strictEqual(isDownloadEligible({ ...sizeOnly, fileSize: 5 * 1024 * 1024 }).eligible, true, "Updated threshold enables eligible size-only interception");
+  G.minFileSizeBytes = priorMinSize;
+
   console.log("[1/11] Testing Direct MP4/WebM & HLS/DASH Detection + Header Correlation...");
   onBeforeSendHeadersHandler({
     requestId: "req-101",
@@ -117,6 +126,34 @@ async function runTests() {
   });
   assert.strictEqual(dashRes.added, true);
   assert.strictEqual(dashRes.candidate.streamType, "DASH");
+
+  const noisyGoogleXmlUrl = "https://signaler-pa.clients6.google.com/punctual/message?TYPE=xmlhttp";
+  onHeadersReceivedHandler({
+    requestId: "req-google-xml",
+    tabId: 20,
+    type: "xmlhttprequest",
+    url: noisyGoogleXmlUrl,
+    responseHeaders: [{ name: "Content-Type", value: "text/xml; charset=UTF-8" }]
+  });
+  assert.strictEqual(
+    Array.from(G.recentDownloadResponses.values()).some(response => response.url === noisyGoogleXmlUrl),
+    false,
+    "Passive XML XHR traffic must not be classified as a download"
+  );
+
+  const binaryXhrUrl = "https://cdn.example.com/export?id=42";
+  onHeadersReceivedHandler({
+    requestId: "req-binary-xhr",
+    tabId: 20,
+    type: "xmlhttprequest",
+    url: binaryXhrUrl,
+    responseHeaders: [{ name: "Content-Type", value: "application/octet-stream" }]
+  });
+  assert.strictEqual(
+    Array.from(G.recentDownloadResponses.values()).some(response => response.url === binaryXhrUrl),
+    true,
+    "Binary XHR responses remain available for download correlation"
+  );
   console.log("  -> PASS");
 
   console.log("[3/11] Testing Per-Site Exclusion Setting & Popup Rendering...");
@@ -822,7 +859,7 @@ async function runTests() {
   FakeAnchor.prototype.click = function () { this.clicked = true; };
   mockAnchorWin.HTMLAnchorElement = FakeAnchor;
   installDeepSearchHooks(mockAnchorWin, "nonce-anchor", (msg) => {
-    if (msg.action === "fluxAnchorClicked") interceptedSyntheticClick = msg;
+    if (msg.action === "radiumAnchorClicked" || msg.action === "fluxAnchorClicked") interceptedSyntheticClick = msg;
   });
   const detachedAnchor = new FakeAnchor();
   detachedAnchor.href = "blob:https://chatgpt.com/artifact-99aa88bb";
@@ -1090,8 +1127,8 @@ async function runTests() {
   assert.strictEqual(submittedParams.fileName, "9755.mp4", "Numeric server filename receives MIME-derived media extension");
   console.log("  -> PASS");
 
-  console.log("\n[19/19] Testing In-Page Quality Selector Dropdown & Fullscreen Overlay Hiding...");
-  // 1. Verify fullscreen detection hides the overlay completely
+  console.log("\n[19/19] Testing In-Page Quality Selector, Draggable Placement & Fullscreen Overlay...");
+  // Fullscreen controls stay visible and can be repositioned without losing manual placement.
   const fsHost = { style: {} };
   const mockFsVideo = {
     parentElement: { classList: { contains: (cls) => cls === "ytp-fullscreen" } },
@@ -1102,14 +1139,16 @@ async function runTests() {
     body: { appendChild: () => {} }
   };
   positionOverlayHost(mockFsVideo, fsHost);
-  assert.ok(fsHost.style.cssText.includes("display:none"), "Overlay is hidden when video parent has ytp-fullscreen class");
-  assert.ok(fsHost.style.cssText.includes("visibility:hidden"), "Overlay has visibility:hidden in fullscreen");
+  assert.ok(fsHost.style.cssText.includes("display:inline-flex"), "Overlay remains accessible in fullscreen");
 
   // Exit fullscreen and verify display is restored
   mockFsVideo.parentElement.classList.contains = () => false;
   positionOverlayHost(mockFsVideo, fsHost);
-  assert.ok(fsHost.style.cssText.includes("display:inline-flex"), "Overlay restores display:inline-flex when exiting fullscreen");
-  assert.ok(fsHost.style.cssText.includes("top:8px"), "Overlay restores correct positioning after fullscreen");
+  assert.ok(fsHost.style.cssText.includes("display:inline-flex"), "Overlay remains visible after exiting fullscreen");
+  fsHost.__radiumManualPosition = { left: 320, top: 180 };
+  positionOverlayHost({ getBoundingClientRect: () => ({ width: 640, height: 360, top: 500, bottom: 860, left: 700, right: 1340 }) }, fsHost);
+  assert.ok(fsHost.style.cssText.includes("top:180px") && fsHost.style.cssText.includes("left:320px"), "Automatic positioning preserves manually selected coordinates");
+  assert.ok(contentScript.includes("radium-drag-handle") && contentScript.includes("pointermove"), "Overlay includes a mouse drag handle with pointer tracking");
 
   // 2. Verify scanAndAttachVideoOverlays creates a select element and download button
   let capturedDownloadMeta = null;
@@ -1195,6 +1234,22 @@ async function runTests() {
   assert.strictEqual(mDev.name, "Radium Download Manager");
   assert.strictEqual(mFox.name, "Radium Download Manager");
   console.log("  [Manifest Parity] verified manifest.json == manifest.chromium.json -> PASS");
+
+  // [Scenario 27] Regression SEC-001 & BUG-039 Invariant Verification
+  console.log("\n[20/20] Testing Regression Invariants for SEC-001 (Anchor-Bound Blob Authorization) & BUG-039 (Firefox MV3)...");
+  // 1. Verify manifest.firefox.json declares full background script sequence
+  assert.deepStrictEqual(mFox.background.scripts, ["js/init.js", "js/function.js", "js/background.js"],
+    "BUG-039: Firefox manifest must declare init.js, function.js, and background.js in order");
+  // 2. Verify content-script enforces strict per-anchor authorization token on radiumDirectBlobDownload
+  const csText = fs.readFileSync(path.join(rootDir, "extension", "js", "content-script.js"), "utf8");
+  assert.ok(csText.includes('ev.data.action === "radiumDirectBlobDownload"'), "Content script handles direct blob download");
+  assert.ok(csText.includes('g_authorizedBlobTokens'), "SEC-001: Content script maintains anchor authorization registry");
+  assert.ok(csText.includes('authToken'), "SEC-001: Content script enforces anchor-bound authToken verification");
+
+  // Run full adversarial test suite
+  const { testSec001AdversarialSuite } = require("./test_sec001_adversarial.js");
+  testSec001AdversarialSuite();
+  console.log("  [Regression Invariants] verified SEC-001 and BUG-039 invariants -> PASS");
 
   console.log("\n=======================================================");
   console.log("Browser Extension Suite: 18/18 suites (26/26 edge scenarios) PASSED.");

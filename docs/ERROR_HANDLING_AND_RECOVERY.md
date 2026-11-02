@@ -18,6 +18,10 @@ Every failure in OpenIDM is mapped to a deterministic `ErrorCode` (`src/common/e
 
 ## 2. Canonical Error Code Matrix & Recovery Behavior
 
+### Existing destination conflict (`ERR_FILE_EXISTS`)
+
+For `prompt` policy, the controller checks the destination before starting supported single-file transfers and the atomic final commit checks again for races. A collision leaves the task failed with its incoming `.part` preserved and opens the Win32 conflict dialog. Rename retries under auto-rename; Overwrite retries under overwrite policy; Abort cancels the incoming task and removes only its owned partial data, clearing the conflict error from the canceled task. The existing destination remains intact unless the user selected Overwrite. The overwrite fallback copies to a temporary file in the destination directory and atomically replaces only after the copy succeeds.
+
 | Error Code | Trigger Condition | Recovery Class | Automatic Retry Policy | Preserves Partial Data? | User-Facing Recovery Action |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`ERR_NET_TIMEOUT`** | `ERROR_WINHTTP_TIMEOUT` or 0 bytes read for `> stall_timeout_sec` (`15s`). | `AutoRetry` | Reset worker connection and reconnect at `current_offset`. Up to `10` retries with backoff (`1s, 2s, 4s, 8s, 15s...`); pause retry counter while OS reports no internet connectivity (`NLM_CONNECTIVITY_DISCONNECTED`). | **Yes** | Automatic; user may also manually Pause/Resume. |

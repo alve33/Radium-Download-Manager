@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  IgnorableNamespaces="uap uap3 rescap desktop">
+
+  <Identity
+    Name="${PACKAGE_NAME}"
+    Publisher="${PACKAGE_PUBLISHER}"
+    Version="${PACKAGE_VERSION}"
+    ProcessorArchitecture="${PACKAGE_ARCH}" />
+
+  <Properties>
+    <DisplayName>Radium Download Manager</DisplayName>
+    <PublisherDisplayName>${PUBLISHER_DISPLAY_NAME}</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>High-performance Win32 native multi-protocol download accelerator with HLS/DASH extraction, BitTorrent engine, and browser integration.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="RadiumApp"
+      Executable="radium.exe"
+      EntryPoint="Windows.FullTrustApplication">
+
+      <uap:VisualElements
+        DisplayName="Radium Download Manager"
+        Description="Radium Download Manager"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- Microsoft Edge Native Messaging Host Extension -->
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension
+            Name="com.microsoft.edge.extension"
+            Id="com.radium.downloadmanager"
+            DisplayName="Radium Download Manager Native Host"
+            PublicFolder="manifests">
+            <uap3:Properties>
+              <NativeMessagingHost>manifests\com.radium.downloadmanager.chromium.json</NativeMessagingHost>
+            </uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+
+        <!-- Startup Task (Optional Tray Launch) -->
+        <desktop:Extension Category="windows.startupTask" Executable="radium.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask
+            TaskId="RadiumStartupTask"
+            Enabled="false"
+            DisplayName="Radium Download Manager" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

@@ -699,8 +699,14 @@ Result<int> SqliteStore::RecoverInterruptedTasks(uint64_t rollback_margin_bytes)
                                 seg.current_offset = seg.start_offset;
                             }
                         }
-                        if (part_exists && seg.current_offset > actual_part_sz && actual_part_sz >= seg.start_offset) {
-                            seg.current_offset = actual_part_sz;
+                        if (part_exists) {
+                            if (actual_part_sz < seg.start_offset) {
+                                seg.current_offset = seg.start_offset;
+                                seg.completed = false;
+                            } else if (seg.current_offset > actual_part_sz) {
+                                seg.current_offset = actual_part_sz;
+                                seg.completed = false;
+                            }
                         }
                     }
                     recomputed_dl += seg.downloaded_bytes();

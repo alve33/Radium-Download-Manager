@@ -14,6 +14,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <shlobj.h>
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -122,6 +123,7 @@ TaskState TaskStateFromString(const std::string& s) {
 
 std::string ConflictPolicyToString(ConflictPolicy p) {
     switch (p) {
+        case ConflictPolicy::kPrompt:      return "prompt";
         case ConflictPolicy::kAutoRename:   return "auto_rename";
         case ConflictPolicy::kOverwrite:    return "overwrite";
         case ConflictPolicy::kFailIfExists: return "fail_if_exists";
@@ -130,6 +132,7 @@ std::string ConflictPolicyToString(ConflictPolicy p) {
 }
 
 ConflictPolicy ConflictPolicyFromString(const std::string& s) {
+    if (s == "prompt") return ConflictPolicy::kPrompt;
     if (s == "overwrite" || s == "OVERWRITE") return ConflictPolicy::kOverwrite;
     if (s == "fail_if_exists" || s == "FAIL_IF_EXISTS") return ConflictPolicy::kFailIfExists;
     return ConflictPolicy::kAutoRename;
@@ -377,7 +380,7 @@ Result<std::filesystem::path> PathSanitizer::ResolveSafeOutputPath(
     if (policy == ConflictPolicy::kOverwrite) {
         return Result<std::filesystem::path>::Ok(target);
     }
-    if (policy == ConflictPolicy::kFailIfExists) {
+    if (policy == ConflictPolicy::kFailIfExists || policy == ConflictPolicy::kPrompt) {
         return Result<std::filesystem::path>::Err("ERR_FILE_EXISTS", "Destination file already exists");
     }
 
@@ -502,7 +505,7 @@ Result<std::filesystem::path> PathSanitizer::CommitPartFile(
 #endif
     };
 
-    if (policy == ConflictPolicy::kFailIfExists) {
+    if (policy == ConflictPolicy::kFailIfExists || policy == ConflictPolicy::kPrompt) {
         int mv = try_atomic_move_no_replace(part_file, initial_target);
         if (mv == 0) {
             return Result<std::filesystem::path>::Ok(initial_target);
@@ -520,18 +523,40 @@ Result<std::filesystem::path> PathSanitizer::CommitPartFile(
         if (MoveFileExW(wsrc.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING)) {
             return Result<std::filesystem::path>::Ok(initial_target);
         }
-        if (CopyFileW(wsrc.c_str(), wdst.c_str(), FALSE)) {
-            DeleteFileW(wsrc.c_str());
-            return Result<std::filesystem::path>::Ok(initial_target);
+        if (GetLastError() == ERROR_NOT_SAME_DEVICE) {
+            std::filesystem::path replacement_tmp;
+            for (uint32_t i = 0; i < 1000; ++i) {
+                replacement_tmp = initial_target;
+                replacement_tmp += L".radium-replace-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64() + i);
+                if (CopyFileW(wsrc.c_str(), replacement_tmp.c_str(), TRUE)) {
+                    std::wstring wtmp = replacement_tmp.wstring();
+                    if (MoveFileExW(wtmp.c_str(), wdst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                        DeleteFileW(wsrc.c_str());
+                        return Result<std::filesystem::path>::Ok(initial_target);
+                    }
+                    DeleteFileW(wtmp.c_str());
+                    break;
+                }
+                if (GetLastError() != ERROR_FILE_EXISTS && GetLastError() != ERROR_ALREADY_EXISTS) break;
+            }
         }
         return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", "Overwrite commit failed: " + std::to_string(GetLastError()));
 #else
         std::filesystem::rename(part_file, initial_target, ec);
         if (!ec) return Result<std::filesystem::path>::Ok(initial_target);
-        std::filesystem::copy_file(part_file, initial_target, std::filesystem::copy_options::overwrite_existing, ec);
-        if (!ec) {
-            std::filesystem::remove(part_file, ec);
-            return Result<std::filesystem::path>::Ok(initial_target);
+        for (uint32_t i = 0; i < 1000; ++i) {
+            auto replacement_tmp = initial_target;
+            replacement_tmp += ".radium-replace-" + std::to_string(i);
+            if (std::filesystem::exists(replacement_tmp, ec)) continue;
+            std::filesystem::copy_file(part_file, replacement_tmp, std::filesystem::copy_options::none, ec);
+            if (ec) break;
+            std::filesystem::rename(replacement_tmp, initial_target, ec);
+            if (!ec) {
+                std::filesystem::remove(part_file, ec);
+                return Result<std::filesystem::path>::Ok(initial_target);
+            }
+            std::filesystem::remove(replacement_tmp, ec);
+            break;
         }
         return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", "Overwrite commit failed: " + ec.message());
 #endif
@@ -658,28 +683,20 @@ std::filesystem::path PathSanitizer::GetDefaultAppDataDir() {
 
 std::filesystem::path PathSanitizer::GetDefaultDownloadsDir(const std::filesystem::path& exe_dir) {
     (void)exe_dir;
-#ifdef _WIN32
     if (const char* env_radium_dl = std::getenv("RADIUM_DOWNLOAD_DIR")) {
         if (env_radium_dl[0] != '\0') return std::filesystem::path(env_radium_dl);
     }
-    if (const char* env_dl = std::getenv("FLUX_DOWNLOAD_DIR")) {
-        if (env_dl[0] != '\0') return std::filesystem::path(env_dl);
+#ifdef _WIN32
+    PWSTR known_downloads = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, KF_FLAG_DEFAULT, nullptr, &known_downloads)) && known_downloads) {
+        std::filesystem::path downloads(known_downloads);
+        CoTaskMemFree(known_downloads);
+        return downloads;
     }
     if (const char* user_profile = std::getenv("USERPROFILE")) {
-        if (user_profile[0] != '\0') {
-            return std::filesystem::path(user_profile) / "Downloads" / "Radium";
-        }
+        if (user_profile[0] != '\0') return std::filesystem::path(user_profile) / "Downloads";
     }
 #else
-    if (const char* env_radium_dl = std::getenv("RADIUM_DOWNLOAD_DIR")) {
-        if (env_radium_dl[0] != '\0') return std::filesystem::path(env_radium_dl);
-    }
-    if (const char* env_dl = std::getenv("FLUX_DOWNLOAD_DIR")) {
-        if (env_dl[0] != '\0') return std::filesystem::path(env_dl);
-    }
-    if (const char* env_dl_old = std::getenv("OPENIDM_DOWNLOAD_DIR")) {
-        if (env_dl_old[0] != '\0') return std::filesystem::path(env_dl_old);
-    }
 #endif
     std::error_code ec;
     return std::filesystem::temp_directory_path(ec) / "Radium_Downloads";

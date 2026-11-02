@@ -25,7 +25,7 @@ Radium provides three theme modes (`ThemeMode::kDark`, `ThemeMode::kLight`, and 
 | `surface_primary` | `#1E1E22` | `#1E1E22` | `#FFFFFF` | Main toolbar container and search control |
 | `surface_elevated` | `#28282E` | `#28282E` | `#F1F5F9` | Secondary toolbar buttons, dialog cards, and status bar |
 | `surface_hover` | `#2B2B32` | `#2B2B32` | `#E2E8F0` | Interactive row, action button, and tab hover state |
-| `surface_selected` | `#302328` | `#302328` | `#DBEAFE` | Selected download row and active settings category |
+| `surface_selected` | `#302328` | `#302328` | `#302328` | Selected download row and active settings category |
 | `border_subtle` | `#2E2F35` | `#2E2F35` | `#CBD5E1` | 1px structural dividers and panel borders |
 | `border_focus` | `#FF4757` | `#FF4757` | `#FF4757` | 2px keyboard focus ring and active input highlight |
 | `text_primary` | `#F2F2F3` | `#F2F2F3` | `#0F172A` | Primary filenames, dialog titles, and active labels |
@@ -60,12 +60,14 @@ All layout dimensions use a **4px base grid** and scale proportionally across Pe
 | `min_window_width` | `900 px` | `1125 px` | `1350 px` | `1800 px` | Enforced via `WM_GETMINMAXINFO` |
 | `min_window_height` | `560 px` | `700 px` | `840 px` | `1120 px` | Enforced via `WM_GETMINMAXINFO` |
 | `compact_width_threshold` | `1024 px` | `1280 px` | `1536 px` | `2048 px` | Below this width, `Type` and `ETA` columns auto-hide |
-| `toolbar_height` | `48 px` | `60 px` | `72 px` | `96 px` | Top action bar |
-| `sidebar_width` | `216 px` | `270 px` | `324 px` | `432 px` | Left navigation category pane |
-| `table_header_height` | `34 px` | `43 px` | `51 px` | `68 px` | Sortable column header bar |
-| `table_row_height` | `44 px` | `55 px` | `66 px` | `88 px` | Virtualized task row + 6px progress bar |
-| `details_panel_height` | `188 px` | `235 px` | `282 px` | `376 px` | Bottom inspector panel |
+| `toolbar_height` | `56 px` | `70 px` | `84 px` | `112 px` | Main-content action bar |
+| `sidebar_width` | `192 px` | `240 px` | `288 px` | `384 px` | Fixed left navigation rail |
+| `table_header_height` | `38 px` | `48 px` | `57 px` | `76 px` | Main-content table header |
+| `table_row_height` | `52 px` | `65 px` | `78 px` | `104 px` | Task row with inline progress |
+| `details_panel_height` | `142 px` | `178 px` | `213 px` | `284 px` | Bottom inspector when a task is selected |
 | `status_bar_height` | `28 px` | `35 px` | `42 px` | `56 px` | Bottom application status bar |
+
+The scaled table row height is the baseline. When the table body is only a few pixels short of fitting one more row, rows compact slightly (with a 44px scaled floor) so the list does not leave a nearly full row of unused space. In narrow windows, `Upload` hides first and `Download` next; `Added` stays visible at the minimum supported width. The selected-download action cluster measures each label; `Remove from History` receives extra width to remain fully readable.
 
 ### Typography Ramp
 - **Font Family**: `Segoe UI Variable Display` / `Segoe UI` (Windows 11 native system font).
@@ -79,25 +81,17 @@ All layout dimensions use a **4px base grid** and scale proportionally across Pe
 ## 4. Main Window Architecture & Control States
 
 ### A. Context-Sensitive Main Toolbar (`ToolbarState`)
-The toolbar exposes 10 actions (`+ Add URL`, `Start`, `Pause`, `Resume`, `Retry`, `Cancel`, `Remove`, `Clear History`, `Open Folder`, `Settings`).
+The main-content toolbar prioritizes Sort, All Files, Start All, Pause All, Clear History, Search, and Add Download. Context actions remain available for the selected task through the existing toolbar/context menu.
 - Every control's enabled/disabled state is dynamically computed by `DesktopView::ComputeToolbarState()` based on the currently selected task's state (`kQueued`, `kProbing`, `kDownloading`, `kMuxing`, `kPaused`, `kCompleted`, `kFailed`, `kCanceled`).
+- Text action buttons use a DPI-scaled 8px horizontal label inset and a 10px toolbar gap. Persistent buttons reserve widths of 88px (`Start all`), 96px (`Pause all`), and 116px (`Clear History`) before the search field is laid out. The filter control is 132px wide so common category names fit beside its funnel and caret; long legacy names use an ellipsis.
 - No decorative placeholder buttons exist.
 
-### B. Navigation Sidebar (`SidebarCategory` & `CategoryCounts`)
-Displays 7 categories with live badge counts computed in a single pass over `DownloadController::ListTasks()`:
-1. `All Downloads`
-2. `In Progress` (`PROBING`, `DOWNLOADING`, `MUXING`, `VERIFYING`)
-3. `Queued` (`QUEUED`, non-scheduled `PAUSED`)
-4. `Completed` (`COMPLETED`)
-5. `Failed` (`FAILED`, `CANCELED`)
-6. `Video Downloads` (`STREAM_HLS`, `STREAM_DASH`, `STREAM_MSS`, or `category == "Video"`)
-7. `Scheduled` (`scheduled == true`)
-
-Selecting a category filters the single unified queue view without creating separate queues.
+### B. Fixed Navigation Sidebar (`SidebarCategory` & `CategoryCounts`)
+The main window reserves a DPI-scaled 192px left rail for Radium branding, four live-count navigation entries (`All Downloads`, `In Progress`, `Completed`, `Paused`), and a bottom-anchored Settings entry. Each category filters the unified controller queue. Legacy filters (`Queued`, `Failed`, `Video Downloads`, `Scheduled`) remain available through the toolbar's All Files menu. The sidebar's Settings entry opens the existing Settings Center.
 
 ### C. Virtualized Download List (`BuildVisibleTaskRows`)
-- **Full Mode (`>= 1024 px` scaled)**: Displays 8 columns (`Filename`, `Type`, `Status`, `Progress`, `Size`, `Speed`, `ETA`, `Actions`).
-- **Compact Mode (`< 1024 px` scaled)**: Automatically hides `Type` and `ETA` (`6` columns) to prevent horizontal clipping.
+- **Full Mode (`>= 1024 px`)**: Displays the six reference columns (`Name`, `Size`, `Status`, `Download`, `Upload`, `Added`).
+- **Compact Mode (`< 1024 px`)**: Hides lower-priority metadata columns as width requires to prevent horizontal clipping.
 - **Graceful Filename Truncation**: `TruncateFilenameGracefully()` uses middle ellipsis (`very_long_lect..._1080p.mp4`) so the file extension is always visible while preserving `full_filename_tooltip` for tooltips and the Details Panel.
 - **Honest Progress Formatting**:
   - When `total_bytes > 0`: displays exact percentage (`64.2%`) and determinate bar fill.
@@ -105,8 +99,8 @@ Selecting a category filters the single unified queue view without creating sepa
   - When `total_bytes == 0` on an unchunked HTTP transfer: displays `1.2 MiB (Size Unknown)` and sets `progress_indeterminate = true` — **never** fabricates a percentage.
 - **Granular Stream Stages**: Distinguishes `Probing stream manifest...`, `Downloading video segments (X/Y)`, `Downloading audio segments (X/Y)`, `Downloading subtitle tracks (X/Y)`, `Merging audio/video tracks (FFmpeg)...`, `Verifying output container...`, `Completed`, and `Failed`.
 
-### D. Floating Selected Download Inspector (`PaintDetailsPanelWin32`)
-When a download row is selected, a floating rounded glass card (`card_radius = ScaleForDpi(10, dpi)`) renders smoothly above the status bar with 16px horizontal margin and 6px vertical margin:
+### D. Bottom Selected Download Inspector (`PaintDetailsPanelWin32`)
+When a download row is selected, a details card stays at the bottom of the main content region with DPI-scaled margins. It includes state-appropriate Open Folder, Open File, Resume, Pause, Cancel, or Remove from History actions, wired to `DesktopView` and the controller:
 - **Left Icon Box**: Rounded elevated container (`ScaleForDpi(42, dpi)` x `ScaleForDpi(46, dpi)`) housing a signature Coral Red media/file icon.
 - **Left Metadata Block** (3 rows):
   - Row 1: Filename in bold white Segoe UI accompanied by engine badge (`[WinHTTP]`, `[Stream Pipeline]`).
@@ -178,4 +172,8 @@ The native New Download dialog now reserves a full label line and gap before eac
 ### Context menu state filtering
 
 Task context menus omit disabled transfer actions and present only the action appropriate to the selected task state, with Cancel retained when available. Seeding control is available from More Actions only for completed torrents with uploaded bytes.
+
+### Existing file conflict modal
+
+The centered main-window modal uses `#161618` for the dimmed backdrop, `#1E1E22` for its surface, `#35353D` for its border and secondary controls, and the official Coral Red `#FF4757` for Rename. Its compact card is capped at 620×300 DPI-scaled pixels. It shows the complete destination path, the remember-choice checkbox, and Rename (next available number), Overwrite, and Abort actions. Prefilled conflicts skip the New Download form; manually entered URLs switch from that form as soon as probing identifies an existing destination. The modal captures pointer input while active and Escape/close resolve as Abort.
 

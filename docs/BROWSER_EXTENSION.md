@@ -68,6 +68,8 @@ To minimize security risk and pass Chrome Web Store / Firefox AMO review without
 | **`tabs`** | Required | Queries active tab info and URLs for media classification, watch URL guard, and badge counts. | Required for popup tab binding and per-site capture toggle. |
 | **`host_permissions`: `["*://*/*"]`** | Required | Needed by `webRequest` to observe media CDN requests (which are almost always hosted on third-party CDN domains different from the tab's top-level origin, e.g., `*.akamaized.net`, `*.cloudfront.net`). | Cross-origin CDN requests cannot be observed with `activeTab` alone. |
 
+The response correlator ignores generic XML/JSON and other non-binary responses from passive XHR, script, stylesheet, font, image, and beacon requests. It still records explicit attachment responses and binary/media responses, including downloadable XHR payloads.
+
 
 **Permissions Explicitly Excluded (Compared to Cat Catch):**
 - **No `declarativeNetRequest`:** OpenIDM performs all downloading in `openidm.exe`, never inside the browser, so the extension never needs to modify browser request headers.
@@ -175,6 +177,8 @@ To minimize security risk and pass Chrome Web Store / Firefox AMO review without
 ## Current-page media and compact video control update
 
 Chromium uses `webNavigation.onHistoryStateUpdated` and `onReferenceFragmentUpdated` to clear media candidates when the main-frame document identity changes through SPA or fragment navigation. Full navigations and popup requests use the same per-tab identity check. Unrelated tabs retain their own candidate lists. The player control is aligned to the video container and positioned above its top edge with compact styling. Automated coverage exercises per-tab clearing and toolbar geometry; live Brave behavior still requires browser verification.
+
+The compact player control includes a drag handle inside the existing closed Shadow DOM. Pointer movement sets a viewport-clamped manual position that wins over later video geometry updates; scroll, resize, and fullscreen refreshes retain and clamp that position. Fullscreen no longer hides the control. Drag pointer events are isolated from the download button. The extension also refreshes the desktop `minCaptureSizeBytes` handshake periodically and uses it only for size-only fallback interception; explicit clicks, attachments, recognized MIME types, and recognized extensions keep their independent eligibility rules.
 
 ### Bounded direct-media size lookup
 

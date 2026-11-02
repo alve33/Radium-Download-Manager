@@ -729,6 +729,14 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
             task.status_detail = task.error_message;
             return Result<std::filesystem::path>::Err(single_res.error->code, single_res.error->message);
         }
+        // BUG-015: If total_bytes was known and positive from probe headers, verify that the stream was not prematurely truncated
+        if (total_bytes > 0 && written_offset < total_bytes) {
+            task.state = TaskState::kFailed;
+            task.error_code = "ERR_CONNECTION_CLOSED_PREMATURELY";
+            task.error_message = "Single-stream transfer closed before receiving advertised content length";
+            task.status_detail = task.error_message;
+            return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
+        }
         task.total_bytes = written_offset;
     } else {
         // ---------------------------------------------------------------------

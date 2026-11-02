@@ -1,7 +1,7 @@
 # Flux Download Manager -- Requirement-to-Test Verification Matrix
 
-**Document Status:** Active Verification Matrix (`v0.3.0` — `62 / 62` C++20 Suites, `15 / 15` Extension Suites, `8 / 8` Smoke Suites, `7 / 7` Playwright Suites, and `5 / 5` Security Checks Executed & Passed on Windows 11 Host)  
-**Last Reviewed:** 2026-10-20  
+**Document Status:** Verification Matrix. Latest settings/path/notification/updater/overlay run: `77 / 77` C++20 suites passed, `4 / 4` core suites passed, extension and Playwright suites passed; integration functional stages 1–7 passed and the final performance stage exited with code 2. See the dated verification section below for details. Smoke and dedicated security suites were not run in this session.
+**Last Reviewed:** 2026-11-01
 **Scope:** Maps every functional (`FR-001`–`FR-035`), non-functional (`NFR-001`–`NFR-016`), and bug-regression (`BUG-001`–`BUG-035`, `FDM-001`–`FDM-029`) test to its exact command, verification category, and outcome.  
 **Related Documents:** [archive/maintenance-audits/RELEASE_READINESS_REPORT.md](archive/maintenance-audits/RELEASE_READINESS_REPORT.md), [archive/maintenance-audits/BUG_FIX_LOG.md](archive/maintenance-audits/BUG_FIX_LOG.md), [FEATURE_MATRIX.md](FEATURE_MATRIX.md), [TEST_STRATEGY.md](TEST_STRATEGY.md)
 
@@ -9,23 +9,23 @@
 
 ## 1. Automated Verification Summary (`Windows 11 x64 Host`)
 
-### 1.1 C++20 Unit & Regression Test Suites (`tests/cpp/unit_tests.cpp` — `62 / 62` Suites: Verified by Execution)
+### 1.1 C++20 Unit & Regression Test Suites (`tests/cpp/unit_tests.cpp` — `77 / 77` Suites: Verified by Execution in latest UI redesign run)
 
 | Suite # | Suite Function (`tests/cpp/unit_tests.cpp`) | Mapped Requirements & Bug IDs | Verification Category | Result |
 | :--- | :--- | :--- | :--- | :--- |
-| **`[1/53]`** | `TestPathSanitizerAndContentDisposition` | `FR-001`, `FR-026`, `NFR-006`, `NFR-012`, `SEC-PATH-01` | `Verified by Execution` | **PASSED** |
+| **`[1/53]`** | `TestPathSanitizerAndContentDisposition` | `FR-001`, `FR-026`, `FR-041` (Prompt preflight reports existing destination), `NFR-006`, `NFR-012`, `SEC-PATH-01` | `Verified by Execution` | **PASSED** |
 | **`[2/53]`** | `TestDynamicWorkerAndDiskSpaceGuard` | `FR-020`, `FR-026`, `BUG-005`, `BUG-009`, `BUG-022` | `Verified by Execution` | **PASSED** |
 | **`[3/53]`** | `TestLoggerRedactionAndCrypto` | `FR-007`, `NFR-009`, `SEC-PRIV-01`, `UT-HASH-01` | `Verified by Execution` | **PASSED** |
 | **`[4/53]`** | `TestBriskSegmentSchedulerWorkStealingAndRollback` | `FR-003`, `FR-004`, `UT-SEG-01`, `BUG-008` | `Verified by Execution` | **PASSED** |
 | **`[5/53]`** | `TestSqliteStoreAndCrashRecovery` | `FR-005`, `NFR-005`, `NFR-009`, `IT-CRASH-01` | `Verified by Execution` | **PASSED** |
 | **`[6/53]`** | `TestStreamMetaJsonAndDrmRejection` | `FR-019`, `NFR-015`, `SEC-DRM-01`, `THREAT-004`, `BUG-024` | `Verified by Execution` | **PASSED** |
 | **`[7/53]`** | `TestControllerLifecycleAndDeletedTaskRace` | `FR-023`, `BUG-007`, `BUG-010`, `BUG-034` (Webpage Guard) | `Verified by Execution` | **PASSED** |
-| **`[8/53]`** | `TestDesktopUiDesignSystemAndHighDpiLayout` | `FR-011`, `NFR-011`, `BUG-001` | `Verified by Execution` | **PASSED** |
+| **`[8/53]`** | `TestDesktopUiDesignSystemAndHighDpiLayout` | `FR-011`, `FR-040`, `NFR-011`, `BUG-001` | `Verified by Execution` | **PASSED** |
 | **`[9/53]`** | `TestNativeAnimationsAndTaskbarProgress` | `FR-011`, `NFR-011` | `Verified by Execution` | **PASSED** |
 | **`[10/53]`** | `TestProfessionalSettingsCenterValidationAndPersistence` | `FR-011`, `FR-025` | `Verified by Execution` | **PASSED** |
 | **`[11/53]`** | `TestDesktopUiInteractionsFilteringSortingAndRedaction` | `FR-011`, `FR-023`–`FR-025`, `NFR-009`, `BUG-001`, `BUG-010`, `BUG-011` | `Verified by Execution` | **PASSED** |
 | **`[12/53]`** | `TestKeyboardNavigationAndShortcuts` (queue navigation and Settings shortcut reference) | `FR-011`, `NFR-011`, `BUG-001` | `Verified by Execution` | **PASSED** |
-| **`[13/53]`** | `TestDesktopUiHitTestingAndMouseInteractions` | `FR-011`, `BUG-018`, `BUG-026` | `Verified by Execution` | **PASSED** |
+| **`[13/53]`** | `TestDesktopUiHitTestingAndMouseInteractions` | `FR-011`, `FR-040`, `BUG-018`, `BUG-026` (bottom Settings target, four-category geometry) | `Verified by Execution` | **PASSED** |
 | **`[14/53]`** | `TestWorkerLifecycleAndIncompatibleWorkerDetection` | `FR-020`, `BUG-006`, `BUG-027` | `Verified by Execution` | **PASSED** |
 | **`[15/53]`** | `TestFluxBrandingAndLegacyDataMigration` | `FR-028`, `BUG-030` | `Verified by Execution` | **PASSED** |
 | **`[16/53]`** | `TestPartFileIsolationAndSafeCommit` | `FR-026`, `NFR-006` | `Verified by Execution` | **PASSED** |
@@ -38,7 +38,7 @@
 | **`[23/53]`** | `TestPosixHttpChunkedDecoder` | `FR-001`, `FR-002` | `Verified by Execution` | **PASSED** |
 | **`[24/53]`** | `TestUrlParsingAndSecurityChecks` | `FR-001`, `NFR-006` | `Verified by Execution` | **PASSED** |
 | **`[25/53]`** | `TestIpcShutdownAndFirstPipeInstance` | `NFR-007`, `NFR-008` | `Verified by Execution` | **PASSED** |
-| **`[26/53]`** | `TestConflictPolicies` | `FR-026` | `Verified by Execution` | **PASSED** |
+| **`[26/53]`** | `TestConflictPolicies` | `FR-026`, `FR-041` (Prompt refuses replacement, retains incoming part, and Abort clears the conflict error on cancellation) | `Verified by Execution` | **PASSED** |
 | **`[27/53]`** | `TestSystemSuspendResumeAndPauseReason` | `FR-005`, `FR-023` | `Verified by Execution` | **PASSED** |
 | **`[28/53]`** | `TestConcurrentAtomicCommitsAndSha256` | `FR-007`, `FR-026` | `Verified by Execution` | **PASSED** |
 | **`[29/53]`** | `TestDnsRebindingAndDestinationSecurity` | `FR-001`, `NFR-007` | `Verified by Execution` | **PASSED** |
@@ -64,7 +64,7 @@
 | **`[49/53]`** | `TestExpiredLinkRefreshAndCookieReplacement` | `FR-006` (Expired Link 403/410 Detection, Presigned URL Refresh & Cookie Replacement) | `Verified by Execution` | **PASSED** |
 | **`[50/53]`** | `TestSegmentSchedulerChunkNormalizationAndTruncationGuard` | `FR-003`, `FR-005` (Segment Restored Chunk Normalization & Truncation Guard) | `Verified by Execution` | **PASSED** |
 | **`[51/53]`** | `TestUrlUserinfoExtractionAndBasicAuthGeneration` | `FR-001` (URL Userinfo Extraction & HTTP Basic Authorization Header Generation) | `Verified by Execution` | **PASSED** |
-| **`[52/53]`** | `TestModernCoralThemeSettingsModalBoundsAndSafeDelete` | `FR-011`, `FR-026`, `NFR-011` (Coral Charcoal Theme `#FF4F57`, Modal Hit-Testing Bounds, Recycle Bin Safe Delete & Header Sorting Direction) | `Verified by Execution` | **PASSED** |
+| **`[52/53]`** | `TestModernCoralThemeSettingsModalBoundsAndSafeDelete` | `FR-011`, `FR-026`, `NFR-011` (Coral Charcoal Theme `#FF4757`, Modal Hit-Testing Bounds, Recycle Bin Safe Delete & Header Sorting Direction) | `Verified by Execution` | **PASSED** |
 | **`[53/61]`** | `TestYouTubeSpeedParsingMidnightCrossingAndBitTorrentUpload` | `FR-019`, `FR-024`, `FR-030` (YouTube Regex Speed Extraction, Scheduled Midnight-Crossing Window & BT Unchoke/Block Upload Accounting) | `Verified by Execution` | **PASSED** |
 | **`[54/61]`** | `TestFinalPhaseRemediationAndLiveMetrics` | `FR-011`, `FR-019`, `FR-026` (Toolbar Sort Stabilization, Recycle Bin vs Disk Delete, YouTube Googlevideo Routing) | `Verified by Execution` | **PASSED** |
 | **`[55/61]`** | `TestYouTubeCanonicalRoutingAndSchedulerThroughput` | `FR-003`, `FR-019`, `FR-020` (SegmentScheduler Dynamic Split-Eligibility, YouTube Watch Canonicalization & VP9/AV1 1080p Format Verification) | `Verified by Execution` | **PASSED** |
@@ -78,11 +78,11 @@
 
 ---
 
-### 1.2 Browser Extension & Media Detection Test Suites (`node tests/test_extension_detection.js` — `15 / 15 PASSED (24 / 24 Edge Scenarios)`)
+### 1.2 Browser Extension & Media Detection Test Suites (`node tests/test_extension_detection.js` — `18 / 18 PASSED` in latest UI redesign run)
 
 | Suite # | Suite Description (`tests/test_extension_detection.js`) | Mapped Requirements & Bug IDs | Verification Category | Result |
 | :--- | :--- | :--- | :--- | :--- |
-| **`[1/12]`** | Direct MP4/WebM & HLS/DASH Detection + Header Correlation | `FR-014` | `Verified by Execution` | **PASSED** |
+| **`[1/12]`** | Direct MP4/WebM & HLS/DASH Detection + Header Correlation; passive XML XHR suppression and binary XHR retention | `FR-014` | `Verified by Execution` | **PASSED** |
 | **`[2/12]`** | Master vs. Child HLS Deduplication & `.ts` Segment Suppression | `FR-014`, `FR-016` | `Verified by Execution` | **PASSED** |
 | **`[3/12]`** | Per-Site Exclusion Setting & Popup Rendering | `FR-009`, `FR-014` | `Verified by Execution` | **PASSED** |
 | **`[4/12]`** | Page-Context Deep Search Hook (Obfuscated Manifest Capture + Nonce) | `FR-013`, `FR-017`, `BUG-032` | `Verified by Execution` | **PASSED** |
@@ -100,7 +100,7 @@
 
 ---
 
-### 1.3 End-to-End Integration, Stream Pipeline & Benchmark Suites (`python tests/run_all_integration_tests.py` — `8 / 8 PASSED`)
+### 1.3 End-to-End Integration, Stream Pipeline & Benchmark Suites (`python tests/run_all_integration_tests.py` — latest run stopped at stage 7/8)
 
 | Suite # | Test ID & Description (`tests/run_all_integration_tests.py`) | Mapped Requirements & Bug IDs | Verification Category | Result |
 | :--- | :--- | :--- | :--- | :--- |
@@ -110,8 +110,8 @@
 | **`[4/8]`** | `IT-HTTP-04`: Dropped Connection Reset & Resume from Exact Byte Offset | `FR-004` | `Verified by Execution` | **PASSED** |
 | **`[5/8]`** | `IT-STREAM-01` & `IT-STREAM-02`: HLS Master Manifest Probe & FFmpeg Container Muxing | `FR-019`, `FR-020`, `BUG-023`, `BUG-024` | `Verified by Execution` | **PASSED** |
 | **`[6/8]`** | `IT-STREAM-03`: MPEG-DASH (`.mpd`) Manifest Download & FFmpeg Muxing | `FR-020`, `BUG-023` | `Verified by Execution` | **PASSED** |
-| **`[7/8]`** | `IT-IPC-01`, `IT-STREAM-06` & `IT-UI-01`: Native Messaging Host, AES-128 Decryption, Log Redaction & Desktop UI Snapshot | `FR-021`, `FR-022`, `NFR-007`–`NFR-009`, `BUG-002`, `BUG-004`, `BUG-025` | `Verified by Execution` | **PASSED** |
-| **`[8/8]`** | `PERF-BENCH-01`: Core Binaries (`2,047.0 KB` <= 3072 KB), Startup (`71.05 ms` <= 150 ms), Idle RSS (`10.34 MB` <= 25 MB), HTTP Peak RSS (`15.7 MB` <= 65 MB), Stream Peak RSS (`11.04 MB` <= 65 MB), UI Snapshot (`143.09 ms` <= 300 ms), Throughput (`223.0 Mbps` >= 50 Mbps) | `NFR-001`–`NFR-004`, `BUG-017`, `BUG-021` | `Verified by Execution` | **PASSED** |
+| **`[7/8]`** | `IT-IPC-01`, `IT-STREAM-06` & `IT-UI-01`: Native Messaging Host, AES-128 Decryption, Log Redaction & Desktop UI Snapshot | `FR-021`, `FR-022`, `NFR-007`–`NFR-009`, `BUG-002`, `BUG-004`, `BUG-025` | `Failed during handshake assertion` | **FAILED: response had no `result` field (`KeyError`)** |
+| **`[8/8]`** | `PERF-BENCH-01`: Core Binaries, startup, memory, UI snapshot & throughput benchmarks | `NFR-001`–`NFR-004`, `BUG-017`, `BUG-021` | `Not reached after stage 7 failure` | **NOT RUN** |
 
 ---
 
@@ -148,7 +148,7 @@
 
 ---
 
-### 1.5 Automated Browser Extension Runtime Playwright Suites (`node tests/browser/test_extension_runtime.js` — `7 / 7 PASSED`)
+### 1.5 Automated Browser Extension Runtime Playwright Suites (`node tests/browser/test_extension_runtime.js` — `8 / 8 PASSED` in latest UI redesign run)
 
 | Suite # | Test Scenario (`tests/browser/test_extension_runtime.js`) | Mapped Requirements & Invariants | Verification Category | Result |
 | :--- | :--- | :--- | :--- | :--- |
@@ -326,3 +326,17 @@ Ran three repetitions for each of four cases (`fast`, 25 ms `latency_only`, 5 ms
 Lock/write totals are accumulated across concurrent threads and can overlap in wall time; segment-write lock hold includes callback work. The request non-callback time is only an approximation and includes WinHTTP setup as well as response/network waiting. The latency-only case measured about 26 ms to response headers, while pacing-only showed sub-millisecond header delay and longer body-handler time, confirming the fixture distinguishes those effects. Scheduler-lock waits rise notably at 8 connections in fast and latency-only runs, making contention a plausible contributor, but the transfer medians also vary by scenario and overlap. Runtime tracing adds logging/timing overhead, so these transfer timings are diagnostic rather than production-performance measurements. These measurements do not establish lock contention, disk writing, worker scheduling, or network waiting as the single general bottleneck. No optimization is recommended from this local sample.
 
 The 24 per-run JSON traces and `summary.json` are in `benchmarks/results/local_lock_disk_audit_20261026/`; `report.md` contains full interpretation and verification details. Incremental MSVC Release build succeeded, the C++ suite passed 72/72, and the standalone telemetry fixture test passed. The active Python environment has no `pytest` module, so that test was invoked directly.
+# Settings, destinations, notifications, updater and video overlay regression verification (2026-11-01)
+
+The current change adds regression coverage for Settings category removal while preserving internal classification; default and explicit destination resolution (including legacy category/site routes); persisted last-used directories and cancel behavior; completion/failure notification delivery, disabled notifications and per-task deduplication; semantic release version comparison and unsafe/missing update assets; and movable overlay position/drag behavior. Execution results from the current Windows Release checkout:
+
+| Verification | Result |
+| :--- | :--- |
+| `radium_unit_tests.exe` | PASS, 77/77 suites |
+| `radium_core_tests.exe` | PASS, 4/4 suites |
+| `node tests/test_extension_detection.js` | PASS (including interception, overlay, manifest and regression checks) |
+| `node tests/browser/test_extension_runtime.js` | PASS, 8/8 Playwright Chromium runtime suites |
+| `python tests/run_all_integration_tests.py` | Functional stages 1–7 PASS (PE artifacts, HTTP range/fallback/resume, HLS, DASH, IPC and UI snapshot). Stage 8 performance benchmark failed because its 16 MiB download child exited with code 2; the harness redirects that child's output, so the specific task error was not available in this run. |
+| MSVC Release build (`radium`, `radium_unit_tests`, `radium_core_tests`) | PASS. MSBuild emitted warning MSB8028 about shared intermediate directories for test targets. |
+
+The GitHub release API was not verified against the live service in this run. Installer download, SHA-256/Authenticode verification and signed-manifest validation remain intentionally unavailable until the project provides a trusted signing identity, Ed25519 public key and signed manifest infrastructure; no downloaded executable is automatically launched.

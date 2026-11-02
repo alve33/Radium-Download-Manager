@@ -278,7 +278,10 @@ public:
             // Keep-alive
             return std::nullopt;
         }
-        if (len < 4 + payload_len) {
+        if (payload_len > 2 * 1024 * 1024) {
+            return std::nullopt; // Overflow / oversized protection
+        }
+        if (len < 4 + static_cast<size_t>(payload_len)) {
             return std::nullopt; // Incomplete message
         }
         uint8_t id_byte = data[4];

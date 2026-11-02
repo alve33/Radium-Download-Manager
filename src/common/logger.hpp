@@ -35,8 +35,19 @@ private:
     std::vector<std::string> m_ring_buffer;
 };
 
-#define OPENIDM_LOG_INFO(comp, msg) ::openidm::Logger::Instance().Log(::openidm::LogLevel::kInfo, (comp), (msg))
-#define OPENIDM_LOG_WARN(comp, msg) ::openidm::Logger::Instance().Log(::openidm::LogLevel::kWarn, (comp), (msg))
-#define OPENIDM_LOG_ERROR(comp, msg) ::openidm::Logger::Instance().Log(::openidm::LogLevel::kError, (comp), (msg))
+#define RADIUM_LOG_INFO(comp, msg) ::openidm::Logger::Instance().Log(::openidm::LogLevel::kInfo, (comp), (msg))
+#define RADIUM_LOG_WARN(comp, msg) ::openidm::Logger::Instance().Log(::openidm::LogLevel::kWarn, (comp), (msg))
+#define RADIUM_LOG_ERROR(comp, msg) ::openidm::Logger::Instance().Log(::openidm::LogLevel::kError, (comp), (msg))
+
+// Backward compatibility macros
+#ifndef OPENIDM_LOG_INFO
+#define OPENIDM_LOG_INFO(comp, msg) RADIUM_LOG_INFO(comp, msg)
+#endif
+#ifndef OPENIDM_LOG_WARN
+#define OPENIDM_LOG_WARN(comp, msg) RADIUM_LOG_WARN(comp, msg)
+#endif
+#ifndef OPENIDM_LOG_ERROR
+#define OPENIDM_LOG_ERROR(comp, msg) RADIUM_LOG_ERROR(comp, msg)
+#endif
 
 } // namespace openidm

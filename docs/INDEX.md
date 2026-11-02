@@ -34,6 +34,7 @@
 ### 2.3 Storage, Reliability & Security
 - **[DATA_MODEL_AND_STORAGE.md](DATA_MODEL_AND_STORAGE.md)** — SQLite WAL schema, state machine, crash recovery, and atomic commit semantics.
 - **[ERROR_HANDLING_AND_RECOVERY.md](ERROR_HANDLING_AND_RECOVERY.md)** — Error taxonomy, exponential retry backoff, and recovery flows.
+- **[SETTINGS_AUDIT.md](SETTINGS_AUDIT.md)** — Visible Settings controls traced from UI through persistence to runtime consumers.
 - **[SECURITY_THREAT_MODEL.md](SECURITY_THREAT_MODEL.md)** — STRIDE threat model, credential protections (DPAPI), and path sanitization.
 - **[PRIVACY_AND_DATA_HANDLING.md](PRIVACY_AND_DATA_HANDLING.md)** — Sensitive data classification, redaction policies, and telemetry boundaries.
 - **[KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)** — Explicit non-goals (DRM non-circumvention, browser-internal blobs) and platform constraints.

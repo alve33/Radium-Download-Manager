@@ -60,3 +60,12 @@ Per Section 6 of the Master Prompt: **Never silently convert an uncertain decisi
 - **Impact on Implementation:** Would add `stream.appendChunk` to [NATIVE_MESSAGING_AND_IPC.md](NATIVE_MESSAGING_AND_IPC.md).
 - **Who / What Resolves It:** Browser Extension Engineer in Milestone 5 (`M5`).
 - **Interim Baseline Behavior:** Explicitly unsupported in MVP (`KNOWN_LIMITATIONS.md`).
+
+---
+
+### `OQ-005`: Provisioning authenticated update-signing infrastructure
+- **Importance:** Critical (prevents a forged GitHub release or installer from being automatically executed).
+- **Empirical evidence (2026-11-01):** Repository search found no Ed25519 update manifest/signature asset, no embedded update public key, no release workflow signing step or key configuration, no Authenticode `WinVerifyTrust` verifier, and no configured expected publisher identity. The release workflow publishes SHA256SUMS, which is not an authenticated signature.
+- **Decision:** The Settings updater may query and display the latest stable GitHub Release, compare SemVer, and identify architecture-specific assets. It must not download-and-execute an installer until an Ed25519 public key and signing workflow are provisioned and an expected Authenticode publisher identity is established.
+- **Who resolves it:** Project release maintainer before enabling automatic installer execution.
+- **Interim baseline behavior:** “Check for Updates” opens only the official release page for manual installation; no downloaded executable is launched.

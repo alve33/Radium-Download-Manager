@@ -66,7 +66,7 @@ jobs:
 
       - name: Build Windows Targets
         run: |
-          cmake --build build --config Release --target radium radium-nmh radium_unit_tests radium_core_tests openidm openidm-nmh openidm_unit_tests N_m3u8DL-RE
+          cmake --build build --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE
 
       - name: Provision Upstream Stream Workers
         shell: powershell
