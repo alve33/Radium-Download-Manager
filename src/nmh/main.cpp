@@ -236,11 +236,6 @@ int main(int argc, char* argv[]) {
 #endif
 
     std::string sock_path = openidm::ipc::GetDefaultIpcSocketPath();
-    if (const char* env_flux = std::getenv("FLUX_IPC_SOCKET")) {
-        sock_path = env_flux;
-    } else if (const char* env_old = std::getenv("OPENIDM_IPC_SOCKET")) {
-        sock_path = env_old;
-    }
     std::filesystem::path daemon_bin;
     if (argc > 0 && argv[0]) {
         std::filesystem::path self_path = std::filesystem::path(argv[0]);

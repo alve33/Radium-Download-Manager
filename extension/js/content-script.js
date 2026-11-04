@@ -125,20 +125,20 @@ function cleanupContentScript() {
 function safeSendRuntimeMessage(msg, callback) {
   if (!isExtensionContextValid()) {
     cleanupContentScript();
-    if (typeof callback === "function") callback(null);
+    if (typeof callback === "function") callback(null, "Extension reloaded. Please refresh the page.");
     return;
   }
   try {
     chrome.runtime.sendMessage(msg, (response) => {
       const err = (typeof chrome !== "undefined" && chrome.runtime) ? chrome.runtime.lastError : null;
-      if (err) {
-        const msgStr = err.message || String(err);
-        if (msgStr.includes("context invalidated") || msgStr.includes("Extension context invalidated")) {
+      const errMsg = err ? (err.message || String(err)) : null;
+      if (errMsg) {
+        if (errMsg.includes("context invalidated") || errMsg.includes("Extension context invalidated")) {
           cleanupContentScript();
         }
       }
       if (typeof callback === "function") {
-        callback(response);
+        callback(response, errMsg);
       }
     });
   } catch (ex) {
@@ -147,7 +147,7 @@ function safeSendRuntimeMessage(msg, callback) {
       cleanupContentScript();
     }
     if (typeof callback === "function") {
-      callback(null);
+      callback(null, exStr || "Extension communication error");
     }
   }
 }
@@ -186,6 +186,13 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       : { width: video.width || 640, height: video.height || 360, top: 20, left: 20, right: 660, bottom: 380 };
 
     const isYouTube = Boolean(doc.location && doc.location.hostname && (doc.location.hostname.includes("youtube.com") || doc.location.hostname === "youtu.be"));
+    if (isYouTube && doc && doc.location && doc.location.href && !doc.__radiumYtPrewarmed) {
+      doc.__radiumYtPrewarmed = true;
+      safeSendRuntimeMessage({
+        action: "triggerYouTubePrewarm",
+        url: doc.location.href
+      });
+    }
     const isPlayerCandidate = (rect.width >= minWidth && rect.height >= minHeight) ||
       (isYouTube && (rect.width >= 160 || (video.parentElement && video.parentElement.id === "movie_player")));
 
@@ -228,17 +235,17 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     }
 
     video.dataset.radiumOverlayAttached = "true";
-    video.dataset.radiumOverlayAttached = "true";
     video.dataset.fluxOverlayAttached = "true";
     video.dataset.openidmOverlayAttached = "true";
 
     const hostEl = doc.createElement("div");
     hostEl.setAttribute("data-radium-shadow-host", "true");
-    hostEl.setAttribute("data-radium-shadow-host", "true");
     hostEl.setAttribute("data-flux-shadow-host", "true");
     hostEl.setAttribute("data-openidm-shadow-host", "true");
-    if (isDrm) hostEl.setAttribute("data-radium-drm", "true");
-    hostEl.setAttribute("data-flux-drm", "true");
+    if (isDrm) {
+      hostEl.setAttribute("data-radium-drm", "true");
+      hostEl.setAttribute("data-flux-drm", "true");
+    }
     positionOverlayHost(video, hostEl);
 
     // Closed Shadow DOM ensures zero CSS leakage into or from the host webpage
@@ -958,7 +965,9 @@ function initContentScript() {
                 const chosenText = chosen.resolution || chosen.label || "";
                 const chosenSz = chosen.size > 0 ? ` (~${(chosen.size / 1048576).toFixed(0)} MB)` : "";
 
-                if (h.__radiumBtn && !h.getAttribute("data-flux-status") && !h.getAttribute("data-flux-drm")) {
+                if (h.__radiumBtn &&
+                    !h.getAttribute("data-radium-status") && !h.getAttribute("data-flux-status") &&
+                    !h.getAttribute("data-radium-drm") && !h.getAttribute("data-flux-drm")) {
                   h.__radiumBtn.textContent = `Download [${chosenText}${chosenSz}]`;
                   h.__radiumBtn.title = `Download ${chosenText} with Radium Download Manager`;
                 }
@@ -1088,6 +1097,7 @@ function initContentScript() {
           hasDownloadAttr: Boolean(ev.data.download),
           referrer: ev.data.pageUrl || location.href,
           pageTitle: ev.data.pageTitle || document.title,
+          clickTime: ev.data.clickTime || Date.now(),
           bypass: false,
           mechanism: "JS_TRIGGERED_DYNAMIC_ANCHOR",
           isFrame: (window !== window.top),
@@ -1190,6 +1200,7 @@ function initContentScript() {
     }
     if (hostEl && hostEl.setAttribute) {
       hostEl.setAttribute("data-radium-status", "starting");
+      hostEl.setAttribute("data-flux-status", "starting");
     }
 
     const lastCand = (typeof window !== "undefined" && window.__radiumLastCandidate) ? window.__radiumLastCandidate : null;
@@ -1214,16 +1225,20 @@ function initContentScript() {
       selectedQuality: chosenQ,
       url: videoSrc,
       isMseBlob: Boolean(mediaMeta.isMseBlob),
+      // The user explicitly pressed the in-player download button. Start the
+      // selected stream immediately instead of opening a second confirmation.
+      autoStart: true,
+      clickTime: Date.now(),
       pageTitle: mediaMeta.pageTitle || document.title || "video",
       tabUrl: mediaMeta.tabUrl || location.href,
       frameUrl: mediaMeta.frameUrl || location.href
-    }, (resp) => {
-      const lastErr = (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError)
+    }, (resp, runtimeErr) => {
+      const lastErr = runtimeErr || ((typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError)
         ? chrome.runtime.lastError.message
-        : null;
+        : null);
 
       if (lastErr || !resp || !resp.success) {
-        const errText = lastErr || (resp && resp.error) || "Download failed";
+        const errText = (resp && resp.error) || lastErr || "Please reload page to re-sync extension";
         if (btn) {
           btn.textContent = "Error: " + (errText.length > 28 ? errText.slice(0, 28) + "..." : errText);
           btn.title = errText;
@@ -1232,20 +1247,26 @@ function initContentScript() {
         }
         if (hostEl && hostEl.setAttribute) {
           hostEl.setAttribute("data-radium-status", "error");
+          hostEl.setAttribute("data-flux-status", "error");
           hostEl.setAttribute("data-radium-error", errText);
+          hostEl.setAttribute("data-flux-error", errText);
         }
       } else {
         const isFallback = Boolean(resp.result && resp.result.fallbackToBrowser);
         const taskId = (resp.result && resp.result.taskId) ? resp.result.taskId : "";
         if (btn) {
-          btn.textContent = isFallback ? "Browser Download" : "Queued in Radium \u2713";
+          btn.textContent = isFallback ? "Browser Download" : "Starting in Radium \u2713";
           btn.title = taskId ? ("Task ID: " + taskId) : "Queued in Radium";
           btn.disabled = false;
           if (btn.style) btn.style.cssText = baseStyle + "border-color:#22C55E;color:#86EFAC;";
         }
         if (hostEl && hostEl.setAttribute) {
           hostEl.setAttribute("data-radium-status", isFallback ? "browser_fallback" : "queued");
-          if (taskId) hostEl.setAttribute("data-radium-task-id", taskId);
+          hostEl.setAttribute("data-flux-status", isFallback ? "browser_fallback" : "queued");
+          if (taskId) {
+            hostEl.setAttribute("data-radium-task-id", taskId);
+            hostEl.setAttribute("data-flux-task-id", taskId);
+          }
         }
       }
 

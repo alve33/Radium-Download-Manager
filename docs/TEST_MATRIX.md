@@ -1,4 +1,4 @@
-# Flux Download Manager -- Requirement-to-Test Verification Matrix
+# Radium Download Manager -- Requirement-to-Test Verification Matrix
 
 **Document Status:** Verification Matrix. Latest settings/path/notification/updater/overlay run: `77 / 77` C++20 suites passed, `4 / 4` core suites passed, extension and Playwright suites passed; integration functional stages 1–7 passed and the final performance stage exited with code 2. See the dated verification section below for details. Smoke and dedicated security suites were not run in this session.
 **Last Reviewed:** 2026-11-01
@@ -27,7 +27,7 @@
 | **`[12/53]`** | `TestKeyboardNavigationAndShortcuts` (queue navigation and Settings shortcut reference) | `FR-011`, `NFR-011`, `BUG-001` | `Verified by Execution` | **PASSED** |
 | **`[13/53]`** | `TestDesktopUiHitTestingAndMouseInteractions` | `FR-011`, `FR-040`, `BUG-018`, `BUG-026` (bottom Settings target, four-category geometry) | `Verified by Execution` | **PASSED** |
 | **`[14/53]`** | `TestWorkerLifecycleAndIncompatibleWorkerDetection` | `FR-020`, `BUG-006`, `BUG-027` | `Verified by Execution` | **PASSED** |
-| **`[15/53]`** | `TestFluxBrandingAndLegacyDataMigration` | `FR-028`, `BUG-030` | `Verified by Execution` | **PASSED** |
+| **`[15/77]`** | `TestRadiumBrandingAndLegacyDataMigration` | `FR-028`, `BUG-030` | `Verified by Execution` | **PASSED** |
 | **`[16/53]`** | `TestPartFileIsolationAndSafeCommit` | `FR-026`, `NFR-006` | `Verified by Execution` | **PASSED** |
 | **`[17/53]`** | `TestResourceAwareResumeAndValidatorMismatch` | `FR-005`, `NFR-005` | `Verified by Execution` | **PASSED** |
 | **`[18/53]`** | `TestSegmentSchedulerBoundarySplitRaceGuard` | `FR-003`, `FR-004` | `Verified by Execution` | **PASSED** |
@@ -74,7 +74,22 @@
 | **`[59/61]`** | `TestAuditBehaviorImprovements` | `FR-001`, `FR-004`, `FR-020` (Audit-derived Behavior Improvements: Range Satisfaction, Stream Part Files, Crash Recovery) | `Verified by Execution` | **PASSED** |
 | **`[60/62]`** | `TestQualitySelectionSizeAndColumnDocking` | `FR-011`, `FR-019` (Video Quality Selection, Size Reporting & Table Column Right-Docking Anchors) | `Verified by Execution` | **PASSED** |
 | **`[61/62]`** | `TestNewDownloadDialogSubmissionAndTaskCreation` | `FR-011`, `FR-019`, `FR-025` (New Download Dialog Submission, Quality Options Propagation & State Reset) | `Verified by Execution` | **PASSED** |
-| **`[62/62]`** | `TestYouTubeQualitySelectionIntegrityAndVerification` | `FR-019`, `FR-020`, `FR-021` (YouTube 1080p Format Selection Integrity, ffprobe Media Verification, Progress Capping & Indeterminate Status) | `Verified by Execution` | **PASSED** |
+| **`[62/77]`** | `TestYouTubeQualitySelectionIntegrityAndVerification` | `FR-019`, `FR-020`, `FR-021` (YouTube 1080p Format Selection Integrity, ffprobe Media Verification, Progress Capping & Indeterminate Status) | `Verified by Execution` | **PASSED** |
+| **`[63/77]`** | `TestAutoScrollToCurrentDownload` | `FR-011`, `NFR-011` | `Verified by Execution` | **PASSED** |
+| **`[64/77]`** | `TestHttp429AdaptiveConnectionFallbackAndIntegrity` | `FR-001`, `FR-004`, `NFR-005` | `Verified by Execution` | **PASSED** |
+| **`[65/77]`** | `TestBitTorrentEngineTransferAndIntegrity` | `FR-030` | `Verified by Execution` | **PASSED** |
+| **`[66/77]`** | `TestUdpTrackerProtocolLiveExchange` | `FR-030` | `Verified by Execution` | **PASSED** |
+| **`[67/77]`** | `TestMagnetMetadataExchangeBEP9Live` | `FR-030` | `Verified by Execution` | **PASSED** |
+| **`[68/77]`** | `TestDhtIterativePeerDiscoveryLive` | `FR-030` | `Verified by Execution` | **PASSED** |
+| **`[69/77]`** | `TestMultiPeerTransferAndSeedingControls` | `FR-030` | `Verified by Execution` | **PASSED** |
+| **`[70/77]`** | `TestPauseAllManualPauseScheduleAndRecovery` | `FR-005`, `FR-023`, `FR-025` | `Verified by Execution` | **PASSED** |
+| **`[71/77]`** | `TestNewDownloadDialogRowSpacingAcrossDpi` | `FR-011`, `NFR-011` | `Verified by Execution` | **PASSED** |
+| **`[72/77]`** | `TestSegmentSchedulerDoesNotResplitInFlightRange` | `FR-003`, `FR-004` | `Verified by Execution` | **PASSED** |
+| **`[73/77]`** | `TestHttpRangeCorrectnessAnd416Validation` | `FR-001`, `FR-004` | `Verified by Execution` | **PASSED** |
+| **`[74/77]`** | `TestHttpRecoveryAndResumeReliability` | `FR-001`, `FR-005` | `Verified by Execution` | **PASSED** |
+| **`[75/77]`** | `TestHttpRangePrepartitionEquipartitionInvariants` | `FR-003`, `FR-004` | `Verified by Execution` | **PASSED** |
+| **`[76/77]`** | `TestInitializeEquipartitionEdgeCases` | `FR-003`, `FR-004` | `Verified by Execution` | **PASSED** |
+| **`[77/77]`** | `TestFeatureMaturityHardeningFiveFeatures` | `FR-010`, `FR-011`, `FR-019`, `FR-024`, `FR-030` | `Verified by Execution` | **PASSED** |
 
 ---
 
@@ -330,6 +345,10 @@ The 24 per-run JSON traces and `summary.json` are in `benchmarks/results/local_l
 
 The current change adds regression coverage for Settings category removal while preserving internal classification; default and explicit destination resolution (including legacy category/site routes); persisted last-used directories and cancel behavior; completion/failure notification delivery, disabled notifications and per-task deduplication; semantic release version comparison and unsafe/missing update assets; and movable overlay position/drag behavior. Execution results from the current Windows Release checkout:
 
+### YouTube best-effort quality and startup dispatch follow-up (2026-11-04)
+
+Implemented best-effort YouTube resolution validation: a lower actual resolution no longer fails the direct adaptive path, the completed task detail reports the probed dimensions, and media/container validation remains enforced. The scheduler notification now happens immediately after task persistence and before optional startup diagnostics. The YouTube prewarmer now requests Android and web player clients. Follow-up work enables immediate task start after an explicit video download click, retries failed prewarm requests, and reuses a persistent Native Messaging port. These changes have **not been executed or tested in this session**; Windows Release build and regression verification remain pending.
+
 | Verification | Result |
 | :--- | :--- |
 | `radium_unit_tests.exe` | PASS, 77/77 suites |
@@ -338,5 +357,9 @@ The current change adds regression coverage for Settings category removal while 
 | `node tests/browser/test_extension_runtime.js` | PASS, 8/8 Playwright Chromium runtime suites |
 | `python tests/run_all_integration_tests.py` | Functional stages 1–7 PASS (PE artifacts, HTTP range/fallback/resume, HLS, DASH, IPC and UI snapshot). Stage 8 performance benchmark failed because its 16 MiB download child exited with code 2; the harness redirects that child's output, so the specific task error was not available in this run. |
 | MSVC Release build (`radium`, `radium_unit_tests`, `radium_core_tests`) | PASS. MSBuild emitted warning MSB8028 about shared intermediate directories for test targets. |
+
+### YouTube direct-transfer latency and phase progress follow-up (2026-11-05)
+
+The latest startup trace shows a 9 ms click-to-scheduler handoff, then 4.7 seconds before direct transfer dispatch and a later yt-dlp fallback. The click path no longer waits for background prewarming; direct transfer now uses a single streaming request per resolved track rather than a probe plus serial ranges, and records a sanitized fallback event. The UI no longer assigns a 98–99% minimum to mux/verify/finalize phases when byte or track progress is lower. These source changes have not yet been rebuilt or verified against a live YouTube transfer; capture a new Windows startup report and compare direct dispatch, first bytes, fallback, and progress values.
 
 The GitHub release API was not verified against the live service in this run. Installer download, SHA-256/Authenticode verification and signed-manifest validation remain intentionally unavailable until the project provides a trusted signing identity, Ed25519 public key and signed manifest infrastructure; no downloaded executable is automatically launched.

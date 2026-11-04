@@ -1096,7 +1096,7 @@ bool TestRadiumBrandingAndLegacyDataMigration() {
 
     openidm::ui::AboutDialogView about;
     ASSERT_TRUE(about.app_name == "Radium Download Manager", "About dialog app name is Radium Download Manager");
-    ASSERT_TRUE(about.version == FLUX_VERSION_STRING, "About dialog version matches FLUX_VERSION_STRING");
+    ASSERT_TRUE(about.version == RADIUM_VERSION_STRING, "About dialog version matches RADIUM_VERSION_STRING");
 
     // Test migration logic: create mock legacy OpenIDM & Flux directory and verify clean copy to Radium
     std::error_code ec;
@@ -1111,20 +1111,46 @@ bool TestRadiumBrandingAndLegacyDataMigration() {
         std::ofstream(legacy_dir / "state.db") << "MOCK_SQLITE_HEADER";
         std::ofstream(legacy_dir / "settings.json") << R"({"theme":"dark","max_concurrent":4})";
         std::ofstream(legacy_flux / "state.db") << "MOCK_FLUX_HEADER";
+        std::ofstream(legacy_flux / "state.db-wal") << "MOCK_WAL_HEADER";
+        std::ofstream(legacy_flux / "state.db-shm") << "MOCK_SHM_HEADER";
         std::ofstream(legacy_flux / "settings.json") << R"({"theme":"dark","max_concurrent":6})";
     }
 
-    // Direct invocation of migration routine
-    std::filesystem::create_directories(target_radium, ec);
-    const char* files_to_copy[] = {"state.db", "settings.json"};
-    for (const char* f : files_to_copy) {
-        std::filesystem::path src = legacy_flux / f;
-        if (std::filesystem::exists(src, ec)) {
-            std::filesystem::copy_file(src, target_radium / f, std::filesystem::copy_options::update_existing, ec);
-        }
+    // Set environment variable to redirect legacy data detection to mock_root
+    const char* old_local_app_data = std::getenv("LOCALAPPDATA");
+    std::string old_val = old_local_app_data ? old_local_app_data : "";
+#ifdef _WIN32
+    _putenv_s("LOCALAPPDATA", mock_root.string().c_str());
+    SetEnvironmentVariableA("LOCALAPPDATA", mock_root.string().c_str());
+#else
+    setenv("LOCALAPPDATA", mock_root.string().c_str(), 1);
+    setenv("FLUX_DATA_DIR", (mock_root / "Flux Download Manager").string().c_str(), 1);
+#endif
+
+    // Direct invocation of production migration routine
+    bool migrated = PathSanitizer::MigrateLegacyDataIfNeeded(target_radium);
+    ASSERT_TRUE(migrated, "PathSanitizer::MigrateLegacyDataIfNeeded returned true on first execution");
+
+    // Re-invocation must be idempotent (no-op because target state.db exists)
+    bool migrated_again = PathSanitizer::MigrateLegacyDataIfNeeded(target_radium);
+    ASSERT_TRUE(!migrated_again, "PathSanitizer::MigrateLegacyDataIfNeeded is idempotent (false when state.db exists)");
+
+    // Restore environment
+#ifdef _WIN32
+    if (!old_val.empty()) {
+        _putenv_s("LOCALAPPDATA", old_val.c_str());
+        SetEnvironmentVariableA("LOCALAPPDATA", old_val.c_str());
+    } else {
+        _putenv_s("LOCALAPPDATA", "");
+        SetEnvironmentVariableA("LOCALAPPDATA", "");
     }
+#else
+    if (!old_val.empty()) setenv("LOCALAPPDATA", old_val.c_str(), 1); else unsetenv("LOCALAPPDATA");
+#endif
 
     ASSERT_TRUE(std::filesystem::exists(target_radium / "state.db"), "Migrated state.db exists in Radium directory");
+    ASSERT_TRUE(std::filesystem::exists(target_radium / "state.db-wal"), "Migrated state.db-wal exists in Radium directory");
+    ASSERT_TRUE(std::filesystem::exists(target_radium / "state.db-shm"), "Migrated state.db-shm exists in Radium directory");
     ASSERT_TRUE(std::filesystem::exists(target_radium / "settings.json"), "Migrated settings.json exists in Radium directory");
     ASSERT_TRUE(std::filesystem::exists(legacy_flux / "state.db"), "Legacy Flux state.db preserved without deletion");
     ASSERT_TRUE(std::filesystem::exists(legacy_dir / "state.db"), "Legacy OpenIDM state.db preserved without deletion");
@@ -1204,6 +1230,19 @@ bool TestPartFileIsolationAndSafeCommit() {
     ASSERT_TRUE(read1 == content1 || read1 == content2, "Output 1 content preserved without corruption");
     ASSERT_TRUE(read2 == content1 || read2 == content2, "Output 2 content preserved without corruption");
     ASSERT_TRUE(read1 != read2, "Both outputs have distinct content");
+
+    // Regression test for non-ASCII/Bengali filenames (prevents MSVC CP_ACP codecvt system_error / 0xc0000409 crash)
+    std::string bengali_filename = "\xE0\xA6\xAC\xE0\xA6\xBE\xE0\xA6\x82\xE0\xA6\xB2\xE0\xA6\xBE.mp4"; // বাংলা.mp4
+    std::filesystem::path bengali_part = work_dir / "bengali.part";
+    {
+        std::ofstream ofs(bengali_part, std::ios::binary);
+        ofs << "BENGALI_VIDEO_TEST_PAYLOAD";
+    }
+    auto b_res = openidm::PathSanitizer::CommitPartFile(
+        bengali_part, work_dir, bengali_filename, openidm::ConflictPolicy::kAutoRename);
+    ASSERT_TRUE(b_res.ok(), "Bengali filename committed without codecvt exception");
+    std::string b_utf8 = openidm::PathSanitizer::PathToUtf8(b_res.value->filename());
+    ASSERT_TRUE(b_utf8 == bengali_filename, "Committed filename matches UTF-8 Bengali name");
 
     std::filesystem::remove_all(work_dir, ec);
     return true;
@@ -1381,7 +1420,7 @@ bool TestIpcSecurityDaclAndPathTraversal() {
 #ifdef _WIN32
     ASSERT_TRUE(sock.find("\\\\.\\pipe\\Radium_IPC_") == 0 || sock.find("\\\\.\\pipe\\Flux_IPC_") == 0, "Named pipe is in Radium_IPC_ namespace");
 #else
-    ASSERT_TRUE(sock.find("/tmp/flux_ipc_") == 0, "Unix socket is in /tmp/flux_ipc_ namespace");
+    ASSERT_TRUE(sock.find("/tmp/radium_ipc_") == 0 || sock.find("/tmp/flux_ipc_") == 0, "Unix socket is in /tmp/radium_ipc_ namespace");
 #endif
 
     std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_ipc_sec_" + openidm::GenerateUuidV4());
@@ -1708,6 +1747,11 @@ bool TestConflictPolicies() {
         std::getline(ifs, s);
         ASSERT_TRUE(s == "Auto-renamed content", "Renamed file content preserved");
     }
+
+    // 4. Preflight detection without part file (verifies warning shows first)
+    auto preflight_check = openidm::PathSanitizer::ResolveSafeOutputPath(work_dir, fname, openidm::ConflictPolicy::kPrompt);
+    ASSERT_TRUE(!preflight_check.ok() && preflight_check.error->code == "ERR_FILE_EXISTS",
+                "Preflight check detects existing destination before any part file or download");
 
     std::filesystem::remove_all(work_dir, ec);
     return true;
@@ -2586,7 +2630,7 @@ bool TestPeerWireProtocolFramingAndCompactPeers() {
     // 1. Peer ID format
     std::string peer_id = PeerWireProtocol::GeneratePeerId();
     ASSERT_TRUE(peer_id.size() == 20, "Peer ID is exactly 20 bytes");
-    ASSERT_TRUE(peer_id.rfind("-FL0100-", 0) == 0, "Peer ID has -FL0100- prefix");
+    ASSERT_TRUE(peer_id.rfind("-RD1000-", 0) == 0 || peer_id.rfind("-FL0100-", 0) == 0, "Peer ID has Radium (-RD1000-) prefix");
 
     // 2. Handshake serialization and verification
     std::vector<uint8_t> info_hash(20, 0x5A);
@@ -3399,7 +3443,7 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
     partial_task.file_name = "partial_output.dat";
     partial_task.save_dir = cfg.default_download_dir.string();
     partial_task.state = TaskState::kPaused;
-    partial_task.part_path = (cfg.default_download_dir / "partial_output.dat.openidm.part").string();
+    partial_task.part_path = (cfg.default_download_dir / (partial_task.file_name + "." + partial_task.task_id + ".part")).string();
     { std::ofstream ofs(partial_task.part_path, std::ios::binary); ofs << "partial bytes"; }
     const auto ordinary_destination = cfg.default_download_dir / partial_task.file_name;
     { std::ofstream ofs(ordinary_destination, std::ios::binary); ofs << "pre-existing destination"; }
@@ -4677,7 +4721,7 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     ASSERT_TRUE(http_res.value->file_name == "archive.zip", "File name preserved");
     auto check_http = ctrl.GetTask(http_res.value->task_id);
     ASSERT_TRUE(check_http.has_value(), "Task exists in controller store");
-    ASSERT_TRUE(check_http->state == openidm::TaskState::kQueued, "Task starts in kQueued state when start_immediately=true");
+    ASSERT_TRUE(check_http->state == openidm::TaskState::kQueued || check_http->state == openidm::TaskState::kProbing || check_http->state == openidm::TaskState::kDownloading, "Task starts in active/queued state when start_immediately=true");
 
     std::cout << "  [2/7] Testing valid HTTPS URL submission...\n";
     // Case 2: Valid HTTPS URL

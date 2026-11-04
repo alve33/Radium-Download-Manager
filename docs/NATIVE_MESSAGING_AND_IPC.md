@@ -2,15 +2,17 @@
 
 **Document Status:** Proposed Protocol Specification
 **Last Reviewed:** 2026-10-16
-**Scope:** End-to-end wire protocol, message schemas, authentication, timeouts, error codes, and lifecycle management between the Browser Extension, `openidm-nmh.exe`, and `openidm.exe`.
+**Scope:** End-to-end wire protocol, message schemas, authentication, timeouts, error codes, and lifecycle management between the Browser Extension, `radium-nmh.exe`, and `radium.exe`.
 **Related Documents:** [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md), [BROWSER_EXTENSION.md](BROWSER_EXTENSION.md), [SECURITY_THREAT_MODEL.md](SECURITY_THREAT_MODEL.md), [adr/0003-browser-communication.md](adr/0003-browser-communication.md)
 
 ---
 
 ## 1. End-to-End IPC Topology
 
-1. **Leg 1 (Browser <-> `openidm-nmh.exe`):** Standard Browser Native Messaging over `stdin`/`stdout`. Each frame consists of a 32-bit native-endian (`uint32_le` on x64/ARM64) byte length prefix followed by a UTF-8 JSON-RPC 2.0 object.
-2. **Leg 2 (`openidm-nmh.exe` <-> `openidm.exe`):** Windows Named Pipe (`\\\\.\\pipe\\OpenIDM_IPC_<UserSID>`) configured in `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT` mode with `FILE_FLAG_OVERLAPPED`. Uses the exact same 32-bit length-prefixed UTF-8 JSON-RPC 2.0 framing so `openidm-nmh.exe` operates as a fast, zero-reparse framing proxy after validating message bounds.
+1. **Leg 1 (Browser <-> `radium-nmh.exe`):** Standard Browser Native Messaging over `stdin`/`stdout`. Each frame consists of a 32-bit native-endian (`uint32_le` on x64/ARM64) byte length prefix followed by a UTF-8 JSON-RPC 2.0 object.
+2. **Leg 2 (`radium-nmh.exe` <-> `radium.exe`):** Windows Named Pipe (`\\\\.\\pipe\\Radium_IPC_<UserSID>`) configured in `PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT` mode with `FILE_FLAG_OVERLAPPED`. Uses the exact same 32-bit length-prefixed UTF-8 JSON-RPC 2.0 framing so `radium-nmh.exe` operates as a fast, zero-reparse framing proxy after validating message bounds.
+
+The extension holds a `runtime.connectNative` port for the service-worker lifetime and multiplexes outstanding JSON-RPC requests by their `id`. It reconnects after host disconnects. The native messaging host and desktop pipe handler accept multiple request/response frames on one connection; this avoids spawning a new NMH process for every user click.
 
 ---
 
@@ -20,19 +22,19 @@
 sequenceDiagram
     autonumber
     participant Browser as Browser Extension (Service Worker)
-    participant NMH as openidm-nmh.exe (Native Messaging Host)
-    participant Pipe as Named Pipe (\\\\.\\pipe\\OpenIDM_IPC_<SID>)
-    participant App as openidm.exe (DownloadController & UI)
+    participant NMH as radium-nmh.exe (Native Messaging Host)
+    participant Pipe as Named Pipe (\\\\.\\pipe\\Radium_IPC_<SID>)
+    participant App as radium.exe (DownloadController & UI)
 
-    Note over Browser,NMH: Extension opens port via runtime.connectNative("org.openidm.native")
-    Browser->>NMH: stdin: [len][{"jsonrpc":"2.0","id":1,"method":"system.handshake","params":{"protocolVersion":"1.0","browser":"chromium","extensionVersion":"0.1.0"}}]
-    alt Named Pipe Not Listening (openidm.exe not running)
-        NMH->>App: CreateProcessW("openidm.exe --background")
+    Note over Browser,NMH: Extension opens port via runtime.connectNative("com.radium.downloadmanager")
+    Browser->>NMH: stdin: [len][{"jsonrpc":"2.0","id":1,"method":"system.handshake","params":{"protocolVersion":"1.0","browser":"chromium","extensionVersion":"1.0.0"}}]
+    alt Named Pipe Not Listening (radium.exe not running)
+        NMH->>App: CreateProcessW("radium.exe --background")
         App->>Pipe: CreateNamedPipeW (DACL: Current User SID only + FIRST_PIPE_INSTANCE)
     end
-    NMH->>Pipe: Connect to \\\\.\\pipe\\OpenIDM_IPC_<SID> & forward handshake
+    NMH->>Pipe: Connect to \\\\.\\pipe\\Radium_IPC_<SID> & forward handshake
     Pipe->>App: Validate client PID & protocolVersion
-    App-->>Pipe: {"jsonrpc":"2.0","id":1,"result":{"appVersion":"0.1.0","protocolVersion":"1.0","captureEnabled":true,"interceptExtensions":["zip","iso","exe","mp4","mkv"]}}
+    App-->>Pipe: {"jsonrpc":"2.0","id":1,"result":{"appVersion":"1.0.0","protocolVersion":"1.0","captureEnabled":true,"interceptExtensions":["zip","iso","exe","mp4","mkv"]}}
     Pipe-->>NMH: Relay response
     NMH-->>Browser: stdout: [len][handshake result]
 
@@ -50,13 +52,13 @@ sequenceDiagram
 
 ## 3. Native Messaging Host Manifests
 
-### 3.1 Chromium (`com.flux.downloadmanager.chromium.json`)
-Registered at `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.flux.downloadmanager` (and equivalent `Microsoft\\Edge` and `BraveSoftware\\Brave-Browser` keys):
+### 3.1 Chromium (`com.radium.downloadmanager.chromium.json`)
+Registered at `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.radium.downloadmanager` (and equivalent `Microsoft\\Edge` and `BraveSoftware\\Brave-Browser` keys):
 ```json
 {
-  "name": "com.flux.downloadmanager",
-  "description": "Flux Download Manager Native Messaging Host",
-  "path": "C:\\Program Files\\Flux Download Manager\\radium-nmh.exe",
+  "name": "com.radium.downloadmanager",
+  "description": "Radium Download Manager Native Messaging Host",
+  "path": "C:\\Program Files\\Radium Download Manager\\radium-nmh.exe",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://mdgmlcnpodoehidlplplfegngnjnilap/",
@@ -65,19 +67,25 @@ Registered at `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.flux.do
 }
 ```
 
-### 3.2 Firefox (`org.openidm.native.firefox.json`)
-Registered at `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\org.openidm.native`:
+### 3.2 Firefox (`com.radium.downloadmanager.firefox.json`)
+Registered at `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\com.radium.downloadmanager`:
 ```json
 {
-  "name": "org.openidm.native",
-  "description": "OpenIDM Native Messaging Host Bridge",
-  "path": "C:\\Program Files\\OpenIDM\\openidm-nmh.exe",
+  "name": "com.radium.downloadmanager",
+  "description": "Radium Download Manager Native Messaging Host Bridge",
+  "path": "C:\\Program Files\\Radium Download Manager\\radium-nmh.exe",
   "type": "stdio",
   "allowed_extensions": [
+    "radium@downloadmanager.com",
     "extension@openidm.org"
   ]
 }
 ```
+
+### 3.3 Backward-Compatibility Manifests
+To support browser extensions installed during earlier project phases, the installer and registration scripts also register compatibility alias manifests:
+- `com.flux.downloadmanager` (pointing to `C:\\Program Files\\Radium Download Manager\\radium-nmh.exe`)
+- `org.openidm.native` (pointing to `C:\\Program Files\\Radium Download Manager\\radium-nmh.exe`)
 
 ---
 
@@ -85,11 +93,11 @@ Registered at `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\org.openidm.native
 
 1. **Browser-to-NMH Authentication:** Enforced by the browser via `allowed_origins` / `allowed_extensions`.
 2. **NMH-to-Desktop Named Pipe Authentication (`NFR-008`):**
-   - `openidm.exe` queries its own process token (`OpenProcessToken` + `GetTokenInformation(..., TokenUser, ...)`) to obtain the current user's string SID (e.g., `S-1-5-21-...`) via `ConvertSidToStringSidW`.
-   - Creates `\\\\.\\pipe\\OpenIDM_IPC_<UserSID>` with `dwOpenMode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE`.
+   - `radium.exe` queries its own process token (`OpenProcessToken` + `GetTokenInformation(..., TokenUser, ...)`) to obtain the current user's string SID (e.g., `S-1-5-21-...`) via `ConvertSidToStringSidW`.
+   - Creates `\\\\.\\pipe\\Radium_IPC_<UserSID>` with `dwOpenMode = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE`.
    - Attaches a custom `SECURITY_DESCRIPTOR` parsed via `ConvertStringSecurityDescriptorToSecurityDescriptorW`:
      `D:P(A;;GA;;;SY)(A;;GA;;;<UserSID>)` — granting Generic All **only** to `SYSTEM` and `<UserSID>`, and implicitly denying all other local users, guest accounts, and network logons (`PIPE_REJECT_REMOTE_CLIENTS` is also set in `dwPipeMode`).
-   - Upon `ConnectNamedPipe`, `openidm.exe` calls `GetNamedPipeClientProcessId` and `QueryFullProcessImageNameW` to verify the connecting client executable is `<install_dir>\\openidm-nmh.exe`.
+   - Upon `ConnectNamedPipe`, `radium.exe` calls `GetNamedPipeClientProcessId` and `QueryFullProcessImageNameW` to verify the connecting client executable is `<install_dir>\\radium-nmh.exe`.
 3. **Strict Privilege Boundary:**
    - The IPC protocol **never** exposes generic file write, shell execution, or raw CLI flag pass-through methods. Only the 6 structured RPC methods in Section 5 exist.
 
@@ -99,7 +107,7 @@ Registered at `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\org.openidm.native
 
 ### 5.1 Limits, Timeouts, and Version Negotiation
 - **Max Message Size:** `1,048,576` bytes (`1 MiB`, matching Chromium's Native Messaging host-to-extension limit). `radium-nmh.exe` enforces this limit on stdout frames, returning a standard JSON-RPC 2.0 error frame (`-32603`) if an outgoing response exceeds 1 MiB instead of causing browser host termination. Both NMH and desktop drop incoming frames exceeding 1 MiB.
-- **Version Negotiation:** Major.Minor (`"1.0"`). If `major` versions differ, `system.handshake` returns error `-32001` (`ERR_IPC_VERSION_MISMATCH`) and the extension displays an `"Update OpenIDM Desktop / Extension"` banner.
+- **Version Negotiation:** Major.Minor (`"1.0"`). If `major` versions differ, `system.handshake` returns error `-32001` (`ERR_IPC_VERSION_MISMATCH`) and the extension displays an `"Update Radium Desktop / Extension"` banner.
 - **Timeouts & Concurrency:**
   - `system.handshake`: `1,500 ms` (allows time for cold start of `radium.exe --daemon`).
   - `download.offer`: `5,000 ms` (if exceeded, extension safely resumes download in browser).
@@ -114,7 +122,7 @@ Registered at `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\org.openidm.native
 | `system.ConfigUpdated` | Desktop -> Extension (Notification) | Pushed when the user modifies capture settings or exclusion domains in the desktop UI. |
 | `download.offer` | Extension -> Desktop | Offer an intercepted ordinary file download (`URL`, `filename`, `fileSize`, `headers`, `tabUrl`, `correlationId`). Returns `{ accepted: bool, taskId: string }`. Deduplicated idempotently by URL or `correlationId`. |
 | `download.startChunkedTransfer` | Extension -> Desktop | Initiates a bounded chunked staging session for client-generated files or IPC file transfers. Returns `{ accepted: bool, taskId: string, chunkSize: int }`. (Note: in-browser web app blob/data downloads are kept natively in browser). |
-| `download.transferChunk` | Extension -> Desktop | Transfers a single base64-encoded chunk into the staging file in `%LOCALAPPDATA%\Flux\tmp\`. Returns `{ received: bool, chunkIndex: int, bytesWritten: int }`. |
+| `download.transferChunk` | Extension -> Desktop | Transfers a single base64-encoded chunk into the staging file in `%LOCALAPPDATA%\Radium Download Manager\tmp\`. Returns `{ received: bool, chunkIndex: int, bytesWritten: int }`. |
 | `download.completeChunkedTransfer` | Extension -> Desktop | Finalizes the staged file, verifies size, moves it to the destination directory, runs Defender scan, and records the task as `COMPLETED`. |
 | `download.abortChunkedTransfer` | Extension -> Desktop | Aborts a chunked transfer session and cleans up temporary staging files. |
 | `download.batchAdd` | Extension -> Desktop | Send a list of links extracted from a webpage text selection (`FR-010`) to open the Desktop Batch Download Dialog. |
@@ -178,7 +186,7 @@ Registered at `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\org.openidm.native
 | `-32600` | `ERR_IPC_INVALID_REQUEST` | Missing required fields or failed schema validation. |
 | `-32602` | `ERR_IPC_UNSAFE_URL_OR_PATH` | URL scheme is not `http:`/`https:`, or parameters failed validation. |
 | `-32001` | `ERR_IPC_VERSION_MISMATCH` | Incompatible protocol major version; prompt user to update. |
-| `-32002` | `ERR_IPC_CAPTURE_DISABLED` | User paused automatic browser capture in OpenIDM tray menu; extension leaves download in browser. |
+| `-32002` | `ERR_IPC_CAPTURE_DISABLED` | User paused automatic browser capture in Radium tray menu; extension leaves download in browser. |
 | `-32003` | `ERR_IPC_DESKTOP_BUSY` | Desktop app is shutting down; extension falls back to browser download. |
 | `-32003` | `ERR_IPC_DESKTOP_UNAVAILABLE` | Named pipe not found or desktop not running; extension safely falls back to native browser download. |
 | `-32003` | `ERR_IPC_DISCONNECTED` | Named pipe disconnected mid-write; extension triggers safe fallback. |

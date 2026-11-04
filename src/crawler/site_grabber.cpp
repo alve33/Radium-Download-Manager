@@ -212,7 +212,7 @@ Result<std::vector<GrabbedItem>> SiteGrabber::Crawl(
         std::string html_body;
         std::atomic<bool> req_cancel{false};
         std::map<std::string, std::string> headers = {
-            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FluxDownloadManager/1.0"}
+            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) RadiumDownloadManager/1.0"}
         };
 
         auto res = brisk::HttpClient::PerformGet(

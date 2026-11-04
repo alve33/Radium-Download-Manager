@@ -2,7 +2,7 @@ name: Windows Cloud Compatibility Matrix & Testing Lab
 
 on:
   push:
-    branches: [ "main", "master", "v0.3.x" ]
+    branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
@@ -50,7 +50,7 @@ jobs:
           $cmakePath = "CMakeLists.txt"
           if (Test-Path $cmakePath) {
             $cmakeContent = Get-Content $cmakePath -Raw
-            if ($cmakeContent -match 'project\s*\(\s*(?:Radium|Flux)\s+VERSION\s+(\d+\.\d+\.\d+)') {
+            if ($cmakeContent -match 'project\s*\(\s*Radium\s+VERSION\s+(\d+\.\d+\.\d+)') {
               $ver = $Matches[1]
             }
           }

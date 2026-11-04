@@ -68,3 +68,11 @@ inline std::string GetDefaultIpcSocketPath() {
 }
 
 } // namespace openidm::ipc
+
+namespace radium::ipc {
+using openidm::ipc::GetDefaultIpcSocketPath;
+#ifdef _WIN32
+using openidm::ipc::GetCurrentUserSidString;
+#endif
+} // namespace radium::ipc
+

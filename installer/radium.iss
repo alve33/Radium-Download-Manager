@@ -49,14 +49,15 @@
       #define SourceDir "..\build\Release"
     #elif FileExists("..\build\win-x64\radium.exe")
       #define SourceDir "..\build\win-x64"
-    #elif FileExists("..\build\win-x64\Release\flux.exe")
-      #define SourceDir "..\build\win-x64\Release"
-    #elif FileExists("..\dist\Flux.exe")
-      #define SourceDir "..\dist"
     #else
       #define SourceDir "..\build\win-x64\Release"
     #endif
   #endif
+#endif
+
+; Fail-closed check: Ensure SourceDir contains the required Radium binary
+#if !FileExists(SourceDir + "\" + MyAppExeName)
+  #error "Radium executable (radium.exe) was not found in SourceDir: " + SourceDir + ". Build the solution before compiling the installer."
 #endif
 
 ; Resolve N_m3u8DL-RE worker: prioritize target arch build output from SourceDir

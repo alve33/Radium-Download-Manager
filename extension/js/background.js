@@ -27,6 +27,64 @@ let rpcRequestCounter = 1;
 let sessionRestorePromise = null;
 let captureSettingsPromise = null;
 let captureSettingsUpdatedAt = 0;
+const nativePortRecords = new Map();
+
+function getNativePortRecord(hostName) {
+  const existing = nativePortRecords.get(hostName);
+  if (existing && existing.connected) return existing;
+
+  const port = chrome.runtime.connectNative(hostName);
+  const record = { port, pending: new Map(), connected: true };
+  nativePortRecords.set(hostName, record);
+  port.onMessage.addListener((response) => {
+    const requestId = String(response && response.id !== undefined ? response.id : "");
+    const pending = record.pending.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    record.pending.delete(requestId);
+    if (response && response.error) {
+      const rpcError = new Error(response.error.message || "Native messaging RPC error");
+      rpcError.isRpcError = true;
+      rpcError.code = response.error.code;
+      pending.reject(rpcError);
+    } else {
+      pending.resolve(response ? response.result : null);
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    record.connected = false;
+    if (nativePortRecords.get(hostName) === record) nativePortRecords.delete(hostName);
+    const disconnectMessage = chrome.runtime.lastError
+      ? chrome.runtime.lastError.message
+      : "Native messaging host disconnected";
+    for (const pending of record.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(disconnectMessage));
+    }
+    record.pending.clear();
+  });
+  return record;
+}
+
+function sendNativePortRequest(hostName, payload) {
+  const record = getNativePortRecord(hostName);
+  const requestId = String(payload.id);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      record.pending.delete(requestId);
+      reject(new Error("Native Messaging RPC timed out after 5000ms"));
+    }, 5000);
+    record.pending.set(requestId, { resolve, reject, timer });
+    try {
+      record.port.postMessage(payload);
+    } catch (error) {
+      clearTimeout(timer);
+      record.pending.delete(requestId);
+      reject(error);
+    }
+  });
+}
+
 const PASSIVE_DOWNLOAD_REQUEST_TYPES = new Set([
   "xmlhttprequest", "script", "stylesheet", "font", "image", "ping", "websocket"
 ]);
@@ -117,6 +175,15 @@ async function persistSessionState(storageArea = null) {
   }
 
   await store.set({
+    radium_cacheData: serializedTabs,
+    radium_disabledHosts: Array.from(G.disabledHosts),
+    radium_tabUrls: serializedTabUrls,
+    radium_recentClicks: recentClicks,
+    radium_recentResponses: recentResponses,
+    radium_redirectChains: redirectChains,
+    radium_reverseRedirects: reverseRedirects,
+
+    // Mirrored for backward compatibility with existing sessions
     flux_cacheData: serializedTabs,
     flux_disabledHosts: Array.from(G.disabledHosts),
     flux_tabUrls: serializedTabUrls,
@@ -132,6 +199,13 @@ async function restoreSessionState(storageArea = null) {
   const store = getStorageStore(storageArea);
   if (!store || typeof store.get !== "function") return false;
   const data = await store.get([
+    "radium_cacheData",
+    "radium_disabledHosts",
+    "radium_tabUrls",
+    "radium_recentClicks",
+    "radium_recentResponses",
+    "radium_redirectChains",
+    "radium_reverseRedirects",
     "flux_cacheData",
     "flux_disabledHosts",
     "flux_tabUrls",
@@ -140,6 +214,11 @@ async function restoreSessionState(storageArea = null) {
     "flux_redirectChains",
     "flux_reverseRedirects"
   ]);
+
+  // Migration: If restored from legacy flux_* without existing radium_* keys, proactively migrate to radium_*
+  if (data && !data.radium_cacheData && data.flux_cacheData) {
+    persistSessionState(store).catch(() => {});
+  }
   const cacheSource = data ? (data.radium_cacheData || data.flux_cacheData) : null;
   if (cacheSource) {
     for (const [k, v] of Object.entries(cacheSource)) {
@@ -222,18 +301,55 @@ function ensureSessionRestored(storageArea = null) {
   return sessionRestorePromise;
 }
 
+const prewarmAttemptTimes = new Map();
+// Cookie headers are kept in extension memory only and reused by the click path.
+// This avoids an asynchronous cookies API round trip between the trusted click
+// and stream.add; entries expire so browser session changes are picked up.
+const youtubeCookieCache = new Map();
+async function triggerYouTubePrewarm(url) {
+  if (!url || typeof url !== "string") return;
+  const m = url.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (!m || !m[1]) return;
+  const vid = m[1];
+  const attemptAt = Date.now();
+  const lastAttemptAt = prewarmAttemptTimes.get(vid) || 0;
+  // A failed prewarm must not suppress a retry for the rest of the service
+  // worker lifetime. The native cache ignores duplicate in-flight/ready work.
+  if (attemptAt - lastAttemptAt < 15000) return;
+  prewarmAttemptTimes.set(vid, attemptAt);
+  let cookieHeader = "";
+  try {
+    cookieHeader = await collectCookiesForDownload(url, url);
+  } catch (_) {}
+  if (cookieHeader) youtubeCookieCache.set(vid, { value: cookieHeader, expiresAt: Date.now() + 10 * 60 * 1000 });
+  try {
+    await sendNativeRpc("stream.prewarm", { videoId: vid, watchUrl: url, cookies: cookieHeader });
+  } catch (_) {
+    if (prewarmAttemptTimes.get(vid) === attemptAt) prewarmAttemptTimes.delete(vid);
+  }
+}
+
 // Keep media results scoped to the current document URL for each tab. This is
 // also used for SPA history changes, where tabs.onUpdated does not fire.
 function updateTabDocument(tabId, url) {
+  triggerYouTubePrewarm(url);
   if (!Number.isInteger(tabId) || tabId <= 0 || typeof url !== "string" || !url) return false;
   const previousUrl = G.tabUrlMap.get(tabId) || "";
   if (previousUrl && previousUrl !== url) {
+    let sameVideo = false;
+    if (isYouTubeWatchOrShortsUrl(previousUrl) && isYouTubeWatchOrShortsUrl(url)) {
+      const vid1 = extractYouTubeVideoId(previousUrl);
+      const vid2 = extractYouTubeVideoId(url);
+      if (vid1 && vid2 && vid1 === vid2) sameVideo = true;
+    }
+    if (!sameVideo) {
     G.cacheData.delete(tabId);
     if (G.playerErrors) G.playerErrors.delete(tabId);
     if (G.blobMediaMap) G.blobMediaMap.delete(tabId);
     updateTabBadge(tabId);
     persistSessionState().catch(() => {});
     notifyPopupMediaUpdated(tabId);
+    }
   }
   G.tabUrlMap.set(tabId, url);
   return previousUrl !== url;
@@ -282,7 +398,7 @@ async function sendNativeRpc(method, params = {}, customTransport = null) {
     return res;
   }
 
-  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendNativeMessage) {
+  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.connectNative) {
     const hostsToTry = [G.nativeHostName, ...(G.fallbackNativeHostNames || [])];
     const callingExtId = (chrome.runtime && chrome.runtime.id) ? chrome.runtime.id : "unknown";
     let lastErrorMsg = "Native Messaging runtime unavailable";
@@ -290,38 +406,7 @@ async function sendNativeRpc(method, params = {}, customTransport = null) {
     for (const hostName of hostsToTry) {
       if (!hostName) continue;
       try {
-        const res = await new Promise((resolve, reject) => {
-          let settled = false;
-          const timer = setTimeout(() => {
-            if (!settled) {
-              settled = true;
-              reject(new Error("Native Messaging RPC timed out after 5000ms"));
-            }
-          }, 5000);
-          try {
-            chrome.runtime.sendNativeMessage(hostName, payload, (response) => {
-              if (settled) return;
-              settled = true;
-              clearTimeout(timer);
-              if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
-              } else if (response && response.error) {
-                const rpcErr = new Error(response.error.message || "RPC Error");
-                rpcErr.isRpcError = true;
-                rpcErr.code = response.error.code;
-                reject(rpcErr);
-              } else {
-                resolve(response ? response.result : null);
-              }
-            });
-          } catch (e) {
-            if (!settled) {
-              settled = true;
-              clearTimeout(timer);
-              reject(e);
-            }
-          }
-        });
+        const res = await sendNativePortRequest(hostName, payload);
         logPipelineStage(correlationId, "NATIVE_RPC_RESULT", {
           method,
           hostName,
@@ -725,15 +810,17 @@ function onHeadersReceivedHandler(details) {
   const originalUrl = (reqMeta && reqMeta.initialUrl) || resolveInitialUrlFromRedirects(details.url) || details.url;
 
   const passiveResource = PASSIVE_DOWNLOAD_REQUEST_TYPES.has(String(details.type || "").toLowerCase());
-  const binaryOrMediaMime = contentType.startsWith("video/") || contentType.startsWith("audio/") ||
+  const isImageMime = contentType.startsWith("image/");
+  const isThumbnailOrPreviewHost = details.url.includes("ytimg.com") || details.url.includes("/an_webp/") || details.url.includes("googleusercontent.com");
+  const binaryOrMediaMime = !isThumbnailOrPreviewHost && !isImageMime && (contentType.startsWith("video/") || contentType.startsWith("audio/") ||
     (contentType !== "" && !contentType.startsWith("text/") &&
-      !/(?:json|xml|javascript|ecmascript|graphql)(?:$|\+)/i.test(contentType));
+      !/(?:json|xml|javascript|ecmascript|graphql)(?:$|\+)/i.test(contentType)));
   const matchesDownloadExtension = G.InterceptFileExts.has(ext);
   const matchesDownloadMime = G.InterceptMimeTypes && G.InterceptMimeTypes.has(contentType);
-  // Ordinary page XHR/XML, scripts, and stylesheets are not user downloads.
+  // Ordinary page XHR/XML, scripts, stylesheets, and passive web images/thumbnails are not user downloads.
   // Keep attachment responses and binary/media XHRs so download correlation and media capture work.
   const shouldTrackDownloadResponse = isAttachment ||
-    ((!passiveResource || binaryOrMediaMime) && (matchesDownloadExtension || matchesDownloadMime));
+    ((!passiveResource || binaryOrMediaMime) && (matchesDownloadExtension || matchesDownloadMime) && !isThumbnailOrPreviewHost && !isImageMime);
 
   if (shouldTrackDownloadResponse) {
     const respMeta = {
@@ -1418,6 +1505,7 @@ async function onDownloadCreatedHandler(
           tabUrl: pageReferrer,
           bypassModifier: false,
           correlationId: rec.correlationId,
+          clientClickTime: (rec.clickedInfo && rec.clickedInfo.clickTime) ? rec.clickedInfo.clickTime : Date.now(),
           headers,
           autoStart: false // Browser intercepted downloads must NEVER start transferring silently!
         }, customTransport);
@@ -1530,7 +1618,7 @@ async function onDownloadCreatedHandler(
         mechanism: rec.mechanism,
         stage: "STAGE_DESKTOP_ACCEPTANCE"
       });
-      logPipelineStage(rec.correlationId, "DOWNLOAD_DECLINED_BY_FLUX", {
+      logPipelineStage(rec.correlationId, "DOWNLOAD_DECLINED_BY_RADIUM", {
         downloadId: rec.downloadId,
         reason: (result && result.reason) || "DECLINED_BY_DESKTOP",
         mechanism: rec.mechanism,
@@ -1584,7 +1672,7 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
   }
 
   const correlationId = options.correlationId || candidate.correlationId || generateCorrelationId("stream");
-  const sourceType = candidate.sourceType || classifyMediaSourceType(candidate, candidate.mime, candidate.cachedManifestBody);
+  let sourceType = candidate.sourceType || classifyMediaSourceType(candidate, candidate.mime, candidate.cachedManifestBody);
 
   // 5. Unsupported or unresolved media source must fail fast with a clear error
   if (sourceType === SourceType.UNSUPPORTED || candidate.isDrm || candidate.drmProtected) {
@@ -1659,6 +1747,7 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
       try { baseDesc = JSON.parse(extractorJson) || {}; } catch (_) { baseDesc = {}; }
     }
     const updatedDesc = Object.assign({}, baseDesc, {
+      radiumType: "YOUTUBE_STREAM",
       fluxType: "YOUTUBE_STREAM",
       sourceType: SourceType.YOUTUBE_EXTRACTION,
       videoId: candidate.videoId || baseDesc.videoId || extractYouTubeVideoId(candidate.url || candidate.tabUrl || ""),
@@ -1687,6 +1776,13 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
     effectiveStreamType = "HTTP_FILE";
   }
 
+  if (sourceType === SourceType.YOUTUBE_EXTRACTION || candidate.streamType === "YOUTUBE" ||
+      isYouTubeWatchOrShortsUrl(candidate.url || "") || isYouTubeWatchOrShortsUrl(candidate.tabUrl || "") ||
+      (candidate.url && (candidate.url.includes("googlevideo.com") || candidate.url.includes("videoplayback")))) {
+    effectiveStreamType = "YOUTUBE";
+    sourceType = SourceType.YOUTUBE_EXTRACTION;
+  }
+
   const defaultExt = (chosenQuality && chosenQuality.ext)
     ? chosenQuality.ext
     : ((sourceType === SourceType.DIRECT_PROGRESSIVE && candidate.ext) ? candidate.ext : "mp4");
@@ -1713,6 +1809,9 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
   }
 
   let effectiveFileName = candidate.fileName || "";
+  if (!effectiveFileName || effectiveFileName === "video.mp4" || effectiveFileName === "video") {
+    effectiveFileName = baseTitle ? `${baseTitle}.${defaultExt}` : "";
+  }
   if (effectiveFileName) {
     effectiveFileName = effectiveFileName.replace(/\s*\[\s*\d{3,4}p[_\w]*\s*\]/gi, "").trim();
     const suffix = effectiveFileName.match(/\.([a-zA-Z0-9]+)$/);
@@ -1720,7 +1819,7 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
       const stem = suffix ? effectiveFileName.slice(0, -suffix[0].length) : effectiveFileName;
       effectiveFileName = `${stem || "video"}.${defaultExt}`;
     }
-    if (effectiveResolution && effectiveResolution !== "Auto") {
+    if (effectiveResolution && effectiveResolution !== "Auto" && !effectiveFileName.includes(`[${effectiveResolution}]`)) {
       const extM = effectiveFileName.match(/\.([a-zA-Z0-9]+)$/);
       const curExt = extM ? extM[1] : defaultExt;
       const fStem = extM ? effectiveFileName.slice(0, -extM[0].length) : effectiveFileName;
@@ -1736,14 +1835,24 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
   if (!headers["User-Agent"] && !headers["user-agent"] && typeof navigator !== "undefined" && navigator.userAgent) {
     headers["User-Agent"] = navigator.userAgent;
   }
-  if (!headers.Cookie && !headers.cookie && typeof collectCookiesForDownload === "function") {
+  const isYtTarget = (sourceType === SourceType.YOUTUBE_EXTRACTION || sourceType === "YOUTUBE" || effectiveStreamType === "YOUTUBE" || isYouTubeWatchOrShortsUrl(targetManifestUrl));
+  if (!headers.Cookie && !headers.cookie && isYtTarget) {
+    const videoId = candidate.videoId || extractYouTubeVideoId(targetManifestUrl);
+    const cachedCookies = youtubeCookieCache.get(videoId);
+    if (cachedCookies && cachedCookies.expiresAt > Date.now()) {
+      headers.Cookie = cachedCookies.value;
+    } else if (cachedCookies) {
+      youtubeCookieCache.delete(videoId);
+    }
+  }
+  // Keep the click-to-task handoff immediate. YouTube cookies are collected by
+  // the navigation prewarm; other media retains the existing per-submit lookup.
+  if (!headers.Cookie && !headers.cookie && !isYtTarget && typeof collectCookiesForDownload === "function") {
     try {
       const cookieHeader = await collectCookiesForDownload(targetManifestUrl, candidate.referer || candidate.tabUrl || "");
       if (cookieHeader) headers.Cookie = cookieHeader;
     } catch (_) {}
   }
-
-  const isYtTarget = (sourceType === SourceType.YOUTUBE_EXTRACTION || sourceType === "YOUTUBE" || effectiveStreamType === "YOUTUBE" || isYouTubeWatchOrShortsUrl(targetManifestUrl));
 
   const params = {
     candidateId: candidate.candidateId || "",
@@ -1775,6 +1884,8 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
     subtitleFilter: options.subtitleFilter || "all",
     customKeyHex: options.customKeyHex || "",
     cachedManifestBody: validCachedManifest || (isYtTarget ? extractorJson : "") || "",
+    autoStart: (options.autoStart !== undefined) ? Boolean(options.autoStart) : false,
+    clientClickTime: options.clickTime || Date.now(),
     headers
   };
 
@@ -1944,6 +2055,12 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
     updateTabDocument(sender.tab.id, sender.tab.url);
   }
 
+  if (msg.action === "triggerYouTubePrewarm" && msg.url) {
+    triggerYouTubePrewarm(msg.url);
+    if (sendResponse) sendResponse({ success: true });
+    return true;
+  }
+
   if (msg.action === "getMediaList") {
     ensureSessionRestored().then(async () => {
       let resolvedTabId = tabId;
@@ -2013,6 +2130,7 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
         }));
 
         const ytDesc = {
+          radiumType: "YOUTUBE_STREAM",
           fluxType: "YOUTUBE_STREAM",
           sourceType: SourceType.YOUTUBE_EXTRACTION,
           videoId: vidId,
@@ -2132,6 +2250,9 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
     if (G.playerErrors) G.playerErrors.delete(tabId);
 
     const inferredStreamType = msg.streamType || (msg.url.includes(".m3u8") ? "HLS" : (msg.url.includes(".mpd") ? "DASH" : "HTTP_FILE"));
+    if (msg.videoId || msg.sourceType === SourceType.YOUTUBE_EXTRACTION || inferredStreamType === "YOUTUBE") {
+      triggerYouTubePrewarm(sourceTabUrl || msg.url);
+    }
     const candidate = {
       url: normalizeMediaUrl(msg.url),
       blobUrl: msg.blobUrl || "",
@@ -2236,13 +2357,15 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
         return;
       }
 
-      const dlPromise = submitMediaCandidateToFlux(resolved.candidate, {
+      const dlPromise = submitMediaCandidateToRadium(resolved.candidate, {
         pageTitle: msg.pageTitle,
         qualityId: msg.qualityId || "",
         resolution: msg.resolution || "",
         videoFilter: msg.videoFilter || "best",
         selectedQuality: msg.selectedQuality || null,
         outputFormat: msg.outputFormat || "",
+        autoStart: (msg.autoStart !== undefined) ? Boolean(msg.autoStart) : false,
+        clickTime: msg.clickTime || Date.now(),
         correlationId
       });
 
@@ -2609,6 +2732,7 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
           tabUrl: msg.referrer || "",
           bypassModifier: false,
           correlationId,
+          clientClickTime: msg.clickTime || Date.now(),
           headers
         });
 
@@ -2659,7 +2783,7 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
             mechanism,
             stage: "STAGE_DESKTOP_ACCEPTANCE"
           });
-          logPipelineStage(correlationId, "DOWNLOAD_DECLINED_BY_FLUX", {
+          logPipelineStage(correlationId, "DOWNLOAD_DECLINED_BY_RADIUM", {
             url: targetUrl,
             reason,
             mechanism,

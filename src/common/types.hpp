@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Unified Task Model, Application Settings & Common Types
+// Radium Download Manager — Unified Task Model, Application Settings & Common Types
 // Adapted from Brisk (lib/download_engine/model/download_item_model.dart) & OpenIDM PRS.
 #pragma once
 
@@ -8,6 +8,36 @@
 #include <optional>
 #include <string>
 #include <vector>
+
+#ifndef WM_APP
+#define WM_APP 0x8000
+#endif
+
+#ifndef WM_RADIUM_TRAYICON
+// Primary Radium Custom Window Messages (RDM-21)
+constexpr unsigned int WM_RADIUM_TRAYICON                = WM_APP + 101;
+constexpr unsigned int WM_RADIUM_SHOW_NEW_DOWNLOAD       = WM_APP + 102;
+constexpr unsigned int WM_RADIUM_SELECT_TORRENT_METADATA = WM_APP + 103;
+constexpr unsigned int WM_RADIUM_PROBE_COMPLETE          = WM_APP + 104;
+constexpr unsigned int WM_RADIUM_TORRENT_FETCH_COMPLETE  = WM_APP + 105;
+constexpr unsigned int WM_RADIUM_SHOW_CONFLICT           = WM_APP + 106;
+constexpr unsigned int WM_RADIUM_TASK_NOTIFICATION       = WM_APP + 107;
+constexpr unsigned int WM_RADIUM_UPDATE_CHECK_COMPLETE   = WM_APP + 108;
+
+// Backward-Compatibility Aliases
+constexpr unsigned int WM_OPENIDM_TRAYICON               = WM_RADIUM_TRAYICON;
+constexpr unsigned int WM_OPENIDM_SHOW_NEW_DOWNLOAD      = WM_RADIUM_SHOW_NEW_DOWNLOAD;
+constexpr unsigned int WM_OPENIDM_SELECT_TORRENT_METADATA= WM_RADIUM_SELECT_TORRENT_METADATA;
+constexpr unsigned int WM_OPENIDM_PROBE_COMPLETE         = WM_RADIUM_PROBE_COMPLETE;
+constexpr unsigned int WM_OPENIDM_TORRENT_FETCH_COMPLETE = WM_RADIUM_TORRENT_FETCH_COMPLETE;
+constexpr unsigned int WM_OPENIDM_SHOW_CONFLICT          = WM_RADIUM_SHOW_CONFLICT;
+constexpr unsigned int WM_OPENIDM_TASK_NOTIFICATION      = WM_RADIUM_TASK_NOTIFICATION;
+constexpr unsigned int WM_OPENIDM_UPDATE_CHECK_COMPLETE  = WM_RADIUM_UPDATE_CHECK_COMPLETE;
+#endif
+
+namespace radium {
+// Authoritative Radium root namespace
+}
 
 namespace openidm {
 
@@ -210,7 +240,7 @@ struct QueueConfig {
 };
 
 struct AppSettings {
-    std::string theme{"coral_dark"}; // Flux Coral Charcoal identity ("coral_dark")
+    std::string theme{"coral_dark"}; // Radium Coral Charcoal identity ("coral_dark")
     uint32_t max_concurrent_tasks{3};
     uint64_t speed_limit_bps{0};
     uint32_t default_connections_per_task{8};
@@ -296,3 +326,13 @@ int64_t NowEpochMs();
 std::string GenerateUuidV4();
 
 } // namespace openidm
+
+// Authoritative Radium root namespace and bidirectional compatibility (RDM-21)
+#if defined(RADIUM_CANONICAL_NAMESPACES)
+namespace openidm = radium;
+#else
+namespace radium {
+    using namespace openidm;
+}
+#endif
+

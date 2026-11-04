@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ipc/ipc_server.hpp"
+#include "engine_stream/youtube_stream_prewarmer.hpp"
 #include "common/path_sanitizer.hpp"
 #include "common/version.hpp"
 #include "common/ipc_path.hpp"
 
 #include "common/json_mini.hpp"
 #include "common/logger.hpp"
+#include "common/startup_diagnostic.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -513,6 +515,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         json::Array exts = {"zip", "rar", "7z", "iso", "exe", "msi", "mp4", "mkv", "webm", "mp3", "flac", "pdf", "tar", "gz", "bin"};
         res["interceptExtensions"] = std::move(exts);
         res["minCaptureSizeBytes"] = static_cast<int64_t>(s.min_capture_size_bytes);
+        res["serverEpochMs"] = static_cast<int64_t>(NowEpochMs());
         return MakeRpcResult(id, std::move(res)).dump();
     }
 
@@ -590,12 +593,33 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             t.total_bytes = static_cast<uint64_t>(params["fileSize"].as_int64(0));
         }
 
-        // For browser intercepted downloads in GUI mode (desktop app running or starting up with a UI):
+        // For browser intercepted downloads in GUI mode (desktop app running with a UI):
         // the task must be queued without starting network transfer until the user confirms
         // choices in the Win32 New Download dialog.
-        // In headless daemon / automated test mode (m_is_headless == true), there is no GUI window
-        // to prompt the user, so start automatically.
-        bool auto_start = m_is_headless.load();
+        // In headless daemon / automated test mode (m_is_headless == true), start automatically.
+        const auto& settings = m_controller.GetSettings();
+        if (t.save_dir.empty()) {
+            t.save_dir = settings.default_download_dir.empty() ? m_controller.GetConfig().default_download_dir.string() : settings.default_download_dir;
+        }
+        bool auto_start = m_is_headless.load() || params["autoStart"].as_bool(false) || settings.auto_start_downloads;
+        uint64_t client_click_ms = static_cast<uint64_t>(params["clientClickTime"].as_int64(0));
+        std::string correlation_id = t.correlation_id;
+        std::string raw_url = t.url;
+        std::string raw_fn = t.file_name;
+        uint64_t raw_sz = t.total_bytes;
+
+        if (t.task_id.empty()) {
+            t.task_id = GenerateUuidV4();
+        }
+        std::string task_id = t.task_id;
+
+        diagnostics::StartupDiagnosticRecorder::Instance().StartSession(
+            task_id, correlation_id, t.page_url, raw_url,
+            raw_fn, "HTTP", "", raw_sz, client_click_ms);
+        diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+            task_id, "Native messaging host receives the request",
+            "NMH bridged download.offer to Radium core via named pipe");
+
         auto add_res = m_controller.AddTask(std::move(t), auto_start, false);
         if (!add_res.ok()) {
             json::Value res = json::Object{};
@@ -604,7 +628,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             res["reason"] = add_res.error->code + ": " + add_res.error->message;
             return MakeRpcResult(id, std::move(res)).dump();
         }
-        if (!m_is_headless.load()) {
+        if (!m_is_headless.load() && !auto_start) {
             std::lock_guard<std::mutex> lock(m_offer_mutex);
             if (m_offer_cb) {
                 m_offer_cb(*add_res.value);
@@ -951,6 +975,18 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         return MakeRpcResult(id, std::move(res)).dump();
     }
 
+    // 4a. stream.prewarm (Background resolution of YouTube media formats for near-instant <10ms dispatch)
+    if (method == "stream.prewarm") {
+        std::string vid = params["videoId"].as_string();
+        std::string url = params.contains("url") ? params["url"].as_string() : params["watchUrl"].as_string();
+        std::string cookies = params.contains("cookies") ? params["cookies"].as_string() : "";
+        stream::YouTubeStreamPrewarmer::Instance().PrewarmAsync(vid, url, cookies);
+        json::Value res = json::Object{};
+        res["prewarming"] = true;
+        res["videoId"] = vid;
+        return MakeRpcResult(id, std::move(res)).dump();
+    }
+
     // 4. stream.probe
     if (method == "stream.probe") {
         std::string manifest_url = params["manifestUrl"].as_string();
@@ -1011,9 +1047,32 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
                                     low_url.find("videoplayback") != std::string::npos ||
                                     !params["videoId"].as_string().empty());
 
-        if (cached_body.empty() && (params.contains("videoUrl") || params.contains("pairedAudioUrl"))) {
-            std::string vu = params["videoUrl"].as_string();
-            std::string au = params["pairedAudioUrl"].as_string();
+        if (is_explicit_youtube && source_type != "HLS_MANIFEST" && source_type != "DASH_MANIFEST") {
+            stream_type = "YOUTUBE";
+        }
+
+        std::string vid = params.contains("videoId") ? params["videoId"].as_string() : "";
+        if (vid.empty() && is_explicit_youtube) {
+            static const std::regex kVidRe(R"((?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11}))");
+            std::smatch vm;
+            if (std::regex_search(manifest_url, vm, kVidRe)) vid = vm[1].str();
+            else if (std::regex_search(low_url, vm, kVidRe)) vid = vm[1].str();
+        }
+
+        std::string pre_v, pre_a, pre_res, pre_cookies;
+        std::map<std::string, std::string> pre_vh, pre_ah;
+        bool has_prewarmed_direct = false;
+        if (is_explicit_youtube && !vid.empty()) {
+            std::string req_res = params.contains("resolution") ? params["resolution"].as_string() : (params.contains("qualityId") ? params["qualityId"].as_string() : (params.contains("videoFilter") ? params["videoFilter"].as_string() : "best"));
+            if (stream::YouTubeStreamPrewarmer::Instance().GetDirectUrls(vid, req_res, pre_v, pre_a, pre_res, &pre_cookies, &pre_vh, &pre_ah)) {
+                has_prewarmed_direct = true;
+            }
+        }
+
+        bool cached_has_direct = !cached_body.empty() && cached_body.find("\"videoUrl\":\"http") != std::string::npos;
+        if (has_prewarmed_direct || !cached_has_direct) {
+            std::string vu = has_prewarmed_direct ? pre_v : (params.contains("videoUrl") ? params["videoUrl"].as_string() : "");
+            std::string au = has_prewarmed_direct ? pre_a : (params.contains("pairedAudioUrl") ? params["pairedAudioUrl"].as_string() : "");
             if (!vu.empty() || !au.empty()) {
                 if (is_explicit_youtube) {
                     json::Object jdesc;
@@ -1022,10 +1081,24 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
                     jdesc["videoUrl"] = vu;
                     jdesc["audioUrl"] = au;
                     jdesc["watchUrl"] = params["tabUrl"].as_string();
-                    jdesc["videoId"] = params["videoId"].as_string();
+                    jdesc["videoId"] = vid.empty() ? params["videoId"].as_string() : vid;
                     if (params.contains("resolution")) jdesc["resolution"] = params["resolution"].as_string();
+                    else if (!pre_res.empty()) jdesc["resolution"] = pre_res;
                     if (params.contains("itag")) jdesc["selectedItag"] = params["itag"].as_int64(0);
                     else if (params.contains("selectedItag")) jdesc["selectedItag"] = params["selectedItag"].as_int64(0);
+                    if (!pre_vh.empty()) {
+                        json::Object vh_obj;
+                        for (const auto& [k, v] : pre_vh) vh_obj[k] = v;
+                        jdesc["videoHeaders"] = std::move(vh_obj);
+                    }
+                    if (!pre_ah.empty()) {
+                        json::Object ah_obj;
+                        for (const auto& [k, v] : pre_ah) ah_obj[k] = v;
+                        jdesc["audioHeaders"] = std::move(ah_obj);
+                    }
+                    if (!pre_cookies.empty()) {
+                        jdesc["cookies"] = pre_cookies;
+                    }
                     cached_body = json::Value(std::move(jdesc)).dump();
                 } else if (manifest_url.empty() || manifest_url == params["tabUrl"].as_string()) {
                     manifest_url = vu.empty() ? au : vu;
@@ -1119,8 +1192,15 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         if (yt_suffix != std::string::npos && yt_suffix + 10 == title.size()) {
             title = title.substr(0, yt_suffix);
         }
+        if (is_explicit_youtube && !vid.empty()) {
+            std::string pre_t = stream::YouTubeStreamPrewarmer::Instance().GetTitle(vid);
+            if (!pre_t.empty() && (title.empty() || title == "video" || title == "youtube_video")) {
+                title = pre_t;
+            }
+        }
         std::string out_fmt = params["outputFormat"].as_string("mp4");
-        if (params.contains("fileName") && !params["fileName"].as_string().empty()) {
+        if (params.contains("fileName") && !params["fileName"].as_string().empty() &&
+            params["fileName"].as_string() != "video.mp4" && params["fileName"].as_string() != "youtube_video.mp4") {
             t.file_name = PathSanitizer::SanitizeFileName(params["fileName"].as_string());
         } else if (!title.empty()) {
             std::string sanitized_title = PathSanitizer::SanitizeFileName(title);
@@ -1173,16 +1253,38 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         t.stream_options.custom_hls_key_hex = params["customKeyHex"].as_string("");
         t.stream_options.cached_manifest_body = cached_body;
 
-        // For browser intercepted stream downloads in GUI mode:
-        // the task must be queued without starting network transfer until the user confirms
-        // choices in the Win32 New Download dialog.
-        // In headless daemon / automated test mode, start automatically.
-        bool auto_start = m_is_headless.load() ? params["autoStart"].as_bool(true) : false;
+        // If autoStart is requested (e.g. headless daemon / automated test mode or explicit bypass),
+        // start network transfer immediately. Otherwise in GUI mode, queue paused and show
+        // the Win32 New Download dialog so the user can choose destination and quality.
+        bool auto_start = m_is_headless.load() || params["autoStart"].as_bool(false);
+
+        // User's conflict_policy is preserved so if destination file exists, the conflict warning shows first
+        uint64_t client_click_ms = static_cast<uint64_t>(params["clientClickTime"].as_int64(0));
+        t.correlation_id = params["correlationId"].as_string();
+        std::string correlation_id = t.correlation_id;
+        std::string raw_url = t.url;
+        std::string raw_fn = t.file_name;
+        std::string stream_res = t.stream_options.video_filter;
+        std::string effective_type = is_explicit_youtube ? "YouTube" : (stream_type == "DASH" ? "DASH" : "HLS");
+
+        if (t.task_id.empty()) {
+            t.task_id = GenerateUuidV4();
+        }
+        std::string task_id = t.task_id;
+
+        diagnostics::StartupDiagnosticRecorder::Instance().StartSession(
+            task_id, correlation_id, t.page_url, raw_url,
+            raw_fn, effective_type, stream_res, 0, client_click_ms);
+        diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+            task_id, "Native messaging host receives the request",
+            "NMH bridged stream.add (" + effective_type + ") to Radium core via named pipe");
+
         auto add_res = m_controller.AddTask(std::move(t), auto_start, false);
         if (!add_res.ok()) {
             return MakeRpcError(id, -32602, add_res.error->code + ": " + add_res.error->message).dump();
         }
-        if (!m_is_headless.load()) {
+
+        if (!m_is_headless.load() && !auto_start) {
             std::lock_guard<std::mutex> lock(m_offer_mutex);
             if (m_offer_cb) {
                 m_offer_cb(*add_res.value);

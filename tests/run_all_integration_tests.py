@@ -806,6 +806,7 @@ def main():
             run_db = bench_dir / f"http_run_{i}.db"
             res_stat = measure_child_command_rusage([
                 OPENIDM_BIN, "--db", run_db, "--out", bench_dir, "--connections", "8",
+                "--allow-loopback",
                 "--download", f"{base_url}/files/bench_16mb.bin"
             ])
             http_rss_samples.append(res_stat["maxrss_kb"] / 1024.0)
@@ -878,12 +879,13 @@ def main():
         snap_1000_text = snap_1000.stdout + "\n" + snap_1000.stderr
         assert "[Sidebar Counts] All=1000" in snap_1000_text, "Expected 1000 tasks in snapshot"
 
-        # Metric 8: Verify zero leftover .flux.part / .openidm.part temporary files in dl_dir and bench_dir
-        leftover_parts = (
+        # Metric 8: Verify zero leftover temporary part files (*.part, *.radium.part, etc.) in dl_dir and bench_dir
+        leftover_parts = sorted(set(
+            list(dl_dir.rglob("*.part")) + list(bench_dir.rglob("*.part")) +
             list(dl_dir.rglob("*.radium.part")) + list(bench_dir.rglob("*.radium.part")) +
             list(dl_dir.rglob("*.flux.part")) + list(bench_dir.rglob("*.flux.part")) +
             list(dl_dir.rglob("*.openidm.part")) + list(bench_dir.rglob("*.openidm.part"))
-        )
+        ))
         leftover_temp_count = len(leftover_parts)
 
         # Enforce documented performance budgets (fail test if any limit is exceeded!)

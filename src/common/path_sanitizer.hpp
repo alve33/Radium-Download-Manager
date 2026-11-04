@@ -71,6 +71,11 @@ public:
     // Classifies whether a URL is an HTML webpage (e.g. YouTube watch page, Vimeo page)
     // rather than a direct downloadable media file or stream manifest
     static bool IsWebpageWatchUrl(std::string_view url);
+
+    // Safely converts std::filesystem::path to UTF-8 std::string on all platforms,
+    // completely avoiding MSVC path::string() codecvt exception (No mapping for Unicode character in target multi-byte code page).
+    static std::string PathToUtf8(const std::filesystem::path& p);
+    static std::filesystem::path Utf8ToPath(std::string_view utf8_str);
 };
 
 } // namespace openidm

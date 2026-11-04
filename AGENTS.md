@@ -1,17 +1,17 @@
 # AGENTS.md — Mandatory Instructions for AI Coding Agents
 
 **Document Status:** Active Governance Policy  
-**Last Reviewed:** 2026-10-16  
+**Last Reviewed:** 2026-11-04  
 **Scope:** All AI coding agents, autonomous software engineers, and automated refactoring tools operating in this repository.
 
 ---
 
 ## 1. Project Objective
 
-Your objective is to build and maintain **OpenIDM**, a native Windows 11 open-source download manager and browser media downloader. OpenIDM combines:
-1. A native **C++20 / Win32** desktop application (`openidm.exe`) containing an in-process HTTP/HTTPS segmented download engine (`WinHTTP` + I/O Completion Ports) inspired by [Brisk](https://github.com/BrisklyDev/brisk)'s dynamic connection spawning and work-stealing range reuse algorithms.
+Your objective is to build and maintain **Radium Download Manager** (short name: **Radium**), a native Windows 11 open-source download manager and browser media downloader. Radium combines:
+1. A native **C++20 / Win32** desktop application (`radium.exe`) containing an in-process HTTP/HTTPS segmented download engine (`WinHTTP` + I/O Completion Ports) inspired by [Brisk](https://github.com/BrisklyDev/brisk)'s dynamic connection spawning and work-stealing range reuse algorithms.
 2. A **Manifest V3 Browser Extension** (Chromium & Firefox) inspired by [Cat Catch](https://github.com/xifangczy/cat-catch) and [Brisk Browser Extension](https://github.com/BrisklyDev/brisk-browser-extension) that detects downloadable files, progressive videos, and HLS/DASH manifests.
-3. A stateless **Native Messaging Host** (`openidm-nmh.exe`) that bridges browser `stdio` messages to `openidm.exe` over a per-user ACL-protected Windows Named Pipe.
+3. A stateless **Native Messaging Host** (`radium-nmh.exe`) that bridges browser `stdio` messages to `radium.exe` over a per-user ACL-protected Windows Named Pipe.
 4. Out-of-process worker integration with **[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE)** and **[FFmpeg](https://ffmpeg.org/)** inside a Windows Job Object for HLS/DASH/MSS stream probing, segment downloading, and muxing.
 
 ---
@@ -57,7 +57,7 @@ Before creating or modifying any file, inspect the repository state (`git status
 - **Unicode Everywhere:** Always define `UNICODE` and `_UNICODE`. Use `std::wstring` or `std::wstring_view` at Win32 API boundaries (`CreateFileW`, `WinHttpOpen`, `CreateProcessW`) and UTF-8 (`std::string`) internally for JSON, SQLite, and logs. Convert exclusively via `MultiByteToWideChar` / `WideCharToMultiByte` helper functions in `src/common/unicode.hpp`. Never use ANSI `*A` Win32 APIs.
 - **RAII for OS Handles:** Never hold raw `HANDLE`, `HINTERNET`, `HKEY`, `HWND`, or `sqlite3*` pointers across scopes without an RAII wrapper (`wil::unique_handle`, `wil::unique_winhttp_hinternet`, or project-defined `UniqueHandle`).
 - **Naming:**
-  - Namespaces: `openidm::core`, `openidm::engine`, `openidm::ipc`, `openidm::storage`, `openidm::ui` (`snake_case`).
+  - Namespaces: Authoritative external product namespace is `radium`; internal implementation modules transition from legacy namespaces (`openidm::core`, `openidm::engine`, `openidm::ipc`, `openidm::storage`, `openidm::ui` in `snake_case`).
   - Types, Classes, Structs, Enums: `PascalCase` (e.g., `HttpDownloadEngine`, `SegmentWorker`, `TaskState`).
   - Functions & Methods: `PascalCase` for public interface methods (`StartTask`, `CancelTask`), `camelCase` for private helpers.
   - Variables & Parameters: `snake_case` (`byte_offset`, `retry_count`), member variables prefixed with `m_` (`m_task_id`, `m_pipe_handle`).
@@ -87,9 +87,9 @@ Before creating or modifying any file, inspect the repository state (`git status
 Every code change must enforce the controls in [docs/SECURITY_THREAT_MODEL.md](docs/SECURITY_THREAT_MODEL.md) and [docs/PRIVACY_AND_DATA_HANDLING.md](docs/PRIVACY_AND_DATA_HANDLING.md):
 
 1. **No Arbitrary Command Execution:** The browser extension and IPC layer must **never** accept raw command-line strings, executable paths, or arbitrary `N_m3u8DL-RE` / `ffmpeg` flags from webpages or extension messages. The desktop app constructs all worker arguments from strongly typed, allowlisted fields.
-2. **No Command-Line Credential Exposure:** Never pass `Cookie`, `Authorization`, or custom headers on the `N_m3u8DL-RE.exe` command line where any local process can read them via `NtQueryInformationProcess` / WMI. Always write sensitive headers and cookies to a temporary response/cookie file in a user-ACL-restricted directory (`%LOCALAPPDATA%\OpenIDM\tmp\<task_uuid>\`) and delete it immediately after worker exit.
+2. **No Command-Line Credential Exposure:** Never pass `Cookie`, `Authorization`, or custom headers on the `N_m3u8DL-RE.exe` command line where any local process can read them via `NtQueryInformationProcess` / WMI. Always write sensitive headers and cookies to a temporary response/cookie file in a user-ACL-restricted directory (`%LOCALAPPDATA%\Radium Download Manager\tmp\<task_uuid>\`) and delete it immediately after worker exit.
 3. **No Path Traversal:** Sanitize every server-provided filename (`Content-Disposition`), URL path segment, and webpage `<title>`. Strip path separators (`/`, `\`), drive letters (`C:`), NTFS alternate data streams (`:`), reserved DOS device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`), trailing dots/spaces, and control characters (`0x00`–`0x1F`). Verify via `GetFullPathNameW` that the resolved target path resides strictly inside the user-selected destination directory.
-4. **No Unauthenticated Localhost HTTP Server:** Primary browser-to-desktop communication must use Native Messaging (`stdio`) bridged to an ACL-protected Windows Named Pipe (`\\.\pipe\OpenIDM_IPC_<UserSID>`).
+4. **No Unauthenticated Localhost HTTP Server:** Primary browser-to-desktop communication must use Native Messaging (`stdio`) bridged to an ACL-protected Windows Named Pipe (`\\.\pipe\Radium_IPC_<UserSID>`).
 5. **No Plaintext Credential Logging:** Redact `Cookie`, `Set-Cookie`, `Authorization`, `Proxy-Authorization`, and query parameters matching token patterns (`token`, `sig`, `signature`, `key`, `hdnea`, `Policy`, `Key-Pair-Id`) in all logs and crash dumps.
 6. **Strict DRM Non-Circumvention:** Never implement, integrate, or document Widevine, PlayReady, or FairPlay CDM key extraction, license server proxy attacks, or unauthorized decryption key acquisition. If a manifest contains `#EXT-X-KEY:METHOD=SAMPLE-AES-CTR` or DASH `cenc:pssh` DRM signaling, fail fast with error code `ERR_STREAM_DRM_PROTECTED` and explain clearly to the user that DRM-protected streams are unsupported.
 
@@ -121,3 +121,14 @@ Every code change must enforce the controls in [docs/SECURITY_THREAT_MODEL.md](d
 3. **Truthful Reporting (Zero Hallucination Rule):**
    - Never claim code was compiled, executed, tested, or benchmarked if you could not run the compiler or test runner (for example, when running in a Linux environment without MSVC/Windows SDK or without outbound internet access).
    - Explicitly separate **Verified by Execution**, **Verified by Static Inspection**, and **Unverified (Requires Windows 11 Host)** in every status report and pull request summary.
+
+---
+
+## 10. Backward Compatibility & Migration Interfaces
+
+To preserve seamless operation for users upgrading from earlier working titles (OpenIDM and Flux):
+1. **Native Messaging Hosts:** The primary Native Messaging host identifier is `com.radium.downloadmanager`. Registered compatibility fallback host identifiers are `com.flux.downloadmanager` and `org.openidm.native`.
+2. **Named Pipe & Socket Discovery:** Desktop and NMH prioritize `\\.\pipe\Radium_IPC_<UserSID>` (Windows) or `/tmp/radium_ipc_<uid>.sock` (POSIX). Environmental overrides are evaluated in strict priority order: `RADIUM_IPC_SOCKET` > `FLUX_IPC_SOCKET` > `OPENIDM_IPC_SOCKET`.
+3. **State & Data Migration:** On initial startup, the desktop application automatically detects and migrates legacy state databases and task histories from `%LOCALAPPDATA%\Flux Download Manager`, `%LOCALAPPDATA%\Flux`, or `%LOCALAPPDATA%\OpenIDM` into `%LOCALAPPDATA%\Radium Download Manager`.
+4. **POSIX Key Derivation Seed:** Never alter the POSIX credential derivation seed (`OpenIDM_DPAPI_Equivalent_UserKey_v1_UID_`) without an accompanying cryptographic state migration.
+

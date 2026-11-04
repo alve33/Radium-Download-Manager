@@ -1,7 +1,7 @@
 # Developer Environment Setup Guide
 
-**Document Status:** Active Setup Guide (`v0.3.1`)  
-**Last Reviewed:** 2026-10-20  
+**Document Status:** Active Setup Guide (`v1.0.0`)  
+**Last Reviewed:** 2026-11-04  
 **Scope:** Preparing a clean Windows 11 `x64` workstation to build, debug, and test Radium Download Manager.  
 **Related Documents:** [WINDOWS_BUILD_AND_PACKAGING.md](WINDOWS_BUILD_AND_PACKAGING.md), [TECHNOLOGY_STACK.md](TECHNOLOGY_STACK.md), [TEST_STRATEGY.md](TEST_STRATEGY.md), [FEATURE_MATRIX.md](FEATURE_MATRIX.md)
 
@@ -51,10 +51,10 @@ From a **x64 Native Tools Command Prompt for VS 2022** (or PowerShell):
 cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 
 # 2. Compile desktop app, native messaging host, and test binaries
-cmake --build build --config Release --target flux flux-nmh flux_unit_tests
+cmake --build build --config Release --target radium radium-nmh radium_unit_tests radium_core_tests
 
 # 3. Run C++ unit and regression tests
-.\build\Release\flux_unit_tests.exe
+.\build\Release\radium_unit_tests.exe
 ```
 
 Alternatively, use the automated build pipeline script:
@@ -79,7 +79,7 @@ Alternatively, use the automated build pipeline script:
 ### 2.4 Packaging Portable Archives & Installer
 ```powershell
 # Assemble portable zip packages (Full and Core) with SHA256SUMS.txt
-powershell -ExecutionPolicy Bypass -File scripts\package-release-zip.ps1 -Version "0.3.0" -PackageType Both
+powershell -ExecutionPolicy Bypass -File scripts\package-release-zip.ps1 -Version "1.0.0" -PackageType Both
 
 # Compile Inno Setup installer
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\radium.iss
@@ -91,9 +91,9 @@ powershell -ExecutionPolicy Bypass -File scripts\package-release-zip.ps1 -Versio
 
 | Symptom / Error | Root Cause | Resolution |
 | :--- | :--- | :--- |
-| **`Specified native messaging host not found`** in browser console | `HKCU\Software\...\NativeMessagingHosts\com.flux.downloadmanager` is not registered, or the path in the JSON manifest is invalid. | Run `.\scripts\register-native-messaging.ps1` and verify the JSON `"path"` points to a valid `flux-nmh.exe`. |
+| **`Specified native messaging host not found`** in browser console | `HKCU\Software\...\NativeMessagingHosts\com.radium.downloadmanager` is not registered, or the path in the JSON manifest is invalid. | Run `.\scripts\register-native-messaging.ps1` and verify the JSON `"path"` points to a valid `radium-nmh.exe`. |
 | **`Access to the specified native messaging host is forbidden`** | The unpacked extension's ID in `chrome://extensions` is not listed in `allowed_origins`. | Re-run `.\scripts\register-native-messaging.ps1` without arguments; it automatically derives and adds the unpacked path-based extension ID. |
-| **`N_m3u8DL-RE.exe` exits immediately with access denied** | `N_m3u8DL-RE` defaults to creating a `Logs/` directory next to its binary in `%ProgramFiles%`. | Flux passes `--no-log` and executes workers with user-scoped response files in `%LOCALAPPDATA%\Flux\tmp\`. |
+| **`N_m3u8DL-RE.exe` exits immediately with access denied** | `N_m3u8DL-RE` defaults to creating a `Logs/` directory next to its binary in `%ProgramFiles%`. | Radium passes `--no-log` and executes workers with user-scoped response files in `%LOCALAPPDATA%\Radium Download Manager\tmp\`. |
 | **CMake cannot find compiler** | Running from a standard shell without MSVC environment variables. | Launch from the *x64 Native Tools Command Prompt for VS 2022* or invoke `vcvars64.bat`. |
 
 Native messaging registration prefers the staged `dist\radium-nmh.exe` so cleaning the C++ build directory does not invalidate the browser bridge. Rebuilds stage extension assets in `dist\extension` and do not remove the source `extension\` directory.

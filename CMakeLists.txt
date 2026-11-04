@@ -2,6 +2,14 @@
 cmake_minimum_required(VERSION 3.24)
 project(Radium VERSION 1.0.0 LANGUAGES C CXX)
 add_compile_definitions(
+    RADIUM_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    RADIUM_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    RADIUM_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+    RADIUM_VERSION_STRING="${PROJECT_VERSION}"
+    RADIUM_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    RADIUM_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    RADIUM_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+    RADIUM_VERSION_STRING="${PROJECT_VERSION}"
     FLUX_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     FLUX_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     FLUX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
@@ -53,6 +61,7 @@ set(RADIUM_CORE_SOURCES
     src/engine_stream/nm3u8dl_re_adapter.cpp
     src/core/download_controller.cpp
     src/ipc/ipc_server.cpp
+    src/ui/startup_log_dialog.cpp
     src/ui/win32_main_window.cpp
 )
 
@@ -78,6 +87,17 @@ add_executable(N_m3u8DL-RE src/common/crypto_utils.cpp src/brisk_engine/http_cli
 # Build prerequisite: unit tests expect worker binary to be available
 add_dependencies(radium_unit_tests N_m3u8DL-RE)
 add_dependencies(radium_core_tests N_m3u8DL-RE)
+
+# Target Aliases for Developer and Legacy Build Script Compatibility (RDM-04)
+add_library(flux_core ALIAS radium_core)
+add_custom_target(flux DEPENDS radium)
+add_custom_target(flux-nmh DEPENDS radium-nmh)
+add_custom_target(flux_unit_tests DEPENDS radium_unit_tests)
+add_custom_target(flux_core_tests DEPENDS radium_core_tests)
+add_custom_target(openidm DEPENDS radium)
+add_custom_target(openidm-nmh DEPENDS radium-nmh)
+add_custom_target(openidm_unit_tests DEPENDS radium_unit_tests)
+add_custom_target(openidm_core_tests DEPENDS radium_core_tests)
 
 
 if(WIN32)

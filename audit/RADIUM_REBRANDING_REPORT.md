@@ -89,3 +89,23 @@ All test suites were re-executed from the new `C:\Users\sayed\Downloads\Radium` 
 - **Application Identity:** Radium Download Manager (Coral Red visual branding)
 - **Active Code Health:** Zero compiler warnings or errors; all unit, core, integration, and security tests pass.
 - **Git Working Tree:** Intact with all uncommitted changes preserved.
+
+---
+
+## 6. Post-Audit Rebranding Reconciliation (2026-11-04)
+
+During the comprehensive engineering audit and verification pass, the following clarifications and reconciliations were established against the active codebase:
+
+1. **CMake Target Reality:**
+   - Active build targets in `CMakeLists.txt` are strictly `radium`, `radium-nmh`, `radium_unit_tests`, `radium_core_tests`, `radium_core`, and `N_m3u8DL-RE`.
+   - Dedicated alias targets (such as `flux`, `flux-nmh`, `openidm`) are not defined in `CMakeLists.txt`. Documentation and setup scripts now correctly prescribe the authoritative `radium*` targets.
+2. **Browser Extension Persistence Migration:**
+   - In `extension/js/background.js`, session state persistence implements dual-writing to both `radium_*` and legacy `flux_*` keys in `chrome.storage.session` and `chrome.storage.local`.
+   - On session restore, the extension queries `radium_*` keys first, falling back to `flux_*` keys if `radium_*` data is absent, ensuring zero data loss for existing users.
+3. **`CreateFluxAppIcon()` Verification:**
+   - The symbol `CreateFluxAppIcon()` is empirically verified present in `src/ui/win32_main_window.cpp:6669-6671`, delegating directly to `CreateRadiumAppIcon()`.
+4. **Primary vs. Compatibility Interfaces:**
+   - **Primary Native Messaging ID:** `com.radium.downloadmanager`. Registered compatibility fallbacks: `com.flux.downloadmanager` and `org.openidm.native`.
+   - **Primary Named Pipe:** `\\.\pipe\Radium_IPC_<UserSID>`. Registered compatibility fallback: `\\.\pipe\Flux_IPC_<UserSID>`. Overrides prioritize `RADIUM_IPC_SOCKET` > `FLUX_IPC_SOCKET` > `OPENIDM_IPC_SOCKET`.
+   - **Application Data Path:** `%LOCALAPPDATA%\Radium Download Manager\`. On startup, `PathSanitizer::MigrateLegacyDataIfNeeded` checks `%LOCALAPPDATA%\Flux Download Manager`, `%LOCALAPPDATA%\Flux`, and `%LOCALAPPDATA%\OpenIDM`, copying existing `state.db` and logs safely while preserving original directories.
+

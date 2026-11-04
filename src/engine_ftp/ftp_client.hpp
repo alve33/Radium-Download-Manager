@@ -25,7 +25,7 @@ struct FtpUrl {
     uint16_t port{21};
     std::string user{"anonymous"};
     std::string username{"anonymous"};
-    std::string password{"anonymous@flux.org"};
+    std::string password{"anonymous@example.com"};
     std::string remote_path;
     std::string file_name;
 

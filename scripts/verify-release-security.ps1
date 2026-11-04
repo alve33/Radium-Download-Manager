@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Flux Download Manager -- Release Security & Distribution Verification Script
+# Radium Download Manager -- Release Security & Distribution Verification Script
 # Audits release checksums, dependency hashes, PE32+ headers, Authenticode signatures,
 # credential redaction, and path sanitization security invariants.
 
@@ -122,6 +122,14 @@ $signCandidates = Get-ChildItem -Path $DistDir -Filter "*.exe" -File
 $hasSigningSecret = [bool]($env:SIGNING_CERT_BASE64 -or $env:CODE_SIGNING_CERT)
 
 foreach ($exe in $signCandidates) {
+    if ($exe.Name -in @("radium.exe", "Radium.exe", "radium-nmh.exe")) {
+        $verInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe.FullName)
+        if (-not $verInfo.ProductName -or $verInfo.ProductName.Trim() -ne "Radium Download Manager") {
+            throw "Security Audit FAILED: Executable $($exe.Name) has invalid ProductName '$($verInfo.ProductName)' (expected 'Radium Download Manager')!"
+        }
+        Write-Host "  [PE IDENTITY - OK] $($exe.Name): ProductName = '$($verInfo.ProductName)'" -ForegroundColor Green
+    }
+
     $sig = Get-AuthenticodeSignature -FilePath $exe.FullName
     if ($sig.Status -eq "Valid") {
         Write-Host "  [SIGNED - VALID] $($exe.Name): Signed by $($sig.SignerCertificate.Subject)" -ForegroundColor Green
@@ -146,14 +154,19 @@ Write-Host "`n[Check 4/5] Auditing Credential & Token Redaction Filters..." -For
 $sensitivePatterns = @("Cookie", "Authorization", "Proxy-Authorization", "token", "sig", "signature", "key", "hdnea")
 Write-Host "  Enforced redaction token allowlist: $($sensitivePatterns -join ', ')" -ForegroundColor White
 # Check that no sensitive tokens appear in plaintext in logs or temporary response files
-$logDir = Join-Path ([System.IO.Path]::GetTempPath()) "flux_test_logs"
-if (Test-Path $logDir) {
-    $logs = Get-ChildItem -Path $logDir -Filter "*.log" -Recurse
-    foreach ($l in $logs) {
-        $content = Get-Content $l.FullName -Raw
-        foreach ($pattern in @("Bearer secret_", "password=123", "sid=secret_cookie_abc")) {
-            if ($content -match $pattern) {
-                throw "Security Audit FAILED: Plaintext credential leak detected in log $($l.Name) matching '$pattern'!"
+$logDirs = @(
+    (Join-Path ([System.IO.Path]::GetTempPath()) "radium_test_logs"),
+    (Join-Path ([System.IO.Path]::GetTempPath()) "flux_test_logs")
+)
+foreach ($logDir in $logDirs) {
+    if (Test-Path $logDir) {
+        $logs = Get-ChildItem -Path $logDir -Filter "*.log" -Recurse
+        foreach ($l in $logs) {
+            $content = Get-Content $l.FullName -Raw
+            foreach ($pattern in @("Bearer secret_", "password=123", "sid=secret_cookie_abc")) {
+                if ($content -match $pattern) {
+                    throw "Security Audit FAILED: Plaintext credential leak detected in log $($l.Name) matching '$pattern'!"
+                }
             }
         }
     }

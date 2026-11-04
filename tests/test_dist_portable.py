@@ -12,12 +12,12 @@ import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DIST_RADIUM = (ROOT / "dist" / "Radium.exe") if (ROOT / "dist" / "Radium.exe").is_file() else ((ROOT / "dist" / "radium.exe") if (ROOT / "dist" / "radium.exe").is_file() else (ROOT / "dist" / "Flux.exe"))
+DIST_RADIUM = (ROOT / "dist" / "Radium.exe") if (ROOT / "dist" / "Radium.exe").is_file() else (ROOT / "dist" / "radium.exe")
 DIST_FLUX = DIST_RADIUM
-DIST_NMH = (ROOT / "dist" / "radium-nmh.exe") if (ROOT / "dist" / "radium-nmh.exe").is_file() else (ROOT / "dist" / "flux-nmh.exe")
+DIST_NMH = ROOT / "dist" / "radium-nmh.exe"
 
-assert DIST_FLUX.is_file(), f"Missing {DIST_FLUX}"
-assert DIST_NMH.is_file(), f"Missing {DIST_NMH}"
+assert DIST_FLUX.is_file(), f"Missing Radium binary: {DIST_FLUX}"
+assert DIST_NMH.is_file(), f"Missing radium-nmh binary: {DIST_NMH}"
 
 os.environ["RADIUM_ALLOW_LOOPBACK"] = "1"
 os.environ["FLUX_ALLOW_LOOPBACK"] = "1"
@@ -115,7 +115,7 @@ def main():
         dl_dir.mkdir(parents=True, exist_ok=True)
         db_file = tmp_dir / "radium_test.db"
         res = subprocess.run(
-            [str(DIST_FLUX), "--db", str(db_file), "--out", str(dl_dir), "--download", f"{base_url}/files/ordinary_2mb.bin"],
+            [str(DIST_FLUX), "--db", str(db_file), "--out", str(dl_dir), "--allow-loopback", "--download", f"{base_url}/files/ordinary_2mb.bin"],
             capture_output=True,
             text=True,
             check=True
@@ -130,7 +130,7 @@ def main():
         # 2. HLS Stream Probe & Download
         print(f"  [2/3] Testing HLS Manifest Probe via {DIST_FLUX.name}...")
         probe = subprocess.run(
-            [str(DIST_FLUX), "--db", str(db_file), "--probe-stream", f"{base_url}/hls/master.m3u8"],
+            [str(DIST_FLUX), "--db", str(db_file), "--allow-loopback", "--probe-stream", f"{base_url}/hls/master.m3u8"],
             capture_output=True,
             text=True,
             check=True
@@ -141,7 +141,7 @@ def main():
         # 3. DASH Stream Probe
         print(f"  [3/3] Testing DASH Manifest Probe via {DIST_FLUX.name}...")
         dash_probe = subprocess.run(
-            [str(DIST_FLUX), "--db", str(db_file), "--probe-stream", f"{base_url}/dash/manifest.mpd"],
+            [str(DIST_FLUX), "--db", str(db_file), "--allow-loopback", "--probe-stream", f"{base_url}/dash/manifest.mpd"],
             capture_output=True,
             text=True,
             check=True

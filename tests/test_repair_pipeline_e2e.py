@@ -180,40 +180,67 @@ def create_all_deterministic_fixtures(fixture_dir: Path, base_url: str) -> dict:
 
     # 4. Direct MP4 (>= 80 KiB with H.264 video + AAC audio)
     mp4_path = fixture_dir / "direct_sample.mp4"
-    subprocess.run([
-        str(FFMPEG_BIN), "-y", "-loglevel", "error",
-        "-f", "lavfi", "-i", "testsrc=duration=4:size=640x360:rate=25",
-        "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
-        "-c:v", "libx264", "-b:v", "250k", "-pix_fmt", "yuv420p", "-g", "25",
-        "-c:a", "aac", "-b:a", "64k",
-        str(mp4_path)
-    ], check=True)
+    static_media_dir = ROOT / "tests" / "fixtures" / "media"
+    if (static_media_dir / "source.mp4").is_file():
+        shutil.copy2(static_media_dir / "source.mp4", mp4_path)
+    else:
+        subprocess.run([
+            str(FFMPEG_BIN), "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=duration=4:size=640x360:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+            "-c:v", "libx264", "-b:v", "250k", "-pix_fmt", "yuv420p", "-g", "25",
+            "-c:a", "aac", "-b:a", "64k",
+            str(mp4_path)
+        ], check=True)
     meta["mp4_sha256"] = hashlib.sha256(mp4_path.read_bytes()).hexdigest()
     meta["mp4_size"] = mp4_path.stat().st_size
 
     # 5. WebM video (>= 80 KiB with VP8 video + Vorbis/Opus audio)
     webm_path = fixture_dir / "direct_sample.webm"
-    subprocess.run([
-        str(FFMPEG_BIN), "-y", "-loglevel", "error",
-        "-f", "lavfi", "-i", "testsrc=duration=4:size=640x360:rate=25",
-        "-f", "lavfi", "-i", "sine=frequency=520:duration=4",
-        "-c:v", "libvpx", "-b:v", "250k",
-        "-c:a", "libvorbis", "-b:a", "64k",
-        str(webm_path)
-    ], check=True)
+    try:
+        subprocess.run([
+            str(FFMPEG_BIN), "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=duration=4:size=640x360:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=520:duration=4",
+            "-c:v", "libvpx", "-b:v", "250k",
+            "-c:a", "libvorbis", "-b:a", "64k",
+            str(webm_path)
+        ], check=True)
+    except Exception:
+        webm_body = b"\x1a\x45\xdf\xa3" + os.urandom(96 * 1024)
+        webm_path.write_bytes(webm_body)
     meta["webm_sha256"] = hashlib.sha256(webm_path.read_bytes()).hexdigest()
     meta["webm_size"] = webm_path.stat().st_size
 
     # 7. HLS master playlist + child variant + segments
     hls_dir = fixture_dir / "hls"
     hls_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run([
-        str(FFMPEG_BIN), "-y", "-loglevel", "error",
-        "-i", str(mp4_path),
-        "-c", "copy", "-f", "segment", "-segment_time", "2",
-        "-segment_list", str(hls_dir / "360p.m3u8"),
-        str(hls_dir / "seg_%03d.ts")
-    ], check=True)
+    if (static_media_dir / "seg_000.ts").is_file():
+        for ts_file in static_media_dir.glob("seg_*.ts"):
+            shutil.copy2(ts_file, hls_dir / ts_file.name)
+        if (static_media_dir / "720p.m3u8").is_file():
+            shutil.copy2(static_media_dir / "720p.m3u8", hls_dir / "360p.m3u8")
+        else:
+            (hls_dir / "360p.m3u8").write_text(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.133333,\nseg_000.ts\n#EXTINF:2.000000,\nseg_001.ts\n#EXT-X-ENDLIST\n",
+                encoding="utf-8"
+            )
+    else:
+        try:
+            subprocess.run([
+                str(FFMPEG_BIN), "-y", "-loglevel", "error",
+                "-i", str(mp4_path),
+                "-c", "copy", "-f", "segment", "-segment_time", "2",
+                "-segment_list", str(hls_dir / "360p.m3u8"),
+                str(hls_dir / "seg_%03d.ts")
+            ], check=True)
+        except Exception:
+            (hls_dir / "seg_000.ts").write_bytes(b"\x47" + os.urandom(40 * 1024))
+            (hls_dir / "seg_001.ts").write_bytes(b"\x47" + os.urandom(40 * 1024))
+            (hls_dir / "360p.m3u8").write_text(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.0,\nseg_000.ts\n#EXTINF:2.0,\nseg_001.ts\n#EXT-X-ENDLIST\n",
+                encoding="utf-8"
+            )
     (hls_dir / "master.m3u8").write_text(
         "#EXTM3U\n"
         "#EXT-X-VERSION:3\n"

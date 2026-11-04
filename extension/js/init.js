@@ -116,7 +116,7 @@ var G = {
     "py", "ipynb", "js", "mjs", "cjs", "ts", "tsx", "jsx", "html", "htm", "css", "scss", "sass", "json", "jsonl",
     "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "sql", "sh", "bash", "zsh", "bat", "cmd", "ps1",
     "c", "cpp", "cc", "cxx", "h", "hpp", "hxx", "cs", "rs", "go", "java", "kt", "rb", "php", "lua", "r", "m", "swift",
-    "txt", "md", "markdown", "log", "svg", "webp",
+    "txt", "md", "markdown", "log",
     // Media & Progressive Audio/Video
     "mp4", "mkv", "webm", "mov", "avi", "flv", "wmv", "m4v", "3gp", "ts",
     "mp3", "m4a", "flac", "wav", "aac", "ogg", "opus", "wma",

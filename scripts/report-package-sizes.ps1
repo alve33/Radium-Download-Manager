@@ -67,33 +67,49 @@ Write-Host "  Repository Root : $RepoRoot" -ForegroundColor White
 Write-Host "  Dist Directory  : $DistDir" -ForegroundColor White
 
 # 1. Locate and Measure Core Binaries
-$fluxCandidates = @(
+$radiumCandidates = @(
     (Join-Path $DistDir "Radium.exe"),
     (Join-Path $DistDir "radium.exe"),
+    (Join-Path $RepoRoot "build\win-x64\Release\radium.exe"),
+    (Join-Path $RepoRoot "build\win-x64\Release\Radium.exe"),
+    (Join-Path $RepoRoot "build\Release\radium.exe"),
+    (Join-Path $RepoRoot "build\Release\Radium.exe"),
+    (Join-Path $RepoRoot "build\win-x64\radium.exe"),
+    (Join-Path $RepoRoot "build\win-x64\Radium.exe"),
+    (Join-Path $RepoRoot "build\radium.exe"),
+    (Join-Path $RepoRoot "build\Radium.exe"),
+    # Legacy fallbacks
     (Join-Path $DistDir "Flux.exe"),
     (Join-Path $DistDir "flux.exe"),
     (Join-Path $RepoRoot "build\win-x64\Release\flux.exe"),
     (Join-Path $RepoRoot "build\win-x64\flux.exe")
 )
-$fluxExePath = $null
-foreach ($c in $fluxCandidates) {
-    if (Test-Path $c) { $fluxExePath = (Resolve-Path $c).Path; break }
+$radiumExePath = $null
+foreach ($c in $radiumCandidates) {
+    if (Test-Path $c) { $radiumExePath = (Resolve-Path $c).Path; break }
 }
-$fluxExeSize = if ($fluxExePath) { (Get-Item $fluxExePath).Length } else { 0 }
+$radiumExeSize = if ($radiumExePath) { (Get-Item $radiumExePath).Length } else { 0 }
+$fluxExeSize = $radiumExeSize
 
-$nmhCandidates = @(
+$radiumNmhCandidates = @(
     (Join-Path $DistDir "radium-nmh.exe"),
+    (Join-Path $RepoRoot "build\win-x64\Release\radium-nmh.exe"),
+    (Join-Path $RepoRoot "build\Release\radium-nmh.exe"),
+    (Join-Path $RepoRoot "build\win-x64\radium-nmh.exe"),
+    (Join-Path $RepoRoot "build\radium-nmh.exe"),
+    # Legacy fallbacks
     (Join-Path $DistDir "flux-nmh.exe"),
     (Join-Path $RepoRoot "build\win-x64\Release\flux-nmh.exe"),
     (Join-Path $RepoRoot "build\win-x64\flux-nmh.exe")
 )
-$nmhExePath = $null
-foreach ($c in $nmhCandidates) {
-    if (Test-Path $c) { $nmhExePath = (Resolve-Path $c).Path; break }
+$radiumNmhExePath = $null
+foreach ($c in $radiumNmhCandidates) {
+    if (Test-Path $c) { $radiumNmhExePath = (Resolve-Path $c).Path; break }
 }
-$nmhExeSize = if ($nmhExePath) { (Get-Item $nmhExePath).Length } else { 0 }
+$radiumNmhExeSize = if ($radiumNmhExePath) { (Get-Item $radiumNmhExePath).Length } else { 0 }
+$nmhExeSize = $radiumNmhExeSize
 
-$coreBinariesTotal = $fluxExeSize + $nmhExeSize
+$coreBinariesTotal = $radiumExeSize + $radiumNmhExeSize
 
 # 2. Measure Clean Extension Assets (excluding dev/test files)
 $extDir = Join-Path $RepoRoot "extension"
@@ -197,7 +213,8 @@ $ffFlavor = if ($ffmpegSize -eq 0) { "Not Staged (Est: 14.0 MB)" } elseif ($ffmp
 $ytFlavor = if ($ytdlpSize -eq 0) { "Not Staged (Est: 17.0 MB)" } elseif ($ytdlpSize -lt 12MB) { "Ultra-Compact yt-dlp_min" } else { "Standard Standalone yt-dlp" }
 
 # Component-level solid LZMA2 compressed contribution estimates (bytes)
-$fluxCompressedEst = [int64]1450000       # ~1.38 MB [ESTIMATE]
+$radiumCompressedEst = [int64]1450000     # ~1.38 MB [ESTIMATE]
+$fluxCompressedEst = $radiumCompressedEst # Backwards compatibility alias
 $nmhCompressedEst = [int64]135000         # ~132 KB [ESTIMATE]
 $extCompressedEst = [int64]70000          # ~68 KB [ESTIMATE]
 $docsCompressedEst = [int64]25000         # ~24 KB [ESTIMATE]
@@ -208,13 +225,13 @@ $ffCompressedEst = if ($ffmpegSize -gt 0 -and $ffmpegSize -lt 25MB) { [int64]576
 $ytCompressedEst = if ($ytdlpSize -gt 0 -and $ytdlpSize -lt 12MB) { [int64]7860000 } elseif ($ytdlpSize -ge 12MB) { [int64]12050000 } else { [int64]12050000 } # ~7.5 MB min vs ~11.5 MB standard [ESTIMATE]
 
 # Total Estimated Installer Download Size
-$coreInstallerEstBytes = $fluxCompressedEst + $nmhCompressedEst + $extCompressedEst + $docsCompressedEst + $innoStubCompressedEst # ~2.13 MB
+$coreInstallerEstBytes = $radiumCompressedEst + $nmhCompressedEst + $extCompressedEst + $docsCompressedEst + $innoStubCompressedEst # ~2.13 MB
 $fullInstallerEstBytes = $coreInstallerEstBytes + $nmCompressedEst + $ffCompressedEst + $ytCompressedEst
 
 Write-Host "`n--- [1] PACKAGED COMPONENT BREAKDOWN ---" -ForegroundColor Yellow
 $compTable = @(
-    [PSCustomObject]@{ Component = "radium.exe (Desktop GUI)"; Flavor = "Native C++20 / Win32"; Location = "dist\Radium.exe"; DiskFootprint = Format-Bytes $fluxExeSize; CompressedEst = Format-Bytes $fluxCompressedEst; PctOfFull = "$([Math]::Round(($fluxCompressedEst / $fullInstallerEstBytes) * 100, 1))% [EST]" },
-    [PSCustomObject]@{ Component = "radium-nmh.exe (Native Host)"; Flavor = "Native C++20 / Stdio"; Location = "dist\radium-nmh.exe"; DiskFootprint = Format-Bytes $nmhExeSize; CompressedEst = Format-Bytes $nmhCompressedEst; PctOfFull = "$([Math]::Round(($nmhCompressedEst / $fullInstallerEstBytes) * 100, 1))% [EST]" },
+    [PSCustomObject]@{ Component = "radium.exe (Desktop GUI)"; Flavor = "Native C++20 / Win32"; Location = "dist\Radium.exe"; DiskFootprint = Format-Bytes $radiumExeSize; CompressedEst = Format-Bytes $radiumCompressedEst; PctOfFull = "$([Math]::Round(($radiumCompressedEst / $fullInstallerEstBytes) * 100, 1))% [EST]" },
+    [PSCustomObject]@{ Component = "radium-nmh.exe (Native Host)"; Flavor = "Native C++20 / Stdio"; Location = "dist\radium-nmh.exe"; DiskFootprint = Format-Bytes $radiumNmhExeSize; CompressedEst = Format-Bytes $nmhCompressedEst; PctOfFull = "$([Math]::Round(($nmhCompressedEst / $fullInstallerEstBytes) * 100, 1))% [EST]" },
     [PSCustomObject]@{ Component = "Browser Extension (clean)"; Flavor = "Vanilla TS / Manifest V3"; Location = "extension\"; DiskFootprint = Format-Bytes $extTotalBytes; CompressedEst = Format-Bytes $extCompressedEst; PctOfFull = "$([Math]::Round(($extCompressedEst / $fullInstallerEstBytes) * 100, 1))% [EST]" },
     [PSCustomObject]@{ Component = "Docs, Scripts & Manifests"; Flavor = "Licenses, Readme, Reg"; Location = "README, LICENSE, manifests"; DiskFootprint = Format-Bytes $docsAndManifestsTotal; CompressedEst = Format-Bytes $docsCompressedEst; PctOfFull = "$([Math]::Round(($docsCompressedEst / $fullInstallerEstBytes) * 100, 1))% [EST]" },
     [PSCustomObject]@{ Component = "N_m3u8DL-RE.exe"; Flavor = $nmFlavor; Location = "tools\win-x64\N_m3u8DL-RE.exe"; DiskFootprint = Format-Bytes $nm3u8dlSize; CompressedEst = Format-Bytes $nmCompressedEst; PctOfFull = "$([Math]::Round(($nmCompressedEst / $fullInstallerEstBytes) * 100, 1))% [EST]" },
@@ -363,9 +380,12 @@ $budgetData = [ordered]@{
         installed_footprint_reduction_percent = $footprintSavingsPercent
     }
     component_breakdown = [ordered]@{
-        flux_exe_bytes = $fluxExeSize
+        radium_exe_bytes = $radiumExeSize
+        radium_exe_flavor = "Native C++20 / Win32"
+        radium_nmh_exe_bytes = $radiumNmhExeSize
+        flux_exe_bytes = $radiumExeSize
         flux_exe_flavor = "Native C++20 / Win32"
-        flux_nmh_exe_bytes = $nmhExeSize
+        flux_nmh_exe_bytes = $radiumNmhExeSize
         browser_extension_unpacked_bytes = $extTotalBytes
         docs_and_manifests_bytes = $docsAndManifestsTotal
         worker_nm3u8dl_re_bytes = $nm3u8dlSize
@@ -424,12 +444,14 @@ if ($UpdateMetrics) {
     $metricsPath = Join-Path $RepoRoot "benchmarks\latest_metrics.json"
     if (Test-Path $metricsPath) {
         $existingMetrics = Get-Content $metricsPath -Raw | ConvertFrom-Json
-        $existingMetrics | Add-Member -NotePropertyName "flux_binary_bytes" -NotePropertyValue $fluxExeSize -Force
-        $existingMetrics | Add-Member -NotePropertyName "flux_nmh_binary_bytes" -NotePropertyValue $nmhExeSize -Force
+        $existingMetrics | Add-Member -NotePropertyName "radium_binary_bytes" -NotePropertyValue $radiumExeSize -Force
+        $existingMetrics | Add-Member -NotePropertyName "radium_nmh_binary_bytes" -NotePropertyValue $radiumNmhExeSize -Force
+        $existingMetrics | Add-Member -NotePropertyName "flux_binary_bytes" -NotePropertyValue $radiumExeSize -Force
+        $existingMetrics | Add-Member -NotePropertyName "flux_nmh_binary_bytes" -NotePropertyValue $radiumNmhExeSize -Force
         $existingMetrics | Add-Member -NotePropertyName "nm3u8dl_re_worker_bytes" -NotePropertyValue $nm3u8dlSize -Force
         $existingMetrics | Add-Member -NotePropertyName "ffmpeg_binary_bytes" -NotePropertyValue $ffmpegSize -Force
         $existingMetrics | Add-Member -NotePropertyName "ytdlp_binary_bytes" -NotePropertyValue $ytdlpSize -Force
-        $existingMetrics | Add-Member -NotePropertyName "combined_core_binaries_kb" -NotePropertyValue ([Math]::Round(($fluxExeSize + $nmhExeSize) / 1KB, 1)) -Force
+        $existingMetrics | Add-Member -NotePropertyName "combined_core_binaries_kb" -NotePropertyValue ([Math]::Round(($radiumExeSize + $radiumNmhExeSize) / 1KB, 1)) -Force
         $existingMetrics | Add-Member -NotePropertyName "total_stream_workers_kb" -NotePropertyValue ([Math]::Round($streamWorkersSingleTotal / 1KB, 1)) -Force
         $existingMetrics | Add-Member -NotePropertyName "full_installed_footprint_mb" -NotePropertyValue ([Math]::Round($fullInstalledFootprint / 1MB, 2)) -Force
         $existingMetrics | Add-Member -NotePropertyName "duplicate_savings_bytes" -NotePropertyValue $footprintSavingsBytes -Force

@@ -17,6 +17,9 @@
 #include "engine_torrent/bencode.hpp"
 #include "engine_torrent/torrent_parser.hpp"
 #include "brisk_engine/segment_scheduler.hpp"
+#include "core/download_controller.hpp"
+#include "ipc/ipc_server.hpp"
+#include "common/startup_diagnostic.hpp"
 
 #define TEST_ASSERT(cond, msg) \
     do { \
@@ -200,9 +203,319 @@ bool TestDedicatedSegmentScheduler() {
     return true;
 }
 
+// 5. IPC Message Handling, Correlation ID & Diagnostic Report Chronology Tests
+bool TestIpcDiagnosticAndCorrelationVerification() {
+    using namespace openidm;
+    using namespace openidm::ipc;
+    using namespace openidm::diagnostics;
+
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_emp_diag_" + openidm::GenerateUuidV4());
+    std::filesystem::create_directories(work_dir);
+    std::filesystem::create_directories(work_dir / "downloads");
+    std::filesystem::create_directories(work_dir / "tmp");
+
+    openidm::ControllerConfig cfg;
+    cfg.state_db_path = work_dir / "state.db";
+    cfg.default_download_dir = work_dir / "downloads";
+    cfg.temp_root_dir = work_dir / "tmp";
+
+    openidm::DownloadController ctrl(cfg);
+    TEST_ASSERT(ctrl.Initialize().ok(), "Initialize DownloadController");
+
+    openidm::ipc::IpcServer ipc_server(ctrl);
+    ipc_server.SetHeadlessDaemonMode(true);
+
+    auto& recorder = StartupDiagnosticRecorder::Instance();
+    recorder.ClearReports();
+    recorder.InitializeStorage(work_dir);
+
+    // =========================================================================
+    // Scenario 1: download.offer with custom correlationId & clientClickTime
+    // =========================================================================
+    const std::string offer_corr_id = "test-corr-offer-empirical-001-uuid";
+    const uint64_t offer_click_ms = 1730718000000ULL;
+
+    json::Value offer_req_obj = json::Object{};
+    offer_req_obj["jsonrpc"] = "2.0";
+    offer_req_obj["id"] = 101;
+    offer_req_obj["method"] = "download.offer";
+    json::Value offer_params = json::Object{};
+    offer_params["url"] = "https://sg-lg.regxa.com/500MB.test";
+    offer_params["filename"] = "500MB.test";
+    offer_params["correlationId"] = offer_corr_id;
+    offer_params["clientClickTime"] = static_cast<int64_t>(offer_click_ms);
+    offer_params["autoStart"] = false;
+    offer_req_obj["params"] = std::move(offer_params);
+
+    std::string offer_resp_raw = ipc_server.HandleJsonRpcMessage(offer_req_obj.dump());
+    json::Value offer_resp = json::Parse(offer_resp_raw);
+    TEST_ASSERT(offer_resp.contains("result"), "download.offer response contains result");
+    TEST_ASSERT(offer_resp["result"]["accepted"].as_bool() == true, "download.offer accepted == true");
+    TEST_ASSERT(offer_resp["result"]["correlationId"].as_string() == offer_corr_id, "download.offer response correlationId matches input");
+    std::string offer_task_id = offer_resp["result"]["taskId"].as_string();
+    TEST_ASSERT(!offer_task_id.empty(), "download.offer taskId is non-empty");
+
+    // =========================================================================
+    // Scenario 2: stream.add with custom correlationId & clientClickTime
+    // =========================================================================
+    const std::string stream_corr_id = "test-corr-stream-empirical-002-uuid";
+    const uint64_t stream_click_ms = 1730718100000ULL;
+
+    json::Value stream_req_obj = json::Object{};
+    stream_req_obj["jsonrpc"] = "2.0";
+    stream_req_obj["id"] = 102;
+    stream_req_obj["method"] = "stream.add";
+    json::Value stream_params = json::Object{};
+    stream_params["url"] = "https://www.youtube.com/watch?v=7NWN3wivxhA";
+    stream_params["sourceType"] = "YOUTUBE_EXTRACTION";
+    stream_params["streamType"] = "YOUTUBE";
+    stream_params["correlationId"] = stream_corr_id;
+    stream_params["clientClickTime"] = static_cast<int64_t>(stream_click_ms);
+    stream_params["autoStart"] = false;
+    stream_params["filename"] = "youtube_empirical.mp4";
+    stream_params["qualityId"] = "1080p";
+    stream_req_obj["params"] = std::move(stream_params);
+
+    std::string stream_resp_raw = ipc_server.HandleJsonRpcMessage(stream_req_obj.dump());
+    json::Value stream_resp = json::Parse(stream_resp_raw);
+    TEST_ASSERT(stream_resp.contains("result"), "stream.add response contains result");
+    TEST_ASSERT(stream_resp["result"]["accepted"].as_bool() == true, "stream.add accepted == true");
+    std::string stream_task_id = stream_resp["result"]["taskId"].as_string();
+    TEST_ASSERT(!stream_task_id.empty(), "stream.add taskId is non-empty");
+
+    // =========================================================================
+    // Verification: Inspect Active Diagnostic Reports via GetReports()
+    // =========================================================================
+    auto reports = recorder.GetReports();
+    TEST_ASSERT(reports.size() >= 2, "At least 2 active reports registered");
+
+    const StartupReport* r_offer = nullptr;
+    const StartupReport* r_stream = nullptr;
+    for (const auto& r : reports) {
+        if (r.download_id == offer_task_id) r_offer = &r;
+        if (r.download_id == stream_task_id) r_stream = &r;
+    }
+
+    TEST_ASSERT(r_offer != nullptr, "Report for download.offer task located");
+    TEST_ASSERT(r_stream != nullptr, "Report for stream.add task located");
+
+    // Exact correlation ID match
+    TEST_ASSERT(r_offer->correlation_id == offer_corr_id, "download.offer report correlation_id matches input exactly");
+    TEST_ASSERT(r_stream->correlation_id == stream_corr_id, "stream.add report correlation_id matches input exactly");
+    TEST_ASSERT(r_offer->download_type == "HTTP", "download.offer report download_type is HTTP");
+    TEST_ASSERT(r_stream->download_type == "YouTube", "stream.add report download_type is YouTube");
+
+    // Inspect chronological ordering of initial events for offer
+    TEST_ASSERT(r_offer->events.size() >= 3, "download.offer has at least 3 initial events");
+    TEST_ASSERT(r_offer->events[0].event_name == "Download button clicked", "Event 0 is 'Download button clicked'");
+    TEST_ASSERT(r_offer->events[1].event_name == "Download task created", "Event 1 is 'Download task created'");
+    TEST_ASSERT(r_offer->events[2].event_name == "Native messaging host receives the request", "Event 2 is 'Native messaging host receives the request'");
+    TEST_ASSERT(r_offer->events[0].elapsed_us <= r_offer->events[1].elapsed_us, "Event 0 elapsed <= Event 1 elapsed");
+    TEST_ASSERT(r_offer->events[1].elapsed_us <= r_offer->events[2].elapsed_us, "Event 1 elapsed <= Event 2 elapsed");
+    TEST_ASSERT(r_offer->events[0].duration_us == 0, "Event 0 duration is 0");
+    TEST_ASSERT(r_offer->events[1].duration_us == r_offer->events[1].elapsed_us, "Event 1 duration matches elapsed delta");
+    TEST_ASSERT(r_offer->events[2].duration_us >= 0, "Event 2 duration is non-negative");
+
+    // Inspect chronological ordering of initial events for stream
+    TEST_ASSERT(r_stream->events.size() >= 3, "stream.add has at least 3 initial events");
+    TEST_ASSERT(r_stream->events[0].event_name == "Download button clicked", "Stream Event 0 is 'Download button clicked'");
+    TEST_ASSERT(r_stream->events[1].event_name == "Download task created", "Stream Event 1 is 'Download task created'");
+    TEST_ASSERT(r_stream->events[2].event_name == "Native messaging host receives the request", "Stream Event 2 is 'Native messaging host receives the request'");
+    TEST_ASSERT(r_stream->events[0].elapsed_us <= r_stream->events[1].elapsed_us, "Stream Event 0 elapsed <= Event 1 elapsed");
+    TEST_ASSERT(r_stream->events[1].elapsed_us <= r_stream->events[2].elapsed_us, "Stream Event 1 elapsed <= Event 2 elapsed");
+    TEST_ASSERT(r_stream->events[0].duration_us == 0, "Stream Event 0 duration is 0");
+    TEST_ASSERT(r_stream->events[1].duration_us == r_stream->events[1].elapsed_us, "Stream Event 1 duration matches elapsed delta");
+    TEST_ASSERT(r_stream->events[2].duration_us >= 0, "Stream Event 2 duration is non-negative");
+
+    // =========================================================================
+    // Verification: Serialized JSON Schema & Integrity (ExportToJson)
+    // =========================================================================
+    std::string exported_json = recorder.ExportToJson();
+    TEST_ASSERT(!exported_json.empty(), "ExportToJson produced non-empty string");
+
+    json::Value parsed_json;
+    bool parse_ok = true;
+    try {
+        parsed_json = json::Parse(exported_json);
+    } catch (...) {
+        parse_ok = false;
+    }
+    TEST_ASSERT(parse_ok, "ExportToJson produced strictly valid JSON");
+    TEST_ASSERT(parsed_json.is_array(), "ExportToJson root is JSON array");
+    TEST_ASSERT(parsed_json.as_array().size() >= 2, "Exported array contains at least 2 sessions");
+
+    // Verify schema fields for each item in parsed_json
+    for (const auto& item : parsed_json.as_array()) {
+        TEST_ASSERT(item.is_object(), "Report item is object");
+        TEST_ASSERT(item.contains("download_id"), "Report contains download_id");
+        TEST_ASSERT(item.contains("correlation_id"), "Report contains correlation_id");
+        TEST_ASSERT(item.contains("created_epoch_ms"), "Report contains created_epoch_ms");
+        TEST_ASSERT(item.contains("website"), "Report contains website");
+        TEST_ASSERT(item.contains("source_url"), "Report contains source_url");
+        TEST_ASSERT(item.contains("download_url"), "Report contains download_url");
+        TEST_ASSERT(item.contains("filename"), "Report contains filename");
+        TEST_ASSERT(item.contains("download_type"), "Report contains download_type");
+        TEST_ASSERT(item.contains("status"), "Report contains status");
+        TEST_ASSERT(item.contains("events"), "Report contains events array");
+        TEST_ASSERT(item["events"].is_array(), "events is an array");
+
+        const auto& ev_arr = item["events"].as_array();
+        TEST_ASSERT(ev_arr.size() >= 3, "Report has at least 3 events");
+
+        double prev_elapsed = -1.0;
+        for (const auto& ev : ev_arr) {
+            TEST_ASSERT(ev.contains("event_name"), "Event contains event_name");
+            TEST_ASSERT(ev.contains("epoch_ms"), "Event contains epoch_ms");
+            TEST_ASSERT(ev.contains("elapsed_ms"), "Event contains elapsed_ms");
+            TEST_ASSERT(ev.contains("duration_ms"), "Event contains duration_ms");
+            TEST_ASSERT(ev.contains("detail"), "Event contains detail");
+
+            double cur_elapsed = ev["elapsed_ms"].as_double(0.0);
+            double cur_duration = ev["duration_ms"].as_double(0.0);
+            TEST_ASSERT(cur_elapsed >= prev_elapsed, "Event elapsed_ms is monotonically non-decreasing");
+            TEST_ASSERT(cur_duration >= 0.0, "Event duration_ms is non-negative (no negative deltas)");
+            prev_elapsed = cur_elapsed;
+        }
+    }
+
+    // =========================================================================
+    // Verification: CompleteSession & Persistence to Disk
+    // =========================================================================
+    recorder.CompleteSession(offer_task_id, true, "");
+    recorder.CompleteSession(stream_task_id, true, "");
+
+    std::filesystem::path report_file = work_dir / "diagnostics" / "startup_reports.json";
+    TEST_ASSERT(std::filesystem::exists(report_file), "startup_reports.json persisted to disk");
+
+    std::ifstream ifs(report_file, std::ios::binary);
+    std::string disk_content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+
+    json::Value disk_json = json::Parse(disk_content);
+    TEST_ASSERT(disk_json.is_array(), "Disk reports root is array");
+    TEST_ASSERT(disk_json.as_array().size() >= 2, "Disk reports contain at least 2 completed sessions");
+
+    // =========================================================================
+    // Scenario 3: Adversarial Challenge - Edge Cases
+    // 3a. clientClickTime == 0 (no click timestamp reported)
+    // =========================================================================
+    json::Value no_click_obj = json::Object{};
+    no_click_obj["jsonrpc"] = "2.0";
+    no_click_obj["id"] = 103;
+    no_click_obj["method"] = "download.offer";
+    json::Value nc_params = json::Object{};
+    nc_params["url"] = "https://example.com/no_click.zip";
+    nc_params["filename"] = "no_click.zip";
+    nc_params["correlationId"] = "corr-no-click-test";
+    nc_params["clientClickTime"] = 0;
+    nc_params["autoStart"] = false;
+    no_click_obj["params"] = std::move(nc_params);
+
+    std::string no_click_resp = ipc_server.HandleJsonRpcMessage(no_click_obj.dump());
+    json::Value nc_val = json::Parse(no_click_resp);
+    std::string nc_task_id = nc_val["result"]["taskId"].as_string();
+
+    auto active_reps = recorder.GetReports();
+    const StartupReport* r_nc = nullptr;
+    for (const auto& r : active_reps) {
+        if (r.download_id == nc_task_id) r_nc = &r;
+    }
+    TEST_ASSERT(r_nc != nullptr, "No-click report found");
+    TEST_ASSERT(r_nc->events.size() >= 2, "No-click report has at least 2 events");
+    TEST_ASSERT(r_nc->events[0].event_name == "Download task created", "When click is 0, first event is 'Download task created'");
+    TEST_ASSERT(r_nc->events[0].elapsed_us == 0, "No-click Event 0 elapsed is 0");
+    TEST_ASSERT(r_nc->events[1].event_name == "Native messaging host receives the request", "No-click Event 1 is NMH request");
+    TEST_ASSERT(r_nc->events[1].elapsed_us >= r_nc->events[0].elapsed_us, "No-click Event 1 elapsed >= Event 0 elapsed");
+
+    // 3b. clientClickTime in future (clock skew edge case)
+    uint64_t future_click_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()) + 60000ULL; // 1 min in future
+
+    json::Value future_click_obj = json::Object{};
+    future_click_obj["jsonrpc"] = "2.0";
+    future_click_obj["id"] = 104;
+    future_click_obj["method"] = "download.offer";
+    json::Value fc_params = json::Object{};
+    fc_params["url"] = "https://example.com/future.zip";
+    fc_params["filename"] = "future.zip";
+    fc_params["correlationId"] = "corr-future-click-test";
+    fc_params["clientClickTime"] = static_cast<int64_t>(future_click_ms);
+    fc_params["autoStart"] = false;
+    future_click_obj["params"] = std::move(fc_params);
+
+    std::string future_resp = ipc_server.HandleJsonRpcMessage(future_click_obj.dump());
+    json::Value fc_val = json::Parse(future_resp);
+    std::string fc_task_id = fc_val["result"]["taskId"].as_string();
+
+    active_reps = recorder.GetReports();
+    const StartupReport* r_fc = nullptr;
+    for (const auto& r : active_reps) {
+        if (r.download_id == fc_task_id) r_fc = &r;
+    }
+    TEST_ASSERT(r_fc != nullptr, "Future-click report found");
+    for (const auto& ev : r_fc->events) {
+        TEST_ASSERT(ev.elapsed_us < 1000000000ULL, "Future click does not produce underflowed elapsed_us");
+        TEST_ASSERT(ev.duration_us < 1000000000ULL, "Future click does not produce underflowed duration_us");
+    }
+
+    // 3c. First-byte deduplication verification
+    std::string dedupe_task = "dedupe-session-test";
+    recorder.StartSession(dedupe_task, "dedupe-corr", "", "https://example.com/dedupe.bin", "dedupe.bin", "HTTP", "", 1024, 100);
+    recorder.RecordEvent(dedupe_task, "First data bytes received", "Worker 0");
+    recorder.RecordEvent(dedupe_task, "First data bytes received", "Worker 1 duplicate");
+    recorder.RecordEvent(dedupe_task, "First data bytes received", "Worker 2 duplicate");
+
+    size_t first_byte_count = 0;
+    active_reps = recorder.GetReports();
+    for (const auto& r : active_reps) {
+        if (r.download_id == dedupe_task) {
+            for (const auto& ev : r.events) {
+                if (ev.event_name == "First data bytes received") {
+                    first_byte_count++;
+                }
+            }
+        }
+    }
+    TEST_ASSERT(first_byte_count == 1, "First data bytes received is strictly deduplicated to exactly 1 event");
+
+    // 3d. Unicode & special characters in correlationId
+    std::string special_corr_id = "corr-spec-special-chars-test";
+    json::Value spec_obj = json::Object{};
+    spec_obj["jsonrpc"] = "2.0";
+    spec_obj["id"] = 105;
+    spec_obj["method"] = "download.offer";
+    json::Value spec_params = json::Object{};
+    spec_params["url"] = "https://example.com/spec.zip";
+    spec_params["filename"] = "spec.zip";
+    spec_params["correlationId"] = special_corr_id;
+    spec_params["clientClickTime"] = static_cast<int64_t>(offer_click_ms);
+    spec_params["autoStart"] = false;
+    spec_obj["params"] = std::move(spec_params);
+
+    std::string spec_resp = ipc_server.HandleJsonRpcMessage(spec_obj.dump());
+    json::Value spec_val = json::Parse(spec_resp);
+    TEST_ASSERT(spec_val["result"]["correlationId"].as_string() == special_corr_id, "Special characters in correlationId preserved in RPC");
+
+    std::string spec_task_id = spec_val["result"]["taskId"].as_string();
+    active_reps = recorder.GetReports();
+    const StartupReport* r_spec = nullptr;
+    for (const auto& r : active_reps) {
+        if (r.download_id == spec_task_id) r_spec = &r;
+    }
+    TEST_ASSERT(r_spec != nullptr, "Special correlation report found");
+    TEST_ASSERT(r_spec->correlation_id == special_corr_id, "Special correlation preserved in report");
+
+    // Clean up temporary test files
+    std::error_code ec;
+    std::filesystem::remove_all(work_dir, ec);
+
+    return true;
+}
+
 int main() {
     int passed = 0;
-    const int total = 4;
+    const int total = 5;
 
     std::cout << "====================================================\n";
     std::cout << " Radium Core Dedicated Unit Test Suite (Fast CTest)\n";
@@ -222,6 +535,7 @@ int main() {
     run_test("JsonMini RFC 8259 Parser & Builder Tests", TestDedicatedJsonMini);
     run_test("Bencode & TorrentParser Tests", TestDedicatedBencodeAndTorrentParser);
     run_test("SegmentScheduler Invariant & Work-Stealing Tests", TestDedicatedSegmentScheduler);
+    run_test("IPC Message Handling, Correlation ID & Diagnostic Report Chronology", TestIpcDiagnosticAndCorrelationVerification);
 
     std::cout << "\nResult: " << passed << " / " << total << " dedicated test suites PASSED.\n";
     return (passed == total) ? 0 : 1;

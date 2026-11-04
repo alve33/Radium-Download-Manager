@@ -25,8 +25,6 @@ $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 if (-not $Version) {
     if ($env:RADIUM_VERSION) {
         $Version = $env:RADIUM_VERSION
-    } elseif ($env:FLUX_VERSION) {
-        $Version = $env:FLUX_VERSION
     } else {
         try {
             $gitTag = (git describe --tags --exact-match 2>$null)
@@ -59,37 +57,31 @@ Write-Host "  Package Type : $PackageType" -ForegroundColor White
 Write-Host "  Architecture : $Architecture" -ForegroundColor White
 Write-Host "  Output Dir   : $OutputDir" -ForegroundColor White
 
-# 2. Locate Core Executables
-$FluxExe = $null
-$FluxNmhExe = $null
+# 2. Locate Core Executables (Strict Radium Identity)
+$RadiumExe = $null
+$RadiumNmhExe = $null
 
-$fluxCandidates = @()
+$radiumCandidates = @()
 if ($BuildDir) {
-    $fluxCandidates += (Join-Path $BuildDir "radium.exe")
-    $fluxCandidates += (Join-Path $BuildDir "Release\radium.exe")
-    $fluxCandidates += (Join-Path $BuildDir "Radium.exe")
-    $fluxCandidates += (Join-Path $BuildDir "flux.exe")
-    $fluxCandidates += (Join-Path $BuildDir "Release\flux.exe")
-    $fluxCandidates += (Join-Path $BuildDir "Flux.exe")
+    $radiumCandidates += (Join-Path $BuildDir "radium.exe")
+    $radiumCandidates += (Join-Path $BuildDir "Release\radium.exe")
+    $radiumCandidates += (Join-Path $BuildDir "Radium.exe")
 }
-$fluxCandidates += @(
+$radiumCandidates += @(
+    (Join-Path $RepoRoot "build\win-$Architecture\Release\radium.exe"),
     (Join-Path $RepoRoot "build\win-x64\Release\radium.exe"),
     (Join-Path $RepoRoot "build\Release\radium.exe"),
+    (Join-Path $RepoRoot "build\win-$Architecture\radium.exe"),
     (Join-Path $RepoRoot "build\win-x64\radium.exe"),
+    (Join-Path $RepoRoot "dist\$Architecture\radium.exe"),
     (Join-Path $RepoRoot "dist\Radium.exe"),
     (Join-Path $RepoRoot "dist\radium.exe"),
-    (Join-Path $RepoRoot "radium.exe"),
-    (Join-Path $RepoRoot "build\win-x64\Release\flux.exe"),
-    (Join-Path $RepoRoot "build\Release\flux.exe"),
-    (Join-Path $RepoRoot "build\win-x64\flux.exe"),
-    (Join-Path $RepoRoot "dist\Flux.exe"),
-    (Join-Path $RepoRoot "dist\flux.exe"),
-    (Join-Path $RepoRoot "flux.exe")
+    (Join-Path $RepoRoot "radium.exe")
 )
 
-foreach ($c in $fluxCandidates) {
+foreach ($c in $radiumCandidates) {
     if (Test-Path $c) {
-        $FluxExe = (Resolve-Path $c).Path
+        $RadiumExe = (Resolve-Path $c).Path
         break
     }
 }
@@ -98,57 +90,61 @@ $nmhCandidates = @()
 if ($BuildDir) {
     $nmhCandidates += (Join-Path $BuildDir "radium-nmh.exe")
     $nmhCandidates += (Join-Path $BuildDir "Release\radium-nmh.exe")
-    $nmhCandidates += (Join-Path $BuildDir "flux-nmh.exe")
-    $nmhCandidates += (Join-Path $BuildDir "Release\flux-nmh.exe")
 }
 $nmhCandidates += @(
+    (Join-Path $RepoRoot "build\win-$Architecture\Release\radium-nmh.exe"),
     (Join-Path $RepoRoot "build\win-x64\Release\radium-nmh.exe"),
     (Join-Path $RepoRoot "build\Release\radium-nmh.exe"),
+    (Join-Path $RepoRoot "build\win-$Architecture\radium-nmh.exe"),
     (Join-Path $RepoRoot "build\win-x64\radium-nmh.exe"),
+    (Join-Path $RepoRoot "dist\$Architecture\radium-nmh.exe"),
     (Join-Path $RepoRoot "dist\radium-nmh.exe"),
-    (Join-Path $RepoRoot "radium-nmh.exe"),
-    (Join-Path $RepoRoot "build\win-x64\Release\flux-nmh.exe"),
-    (Join-Path $RepoRoot "build\Release\flux-nmh.exe"),
-    (Join-Path $RepoRoot "build\win-x64\flux-nmh.exe"),
-    (Join-Path $RepoRoot "dist\flux-nmh.exe"),
-    (Join-Path $RepoRoot "flux-nmh.exe")
+    (Join-Path $RepoRoot "radium-nmh.exe")
 )
 
 foreach ($c in $nmhCandidates) {
     if (Test-Path $c) {
-        $FluxNmhExe = (Resolve-Path $c).Path
+        $RadiumNmhExe = (Resolve-Path $c).Path
         break
     }
 }
 
-# Pre-flight binary architecture and existence validation
+# Pre-flight binary architecture, existence, and PE identity validation
 $expectedMachine = if ($Architecture -eq "ARM64") { 0xAA64 } else { 0x8664 }
 $expectedArchName = if ($Architecture -eq "ARM64") { "ARM64 (0xAA64)" } else { "x64 AMD64 (0x8664)" }
 
-function Test-BinaryArchitecture([string]$FilePath, [uint16]$TargetMachine) {
+function Test-BinaryIdentity([string]$FilePath, [uint16]$TargetMachine) {
     if (-not (Test-Path $FilePath)) { return $false }
     try {
         $bytes = [System.IO.File]::ReadAllBytes($FilePath)
         if ($bytes.Length -lt 256 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { return $false }
         $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
         $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-        return ($machine -eq $TargetMachine)
+        if ($machine -ne $TargetMachine) { return $false }
+
+        # Verify PE ProductName metadata
+        $verInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($FilePath)
+        if (-not $verInfo.ProductName -or $verInfo.ProductName -notmatch "Radium") {
+            Write-Warning "Binary '$FilePath' failed PE Product identity check: '$($verInfo.ProductName)' does not contain 'Radium'"
+            return $false
+        }
+        return $true
     } catch {
         return $false
     }
 }
 
 $missing = @()
-if (-not $FluxExe) { 
-    $missing += "radium.exe / flux.exe (searched: $($fluxCandidates -join ', '))" 
-} elseif (-not (Test-BinaryArchitecture $FluxExe $expectedMachine)) {
-    throw "Packaging error: Binary $FluxExe does not match target architecture $expectedArchName"
+if (-not $RadiumExe) { 
+    $missing += "radium.exe (searched: $($radiumCandidates -join ', '))" 
+} elseif (-not (Test-BinaryIdentity $RadiumExe $expectedMachine)) {
+    throw "Packaging error: Binary $RadiumExe does not match target architecture $expectedArchName or Radium PE metadata!"
 }
 
-if (-not $FluxNmhExe) { 
-    $missing += "radium-nmh.exe / flux-nmh.exe (searched: $($nmhCandidates -join ', '))" 
-} elseif (-not (Test-BinaryArchitecture $FluxNmhExe $expectedMachine)) {
-    throw "Packaging error: Binary $FluxNmhExe does not match target architecture $expectedArchName"
+if (-not $RadiumNmhExe) { 
+    $missing += "radium-nmh.exe (searched: $($nmhCandidates -join ', '))" 
+} elseif (-not (Test-BinaryIdentity $RadiumNmhExe $expectedMachine)) {
+    throw "Packaging error: Binary $RadiumNmhExe does not match target architecture $expectedArchName or Radium PE metadata!"
 }
 
 if ($missing.Count -gt 0) {
@@ -156,8 +152,8 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-Write-Host "[+] Found Desktop binary : $FluxExe" -ForegroundColor Green
-Write-Host "[+] Found NMH binary     : $FluxNmhExe" -ForegroundColor Green
+Write-Host "[+] Found Desktop binary : $RadiumExe" -ForegroundColor Green
+Write-Host "[+] Found NMH binary     : $RadiumNmhExe" -ForegroundColor Green
 
 # 3. Locate Stream Workers (for Full package)
 $Nm3u8dlExe = $null
@@ -266,10 +262,9 @@ function Build-PackageArchive([string]$Type, [string]$ZipFileName) {
     New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
     try {
-        # Core binaries (Radium primary)
-        Copy-Item -Path $FluxExe -Destination (Join-Path $stageDir "radium.exe") -Force
-        Copy-Item -Path $FluxExe -Destination (Join-Path $stageDir "Radium.exe") -Force
-        Copy-Item -Path $FluxNmhExe -Destination (Join-Path $stageDir "radium-nmh.exe") -Force
+        # Core binaries (Radium authoritative)
+        Copy-Item -Path $RadiumExe -Destination (Join-Path $stageDir "radium.exe") -Force
+        Copy-Item -Path $RadiumNmhExe -Destination (Join-Path $stageDir "radium-nmh.exe") -Force
 
         # License and Documentation
         $docFiles = @("README.md", "LICENSE", "THIRD_PARTY_NOTICES.md")

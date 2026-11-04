@@ -36,6 +36,7 @@ struct StreamProgress {
 
 struct MediaQualityExpectations {
     int expected_height{0};             // e.g. 1080 for 1080p, 720 for 720p, etc.
+    bool allow_resolution_mismatch{false};
     std::string expected_container;     // "mp4", "mkv", "webm", "m4a"
     std::string expected_video_codec;   // e.g. "av01", "vp9", "h264", "avc1" (optional substring)
     std::string expected_audio_codec;   // e.g. "aac", "opus", "mp4a" (optional substring)

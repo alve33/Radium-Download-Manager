@@ -418,13 +418,15 @@ function initPopupUI() {
             videoFilter: chosenQ ? (chosenQ.videoFilter || chosenQ.resolution) : "best",
             selectedQuality: chosenQ,
             url,
+            autoStart: true,
+            clickTime: Date.now(),
             tabId: currentTabId,
             tabUrl: currentTabUrl
           }, (resp) => {
             const lastErr = chrome.runtime.lastError ? chrome.runtime.lastError.message : null;
             if (!lastErr && resp && resp.success) {
               const isFallback = Boolean(resp.result && resp.result.fallbackToBrowser);
-              targetBtn.textContent = isFallback ? "Browser Download" : "Queued in Radium";
+              targetBtn.textContent = isFallback ? "Browser Download" : "Starting in Radium";
               targetBtn.classList.add("dl-queued");
               const taskId = (resp.result && resp.result.taskId) ? resp.result.taskId : "";
               if (taskId) targetBtn.setAttribute("data-task-id", taskId);
@@ -456,6 +458,7 @@ function initPopupUI() {
             url: linkUrl,
             pageTitle: linkName,
             isMseBlob: false,
+            clickTime: Date.now(),
             tabId: currentTabId,
             tabUrl: currentTabUrl
           }, (resp) => {
@@ -703,6 +706,7 @@ function initPopupUI() {
               url: l.url,
               pageTitle: l.filename,
               isMseBlob: false,
+              clickTime: Date.now(),
               tabId: currentTabId,
               tabUrl: currentTabUrl
             });
@@ -741,6 +745,8 @@ function initPopupUI() {
             videoFilter: chosenQ ? (chosenQ.videoFilter || chosenQ.resolution) : "best",
             selectedQuality: chosenQ,
             url: item.url,
+            autoStart: true,
+            clickTime: Date.now(),
             tabId: currentTabId,
             tabUrl: currentTabUrl
           });

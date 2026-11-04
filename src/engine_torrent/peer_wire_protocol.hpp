@@ -96,9 +96,9 @@ public:
         p[1] = static_cast<uint8_t>(val & 0xFF);
     }
 
-    // Generates client Peer ID following Azureus/aria2 style: "-FL0100-" + 12 alphanumeric random characters
+    // Generates client Peer ID following Azureus/aria2 style: "-RD1000-" + 12 alphanumeric random characters
     static std::string GeneratePeerId() {
-        std::string peer_id = "-FL0100-";
+        std::string peer_id = "-RD1000-";
         const char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
         std::random_device rd;
         std::mt19937 gen(rd());

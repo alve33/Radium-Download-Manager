@@ -9,11 +9,11 @@
 
 ## 1. Architectural Overview
 
-The OpenIDM Browser Extension (`extension/`) is a lightweight Manifest V3 companion built from a single strict TypeScript codebase that compiles to two browser targets:
+The Radium Browser Extension (`extension/`) is a lightweight Manifest V3 companion built from a single strict TypeScript codebase that compiles to two browser targets:
 - **Chromium MV3 Target:** Google Chrome (114+), Microsoft Edge (114+), and Brave (114+).
 - **Firefox MV3 Target:** Mozilla Firefox (115+ ESR / 128+).
 
-Unlike [Cat Catch](https://github.com/xifangczy/cat-catch) (which bundles a 7.8 MB extension containing `hls.min.js`, preview players, and in-browser downloaders), the OpenIDM extension is strictly a **discovery and capture sensor** (`< 200 KB` total unpacked size, `< 15 KB` content script) that forwards downloads and media descriptors to `openidm.exe` over Native Messaging.
+Unlike [Cat Catch](https://github.com/xifangczy/cat-catch) (which bundles a 7.8 MB extension containing `hls.min.js`, preview players, and in-browser downloaders), the Radium extension is strictly a **discovery and capture sensor** (`< 200 KB` total unpacked size, `< 15 KB` content script) that forwards downloads and media descriptors to `radium.exe` over Native Messaging.
 
 ---
 
@@ -48,7 +48,7 @@ flowchart LR
 
     Overlay <-->|runtime.sendMessage| State
     Popup <-->|runtime.sendMessage| State
-    NMClient <-->|stdio JSON-RPC| NMH["openidm-nmh.exe"]
+    NMClient <-->|stdio JSON-RPC| NMH["radium-nmh.exe"]
 ```
 
 ---
@@ -59,7 +59,7 @@ To minimize security risk and pass Chrome Web Store / Firefox AMO review without
 
 | Permission | Scope | Exact Engineering Justification | Why It Cannot Be Removed |
 | :--- | :--- | :--- | :--- |
-| **`nativeMessaging`** | Required | Allows `runtime.connectNative("com.flux.downloadmanager")` to spawn `radium-nmh.exe`. | Primary secure IPC mechanism (`ADR-0003`); eliminates localhost HTTP servers. |
+| **`nativeMessaging`** | Required | Allows `runtime.connectNative("com.radium.downloadmanager")` to spawn `radium-nmh.exe`. | Primary secure IPC mechanism (`ADR-0003`); eliminates localhost HTTP servers. |
 | **`downloads`** | Required | Allows listening to `downloads.onCreated` / `onDeterminingFilename` (`FR-008`) and canceling browser downloads once `radium.exe` accepts the task. | Required to intercept browser-initiated downloads automatically. |
 | **`webRequest`** | Required | Observational read-only access to `onBeforeSendHeaders` and `onHeadersReceived` to detect `.m3u8`/`.mpd` manifests and capture transient `Referer`/`Cookie` headers (`FR-014`). | Without `webRequest`, MSE-fetched manifests (`hls.js`/`dash.js`) are invisible to isolated content scripts. |
 | **`storage`** | Required | Stores user exclusion lists (`chrome.storage.sync`/`local`) and survives MV3 Service Worker suspension via `chrome.storage.session` (`RISK-002`). | Required for MV3 state persistence. |
@@ -72,7 +72,7 @@ The response correlator ignores generic XML/JSON and other non-binary responses 
 
 
 **Permissions Explicitly Excluded (Compared to Cat Catch):**
-- **No `declarativeNetRequest`:** OpenIDM performs all downloading in `openidm.exe`, never inside the browser, so the extension never needs to modify browser request headers.
+- **No `declarativeNetRequest`:** Radium performs all downloading in `radium.exe`, never inside the browser, so the extension never needs to modify browser request headers.
 - **No `tabs` permission (where avoidable) / No browsing history access:** Tab URLs and titles are read only for tabs that actively trigger media detection or context-menu actions.
 - **No `tabCapture` / `desktopCapture`:** Screen recording is out of scope.
 
@@ -81,21 +81,22 @@ The response correlator ignores generic XML/JSON and other non-binary responses 
 ## 4. In-Page Video Overlay Design (`content/VideoOverlay.ts`)
 
 1. **Closed Shadow DOM Isolation (`FR-015`):**
-   - When a qualifying `<video>` element (`width >= 240 && height >= 135 && duration > 3.0`) is observed, the content script creates a lightweight host element `<div data-openidm-overlay>` and attaches a shadow root with `attachShadow({ mode: "closed" })`.
+   - When a qualifying `<video>` element (`width >= 240 && height >= 135 && duration > 3.0`) is observed, the content script creates a lightweight host element `<div data-radium-shadow-host>` and attaches a shadow root with `attachShadow({ mode: "closed" })`.
    - All CSS styles are self-contained inside the closed shadow root (`all: initial; position: fixed; z-index: 2147483647; pointer-events: auto;`), preventing host page CSS from distorting the button and preventing page scripts from probing the extension DOM.
 2. **Non-Intrusive Visibility Rules:**
    - The overlay button remains hidden (`opacity: 0; pointer-events: none`) until the user moves the pointer within the `<video>` bounding rect (tracked via passive `mousemove` / `mouseenter` listeners) and auto-hides after `2,500 ms` of cursor inactivity or when the user clicks the `[x]` dismiss button for that player.
 3. **Iframe Coordination:**
    - Many video players run inside cross-origin `<iframe>` embeds. Because `content_scripts` runs with `"all_frames": true`, the overlay attaches directly inside the iframe housing the `<video>` element, while querying the background Service Worker for all media candidates matched to `(tabId, frameId)` or parent `tabId`.
+4. **Immediate User-Requested Stream Start:** Clicking the in-player Download button submits the selected stream with `autoStart: true`; it skips the second desktop confirmation and starts the task. Ordinary browser download interception remains confirmation-based. The Service Worker reuses `runtime.connectNative` ports for RPCs and reconnects after host disconnects.
 
 ---
 
 ## 5. Cross-Browser Differences: Chromium vs. Firefox
 
-| Aspect | Chromium (Chrome, Edge, Brave) | Mozilla Firefox | OpenIDM Handling Strategy |
+| Aspect | Chromium (Chrome, Edge, Brave) | Mozilla Firefox | Radium Handling Strategy |
 | :--- | :--- | :--- | :--- |
 | **Manifest Background Key** | `"background": { "service_worker": "background.js", "type": "module" }` | `"background": { "scripts": ["background.js"], "type": "module" }` (Event Page) | Generated from `manifest.base.json` during `npm run build:chromium` vs `npm run build:firefox`. |
-| **Extension ID & Native Messaging Origin** | Uses 32-char `chrome-extension://<id>/` derived from manifest `"key"` in `allowed_origins`. | Uses `"browser_specific_settings": { "gecko": { "id": "extension@openidm.org" } }` in `allowed_extensions`. | Installer writes both `org.openidm.native.chromium.json` and `org.openidm.native.firefox.json` ([NATIVE_MESSAGING_AND_IPC.md](NATIVE_MESSAGING_AND_IPC.md)). |
+| **Extension ID & Native Messaging Origin** | Uses 32-char `chrome-extension://<id>/` derived from manifest `"key"` in `allowed_origins`. | Uses `"browser_specific_settings": { "gecko": { "id": "extension@openidm.org" } }` in `allowed_extensions`. | Installer writes `com.radium.downloadmanager.chromium.json` and `com.radium.downloadmanager.firefox.json` ([NATIVE_MESSAGING_AND_IPC.md](NATIVE_MESSAGING_AND_IPC.md)). |
 | **Download Interception Timing** | Supports `chrome.downloads.onDeterminingFilename` (fires before target file is created on disk). | Uses `browser.downloads.onCreated` + `webRequest.onHeadersReceived` (`Content-Disposition: attachment`). | `DownloadInterceptor.ts` binds `onDeterminingFilename` when defined (Chromium) and falls back to `onCreated` + header inspection on Firefox. |
 | **`webRequest` Extra Headers** | Requires `'extraHeaders'` in `OnBeforeSendHeadersOptions` to read `Cookie` and `Referer`. | Does not support/require `'extraHeaders'` string in options array (throws if passed on older Gecko). | Feature-detect `chrome.webRequest.OnBeforeSendHeadersOptions.EXTRA_HEADERS` before appending `'extraHeaders'`. |
 
@@ -103,8 +104,8 @@ The response correlator ignores generic XML/JSON and other non-binary responses 
 
 ## 6. Avoiding Conflicts with Duplicate Extensions or Handlers (`FR-012`)
 
-1. When intercepting a download in `DownloadInterceptor.ts`, the extension checks `downloadItem.byExtensionId`: if the download was initiated by another browser extension (such as a PDF generator or Cat Catch), OpenIDM ignores it so it does not break in-browser blob saves.
-2. Before calling `chrome.downloads.cancel(downloadItem.id)`, the extension awaits a synchronous RPC acknowledgement (`download.offer -> { accepted: true, taskId: "..." }`, timeout `800 ms`) from `openidm.exe`. If `openidm.exe` is not installed, disabled, or times out, the browser download proceeds uninterrupted.
+1. When intercepting a download in `DownloadInterceptor.ts`, the extension checks `downloadItem.byExtensionId`: if the download was initiated by another browser extension (such as a PDF generator or Cat Catch), Radium ignores it so it does not break in-browser blob saves.
+2. Before calling `chrome.downloads.cancel(downloadItem.id)`, the extension awaits a synchronous RPC acknowledgement (`download.offer -> { accepted: true, taskId: "..." }`, timeout `800 ms`) from `radium.exe`. If `radium.exe` is not installed, disabled, or times out, the browser download proceeds uninterrupted.
 
 ---
 
@@ -113,7 +114,7 @@ The response correlator ignores generic XML/JSON and other non-binary responses 
 1. **Native Handling of Client-Side `blob:` and `data:` URLs:**
    - Client-side in-memory files (`blob:`, `data:` URLs, ChatGPT code/artifact exports, Canvas exports) reside exclusively in browser renderer memory and cannot be reached via external WinHTTP sockets.
    - The extension strictly preserves the browser's native download pipeline for `blob:` and `data:` URLs without suppressing user gestures or monkey-patching `HTMLAnchorElement.prototype.click` / `EventTarget.prototype.dispatchEvent`.
-   - `catch.js` remains a passive media sniffer (XHR/fetch inspection, MediaSource, manifest parsing, YouTube player metadata) and never suppresses anchor clicks.
+   - `catch.js` remains a passive media sniffer (XHR/fetch inspection, MediaSource, manifest parsing, YouTube player metadata) and never suppresses anchor clicks. YouTube descriptor deduplication includes direct URLs on quality entries so a later browser-resolved stream URL can upgrade an earlier cipher-only descriptor.
 
 2. **Gesture-Preserving Click Intent Correlation:**
    - When a user clicks a downloadable link, `content-script.js` records the click metadata (URL, suggested filename, `download` attribute, referrer, and unique `correlationId`) and sends `{ action: "linkClicked" }` to the service worker.
@@ -122,8 +123,8 @@ The response correlator ignores generic XML/JSON and other non-binary responses 
 3. **Chrome `onDeterminingFilename` Coordination:**
    - In Chromium browsers (Chrome, Edge, Brave), `chrome.downloads.onDeterminingFilename` receives the download with full HTTP response headers (`Content-Disposition`, MIME type, redirected final URL).
    - The event natively holds the browser file save prompt while `background.js` checks eligibility and queries `radium.exe` via `download.offer` over Native Messaging.
-   - **Acceptance:** If Flux accepts, `suggest()` is called and `chrome.downloads.cancel()` cleanly cancels the browser download while Flux handles the segmented download.
-   - **Offline / Declined / Timeout:** If Flux is offline, times out (5000 ms), or declines, `suggest()` is resolved and `chrome.downloads.resume()` is called, allowing the browser to download the file without user disruption.
+    - **Acceptance:** If Radium accepts, `suggest()` is called and `chrome.downloads.cancel()` cleanly cancels the browser download while Radium handles the segmented download.
+    - **Offline / Declined / Timeout:** If Radium is offline, times out (5000 ms), or declines, `suggest()` is resolved and `chrome.downloads.resume()` is called, allowing the browser to download the file without user disruption.
 
 4. **Manifest V3 Service Worker Lifecycle Persistence:**
    - Service worker state is persisted via `chrome.storage.session` (with automatic fallback to `chrome.storage.local`).
@@ -146,7 +147,7 @@ The response correlator ignores generic XML/JSON and other non-binary responses 
 
 7. **Brave and Chromium `onDeterminingFilename` Contract:**
    - Calling `chrome.downloads.cancel()` before resolving `suggest()` during filename determination causes Chromium and Brave to throw: `"Cannot cancel a download while determining filename"`, hanging the browser downloader until timeout and falling back to native download.
-   - Flux resolves `suggest({ filename })` **before** executing `chrome.downloads.cancel()`, ensuring atomic, error-free handoff.
+   - Radium resolves `suggest({ filename })` **before** executing `chrome.downloads.cancel()`, ensuring atomic, error-free handoff.
    - In-page click listeners in `content-script.js` never execute `preventDefault()` or `stopPropagation()`, preserving the browser's native cookies, session state, and HTTP redirect hops.
 
 8. **22-Scenario Comprehensive Verification Suite (`tests/test_extension_detection.js`):**

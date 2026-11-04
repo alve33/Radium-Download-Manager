@@ -12,6 +12,7 @@
 
     const seenUrls = new Set();
     const blobRegistry = new Map();
+    const trackedYtMediaUrls = new Map();
     let lastInspectedYtVideoId = "";
 
     function makeCorrelationId(prefix) {
@@ -30,8 +31,17 @@
 
     function sendMedia(data) {
       if (!data || !data.url) return;
-      const dedupKey = (data.streamType || "") + "|" + (data.sourceType || "") + "|" + data.url + "|" + (data.videoUrl || "");
-      if (seenUrls.has(dedupKey) && !data.cachedManifestBody && !data.extractorJson) return;
+      // Include the actual format URL state in deduplication. A YouTube player
+      // response can arrive first with signatureCipher only, then gain usable
+      // direct URLs when the browser's playback requests are observed. Lengths
+      // alone can match across those two descriptors and suppress the upgrade.
+      const directQualityState = Array.isArray(data.qualities)
+        ? data.qualities.map(q => `${q && q.id || ""}:${q && q.videoUrl || ""}:${q && q.pairedAudioUrl || ""}`).join("|")
+        : "";
+      const manifestSig = (data.cachedManifestBody ? data.cachedManifestBody.length : 0) + ":" +
+        (data.extractorJson ? data.extractorJson.length : 0) + ":" + directQualityState;
+      const dedupKey = (data.streamType || "") + "|" + (data.sourceType || "") + "|" + data.url + "|" + (data.videoUrl || "") + "|" + manifestSig;
+      if (seenUrls.has(dedupKey)) return;
       seenUrls.add(dedupKey);
       postToExtension(Object.assign({
         action: "catCatchAddMedia",
@@ -130,6 +140,7 @@
       let bestVideo = null;
       let bestAudio = null;
       let bestAudioMp4 = null;
+      const trackedAudioUrl = trackedYtMediaUrls.get("audio") || "";
       for (const f of adaptive) {
         if (!f || f.drmFamilies) continue;
         const mime = String(f.mimeType || "").toLowerCase();
@@ -170,7 +181,8 @@
       const rawAudioBytes = bestAudio ? parseInt(bestAudio.contentLength || "0", 10) : 0;
       const audioBw = bestAudio ? Number(bestAudio.bitrate || bestAudio.averageBitrate || 128000) : 128000;
       const audioByteLen = rawAudioBytes > 0 ? rawAudioBytes : (durSec > 0 ? Math.round((audioBw / 8) * durSec) : 0);
-      const cleanBestAudioUrl = (bestAudio && bestAudio.url) ? normalizeGooglevideoUrl(bestAudio.url) : "";
+      let cleanBestAudioUrl = (bestAudio && bestAudio.url) ? normalizeGooglevideoUrl(bestAudio.url) : "";
+      if (!cleanBestAudioUrl && trackedAudioUrl) cleanBestAudioUrl = trackedAudioUrl;
       const qualityMap = new Map();
 
       const addVideoFormatToQualities = (f, isAdaptiveFmt) => {
@@ -191,8 +203,10 @@
         const displayLabel = `${displayRes} (${isMp4 ? "MP4" : "WebM"})`;
         const vFilter = height > 0 ? (fps > 30 ? `${height}p${fps}` : `${height}p`) : resLabel;
 
-        const hasDirectUrl = Boolean(f.url);
-        const cleanVUrl = hasDirectUrl ? normalizeGooglevideoUrl(f.url) : "";
+        const itagStr = String(f.itag || "");
+        const resolvedDirectUrl = f.url || trackedYtMediaUrls.get(itagStr) || (isAdaptiveFmt ? trackedYtMediaUrls.get("video") : "") || "";
+        const hasDirectUrl = Boolean(resolvedDirectUrl);
+        const cleanVUrl = hasDirectUrl ? normalizeGooglevideoUrl(resolvedDirectUrl) : "";
         const needsMux = Boolean(isAdaptiveFmt);
         const unpairedAdaptive = Boolean(isAdaptiveFmt && hasDirectUrl && !cleanBestAudioUrl);
         const requiresCipher = Boolean(!hasDirectUrl || unpairedAdaptive);
@@ -278,12 +292,16 @@
 
       // Adaptive video tracks on YouTube have no audio; only use adaptive bestVideo if bestAudio is also available,
       // otherwise prefer bestProgressive or mark requiresCipherExtraction so yt-dlp extracts & merges both tracks.
-      const canMuxAdaptive = Boolean(bestVideo && bestVideo.url && bestAudio && bestAudio.url);
-      const chosenVideo = canMuxAdaptive ? bestVideo : (bestProgressive || bestVideo);
+      const trackedVideoUrl = trackedYtMediaUrls.get("video") || "";
+      const effectiveBestVideoUrl = (bestVideo && bestVideo.url) ? bestVideo.url : trackedVideoUrl;
+      const effectiveBestAudioUrl = cleanBestAudioUrl;
+      const canMuxAdaptive = Boolean(effectiveBestVideoUrl && effectiveBestAudioUrl);
+      const chosenVideo = canMuxAdaptive ? (bestVideo || { url: effectiveBestVideoUrl }) : (bestProgressive || bestVideo);
 
-      if (chosenVideo && chosenVideo.url) {
-        const cleanVideoUrl = normalizeGooglevideoUrl(chosenVideo.url);
-        const cleanAudioUrl = canMuxAdaptive ? normalizeGooglevideoUrl(bestAudio.url) : "";
+      const effectiveChosenUrl = (chosenVideo && chosenVideo.url) || effectiveBestVideoUrl;
+      if (effectiveChosenUrl) {
+        const cleanVideoUrl = normalizeGooglevideoUrl(effectiveChosenUrl);
+        const cleanAudioUrl = canMuxAdaptive ? effectiveBestAudioUrl : "";
         const isUnpairedAdaptiveVideo = Boolean(chosenVideo === bestVideo && !cleanAudioUrl);
         // Do NOT downgrade candidate resolution to 360p progressive! Always advertise the highest detected video resolution!
         const resolution = primaryRes;
@@ -422,12 +440,20 @@
             ? vidEl.duration
             : 0;
 
-          const standardPresets = [
-            { id: "1080p_mp4", res: "1080p", label: "1080p Full HD (MP4)", bw: 4200000, h: 1080, ext: "mp4" },
-            { id: "720p_mp4", res: "720p", label: "720p HD (MP4)", bw: 2200000, h: 720, ext: "mp4" },
-            { id: "480p_mp4", res: "480p", label: "480p SD (MP4)", bw: 1100000, h: 480, ext: "mp4" },
-            { id: "360p_mp4", res: "360p", label: "360p Standard (MP4)", bw: 650000, h: 360, ext: "mp4" },
-            { id: "audio-only", res: "Audio", label: "Audio Only (128 Kbps)", bw: 128000, h: 0, ext: "m4a", isAudioOnly: true }
+          const isShorts = path.startsWith("/shorts/");
+          const isVertical = Boolean(vidEl && vidEl.videoHeight && vidEl.videoWidth && vidEl.videoHeight > vidEl.videoWidth) || isShorts;
+          const standardPresets = isVertical ? [
+            { id: "1080p_mp4", res: "1080p", label: "1080p Vertical HD", bw: 3200000, h: 1080, w: 608, ext: "mp4" },
+            { id: "720p_mp4", res: "720p", label: "720p Vertical HD", bw: 2000000, h: 720, w: 405, ext: "mp4" },
+            { id: "480p_mp4", res: "480p", label: "480p Vertical SD", bw: 1000000, h: 480, w: 270, ext: "mp4" },
+            { id: "360p_mp4", res: "360p", label: "360p Standard", bw: 600000, h: 360, w: 202, ext: "mp4" },
+            { id: "audio-only", res: "Audio", label: "Audio Only (128 Kbps)", bw: 128000, h: 0, w: 0, ext: "m4a", isAudioOnly: true }
+          ] : [
+            { id: "1080p_mp4", res: "1080p", label: "1080p Full HD (MP4)", bw: 4200000, h: 1080, w: 1920, ext: "mp4" },
+            { id: "720p_mp4", res: "720p", label: "720p HD (MP4)", bw: 2200000, h: 720, w: 1280, ext: "mp4" },
+            { id: "480p_mp4", res: "480p", label: "480p SD (MP4)", bw: 1100000, h: 480, w: 854, ext: "mp4" },
+            { id: "360p_mp4", res: "360p", label: "360p Standard (MP4)", bw: 650000, h: 360, w: 640, ext: "mp4" },
+            { id: "audio-only", res: "Audio", label: "Audio Only (128 Kbps)", bw: 128000, h: 0, w: 0, ext: "m4a", isAudioOnly: true }
           ];
 
           const fallbackQualities = standardPresets.map(p => {
@@ -436,7 +462,7 @@
               id: p.id,
               label: p.label,
               resolution: p.res,
-              width: p.h > 0 ? Math.round((p.h * 16) / 9) : 0,
+              width: p.w || (p.h > 0 ? Math.round((p.h * 16) / 9) : 0),
               height: p.h,
               bandwidth: p.bw,
               size: sz,
@@ -451,7 +477,7 @@
           const primaryFallbackSize = fallbackQualities[0] ? fallbackQualities[0].size : 0;
           const descriptor = {
             radiumType: "YOUTUBE_STREAM",
-          fluxType: "YOUTUBE_STREAM",
+            fluxType: "YOUTUBE_STREAM",
             sourceType: "YOUTUBE_EXTRACTION",
             videoId: vid,
             title: rawTitle,
@@ -641,7 +667,7 @@
           referer: ref
         });
       } else if (lower.includes("googlevideo.com/videoplayback") || lower.includes("/videoplayback?")) {
-        // Do NOT pretend an adaptive or chunked googlevideo URL is a standalone HTTP_FILE
+        // Track unthrottled deciphered playback streams directly from active browser network requests
         const cleanUrl = normalizeGooglevideoUrl(resolvedUrl);
         try {
           const rawU = new URL(resolvedUrl);
@@ -653,6 +679,15 @@
           const hadRange = rawU.searchParams.has("range") || rawU.searchParams.has("rbuf");
           const isAudio = mime.startsWith("audio/");
           const isProgressive = PROGRESSIVE_YOUTUBE_ITAGS.has(itag) && !isAudio && !hasUmp && !hadRange;
+
+          if (cleanUrl) {
+            if (itag) trackedYtMediaUrls.set(itag, cleanUrl);
+            if (isAudio) {
+              trackedYtMediaUrls.set("audio", cleanUrl);
+            } else {
+              trackedYtMediaUrls.set("video", cleanUrl);
+            }
+          }
 
           if (!scanPageForYouTubeData()) {
             const watchRef = (ref && (ref.includes("youtube.com/watch") || ref.includes("youtube.com/shorts/") || ref.includes("youtu.be/")))
@@ -1020,6 +1055,7 @@
               action: "radiumAnchorClicked",
               url: href,
               download: downloadAttr,
+              clickTime: Date.now(),
               pageTitle: win.document ? win.document.title : "",
               pageUrl: win.location ? win.location.href : ""
             });
@@ -1052,6 +1088,7 @@
                 action: "radiumAnchorClicked",
                 url: href,
                 download: downloadAttr,
+                clickTime: Date.now(),
                 pageTitle: win.document ? win.document.title : "",
                 pageUrl: win.location ? win.location.href : ""
               });
@@ -1257,7 +1294,7 @@
           }
           return;
         }
-        if (ev.data.action !== "fluxDiscoverBlobSource") return;
+        if (ev.data.action !== "radiumDiscoverBlobSource" && ev.data.action !== "fluxDiscoverBlobSource") return;
         try {
           const blobUrl = ev.data.blobUrl || "";
           const correlationId = ev.data.correlationId || makeCorrelationId("blob");
@@ -1316,7 +1353,7 @@
 
   // Execute in browser window
   if (typeof window !== "undefined") {
-    installDeepSearchHooks(window, "flux-deepsearch", null);
+    installDeepSearchHooks(window, "radium-deepsearch", null);
   }
 
   if (typeof module !== "undefined" && module.exports) {

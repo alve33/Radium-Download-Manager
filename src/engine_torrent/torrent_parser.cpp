@@ -119,7 +119,7 @@ Result<TorrentInfo> TorrentParser::ParseTorrentFile(const std::filesystem::path&
         std::string torrent_bytes;
         std::atomic<bool> cancel{false};
         std::map<std::string, std::string> headers = {
-            {"User-Agent", "Flux/0.3.0"}
+            {"User-Agent", "Radium/1.0.0 (BitTorrent; Win64)"}
         };
         auto get_res = brisk::HttpClient::PerformGet(
             path_str,

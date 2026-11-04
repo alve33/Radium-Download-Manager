@@ -147,7 +147,7 @@ Result<std::vector<uint8_t>> CryptoUtils::ProtectSecret(std::string_view plainte
 #ifdef _WIN32
     DATA_BLOB in_blob{static_cast<DWORD>(plaintext.size()), reinterpret_cast<BYTE*>(const_cast<char*>(plaintext.data()))};
     DATA_BLOB out_blob{};
-    if (!CryptProtectData(&in_blob, L"OpenIDM_Credential", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out_blob)) {
+    if (!CryptProtectData(&in_blob, L"Radium_Credential", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out_blob)) {
         return Result<std::vector<uint8_t>>::Err("ERR_CRYPTO_DPAPI", "CryptProtectData failed");
     }
     std::vector<uint8_t> res(out_blob.pbData, out_blob.pbData + out_blob.cbData);

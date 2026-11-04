@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ui/win32_main_window.hpp"
+#include "ui/startup_log_dialog.hpp"
+#include "security/admin_check.hpp"
+#include "common/startup_diagnostic.hpp"
 
 #include "brisk_engine/http_client.hpp"
 #include "common/crypto_utils.hpp"
@@ -1422,9 +1425,9 @@ std::vector<TaskModel> DesktopView::GetFilteredAndSortedTasks() const {
         double pct = (t.total_bytes > 0)
             ? (static_cast<double>(t.downloaded_bytes) * 100.0) / static_cast<double>(t.total_bytes)
             : t.stream_percent;
-        if (t.state == TaskState::kFinalizing) return std::clamp(pct, 99.8, 99.9);
-        if (t.state == TaskState::kVerifying) return std::clamp(pct, 99.0, 99.5);
-        if (t.state == TaskState::kMuxing) return std::clamp(pct, 98.0, 99.0);
+        if (t.state == TaskState::kFinalizing) return std::clamp(pct, 0.0, 99.9);
+        if (t.state == TaskState::kVerifying) return std::clamp(pct, 0.0, 99.5);
+        if (t.state == TaskState::kMuxing) return std::clamp(pct, 0.0, 99.0);
         return std::clamp(pct, 0.0, 99.0);
     };
 
@@ -1553,11 +1556,11 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
         } else if (t.total_bytes > 0) {
             double pct = (static_cast<double>(t.downloaded_bytes) * 100.0) / static_cast<double>(t.total_bytes);
             if (t.state == TaskState::kFinalizing) {
-                pct = std::clamp(pct, 99.8, 99.9);
+                pct = std::clamp(pct, 0.0, 99.9);
             } else if (t.state == TaskState::kVerifying) {
-                pct = std::clamp(pct, 99.0, 99.5);
+                pct = std::clamp(pct, 0.0, 99.5);
             } else if (t.state == TaskState::kMuxing) {
-                pct = std::clamp(pct, 98.0, 99.0);
+                pct = std::clamp(pct, 0.0, 99.0);
             } else {
                 pct = std::clamp(pct, 0.0, 99.0);
             }
@@ -1567,11 +1570,11 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
         } else if (row.is_stream && t.total_segments > 0) {
             double pct = (static_cast<double>(t.completed_segments) * 100.0) / static_cast<double>(t.total_segments);
             if (t.state == TaskState::kFinalizing) {
-                pct = std::clamp(pct, 99.8, 99.9);
+                pct = std::clamp(pct, 0.0, 99.9);
             } else if (t.state == TaskState::kVerifying) {
-                pct = std::clamp(pct, 99.0, 99.5);
+                pct = std::clamp(pct, 0.0, 99.5);
             } else if (t.state == TaskState::kMuxing) {
-                pct = std::clamp(pct, 98.0, 99.0);
+                pct = std::clamp(pct, 0.0, 99.0);
             } else {
                 pct = std::clamp(pct, 0.0, 99.0);
             }
@@ -1760,7 +1763,7 @@ TaskDetailsViewModel DesktopView::BuildSelectedTaskDetails() const {
     vm.file_name = t.file_name;
     vm.redacted_source_url = Logger::RedactSensitiveData(t.url);
     vm.redacted_page_url = t.page_url.empty() ? "—" : Logger::RedactSensitiveData(t.page_url);
-    vm.destination_path = (std::filesystem::path(t.save_dir) / t.file_name).string();
+    vm.destination_path = PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(t.save_dir) / PathSanitizer::Utf8ToPath(t.file_name));
     vm.size_summary = (t.total_bytes > 0)
         ? (FormatBytes(t.downloaded_bytes) + " of " + FormatBytes(t.total_bytes))
         : (FormatBytes(t.downloaded_bytes) + " (Total size unknown)");
@@ -2504,6 +2507,14 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
         "Windows 11 x64 (Native Win32 C++20)  |  " + ab.license,
         SettingControlType::kDiagnosticReadOnly,
         "Active", "Active", true, false);
+    if (security::IsCurrentUserLocalAdmin()) {
+        add_item(
+            "admin_startup_log", SettingsCategory::kAboutAndDiagnostics, "Administrator Diagnostics",
+            "Download Startup Log & Performance Report",
+            "High-resolution millisecond lifecycle log tracking every stage from click to first byte transfer.",
+            SettingControlType::kActionButton,
+            "Open Log", "", false, false);
+    }
     add_item(
         "diag_storage", SettingsCategory::kAboutAndDiagnostics, "System & License",
         "Queue Database",
@@ -3085,7 +3096,7 @@ Result<std::filesystem::path> DesktopView::ActionOpenCompletedFile(bool dry_run)
         ShellExecuteW(nullptr, L"open", fp.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #endif
     }
-    m_last_feedback_message = "Opened file: " + fp.filename().string();
+    m_last_feedback_message = "Opened file: " + PathSanitizer::PathToUtf8(fp.filename());
     return Result<std::filesystem::path>::Ok(fp);
 }
 
@@ -3528,12 +3539,8 @@ Result<std::string> FetchTorrentMetainfo(const OfferNotificationData& offer) {
         return Result<std::string>::Err("ERR_TORRENT_EMPTY", "The server returned an empty torrent file");
     }
 
-    wchar_t local_app_data[MAX_PATH]{};
-    if (SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, local_app_data) != S_OK) {
-        return Result<std::string>::Err("ERR_TORRENT_STORAGE", "Could not locate the user data directory");
-    }
     std::error_code ec;
-    const std::filesystem::path torrent_root = std::filesystem::path(local_app_data) / L"OpenIDM" / L"tmp" / L"torrents";
+    const std::filesystem::path torrent_root = openidm::PathSanitizer::GetDefaultAppDataDir() / L"tmp" / L"torrents";
     std::filesystem::create_directories(torrent_root, ec);
     if (ec) return Result<std::string>::Err("ERR_TORRENT_STORAGE", "Could not create the torrent metadata folder");
 
@@ -3565,7 +3572,7 @@ Result<std::string> FetchTorrentMetainfo(const OfferNotificationData& offer) {
         std::filesystem::remove(pending_path, ec);
         return Result<std::string>::Err("ERR_TORRENT_STORAGE", "Could not finalize the received torrent metadata");
     }
-    return Result<std::string>::Ok(final_path.string());
+    return Result<std::string>::Ok(PathSanitizer::PathToUtf8(final_path));
 }
 
 struct TorrentMetadataSelectionRequest {
@@ -3590,6 +3597,7 @@ constexpr int IDM_CTX_REMOVE_LIST  = 3008;
 constexpr int IDM_CTX_DELETE_DISK  = 3009;
 constexpr int IDM_CTX_SETTINGS     = 3010;
 constexpr int IDM_CTX_BROWSER_STAT = 3011;
+constexpr int IDM_CTX_STARTUP_LOG  = 3026;
 constexpr int IDM_CTX_ABOUT        = 3012;
 constexpr int IDM_CTX_ANTIVIRUS    = 3013;
 constexpr int IDM_CTX_ZIP_PREVIEW   = 3014;
@@ -3653,7 +3661,7 @@ bool MarkTaskAsFileConflict(DownloadController& controller, const TaskModel& tas
     conflict.state = TaskState::kFailed;
     conflict.error_code = "ERR_FILE_EXISTS";
     conflict.error_message = "Destination file already exists: " +
-        (std::filesystem::u8path(conflict.save_dir) / std::filesystem::u8path(conflict.file_name)).string();
+        PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(conflict.save_dir) / PathSanitizer::Utf8ToPath(conflict.file_name));
     conflict.status_detail = "Waiting for a file conflict choice";
     return controller.UpdateTask(conflict).ok();
 }
@@ -3697,7 +3705,7 @@ void RefreshConflictDialog(Win32WindowContext& ctx) {
     for (const auto& task : ctx.controller->ListTasks()) {
         if (task.state != TaskState::kFailed || task.error_code != "ERR_FILE_EXISTS" ||
             task.conflict_policy != ConflictPolicy::kPrompt) continue;
-        auto dest = std::filesystem::u8path(task.save_dir) / std::filesystem::u8path(task.file_name);
+        auto dest = PathSanitizer::Utf8ToPath(task.save_dir) / PathSanitizer::Utf8ToPath(task.file_name);
         ctx.conflict_dialog_task_id = task.task_id;
         ctx.conflict_dialog_path = dest.wstring();
         ctx.conflict_dialog_remember = false;
@@ -3733,6 +3741,12 @@ bool ResolveConflictDialog(Win32WindowContext& ctx, ConflictPolicy choice) {
         success = ctx.controller->CancelTask(it->task_id).ok();
     } else {
         TaskModel updated = *it;
+        if (choice == ConflictPolicy::kAutoRename) {
+            auto next = PathSanitizer::ResolveSafeOutputPath(updated.save_dir, updated.file_name, ConflictPolicy::kAutoRename);
+            if (next.ok()) {
+                updated.file_name = PathSanitizer::PathToUtf8(next.value->filename());
+            }
+        }
         updated.conflict_policy = choice;
         auto changed = ctx.controller->UpdateTask(updated);
         success = changed.ok() && ctx.controller->RetryTask(it->task_id).ok();
@@ -4323,7 +4337,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     if (mroot.is_object()) {
                         if (mroot["selectedItag"].as_int64(0) > 0) target_itag = static_cast<int>(mroot["selectedItag"].as_int64(0));
                         else if (mroot["itag"].as_int64(0) > 0) target_itag = static_cast<int>(mroot["itag"].as_int64(0));
-                        if ((low_init.empty() || low_init == "best" || low_init == "auto") && mroot["resolution"].is_string()) {
+                        if (low_init.empty() && mroot["resolution"].is_string()) {
                             low_init = ToLowerStr(mroot["resolution"].as_string());
                         }
                     }
@@ -4898,18 +4912,31 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     in.is_stream = true;
                 }
 
+                // Compute the actual candidate/final filename
+                std::string final_fn = fn;
+                bool is_video_stream_cand = (in.is_stream || is_yt);
+                if (cur_sel >= 0 && static_cast<size_t>(cur_sel) < ctx->quality_choices.size()) {
+                    const auto& qc = ctx->quality_choices[static_cast<size_t>(cur_sel)];
+                    if (is_video_stream_cand && !qc.resolution.empty() && qc.resolution != "Auto" && qc.resolution != "Original") {
+                        static const std::regex kResTagRe(R"(\s*\[\s*\d{3,4}p[_\w]*\s*\])", std::regex::icase);
+                        std::string base_fn = std::regex_replace(final_fn, kResTagRe, "");
+                        auto dot_pos = base_fn.rfind('.');
+                        std::string stem = (dot_pos != std::string::npos) ? base_fn.substr(0, dot_pos) : base_fn;
+                        std::string ext = (dot_pos != std::string::npos) ? base_fn.substr(dot_pos + 1) : "mp4";
+                        if (!qc.is_audio_only && !qc.ext.empty()) ext = qc.ext;
+                        final_fn = stem + " [" + qc.resolution + "]." + ext;
+                    }
+                }
+                if (final_fn.empty()) {
+                    final_fn = is_yt ? "youtube_video.mp4" : PathSanitizer::ExtractFromUrl(u);
+                }
+
+                auto conflict_pol = ctx->controller->GetSettings().conflict_policy;
                 bool destination_conflict = false;
-                if (ctx->existing_task_id.empty() &&
-                    ctx->controller->GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
-                    std::string candidate_name = fn;
-                    if (candidate_name.empty()) {
-                        candidate_name = is_yt ? "youtube_video.mp4" : PathSanitizer::ExtractFromUrl(u);
-                    }
-                    if (!candidate_name.empty()) {
-                        auto destination = PathSanitizer::ResolveSafeOutputPath(sd, candidate_name, ConflictPolicy::kPrompt);
-                        destination_conflict = !destination.ok() && destination.error->code == "ERR_FILE_EXISTS";
-                        if (destination_conflict) in.start_immediately = false;
-                    }
+                if (conflict_pol == ConflictPolicy::kPrompt || conflict_pol == ConflictPolicy::kFailIfExists) {
+                    auto destination = PathSanitizer::ResolveSafeOutputPath(sd, final_fn, ConflictPolicy::kPrompt);
+                    destination_conflict = !destination.ok() && destination.error->code == "ERR_FILE_EXISTS";
+                    if (destination_conflict) in.start_immediately = false;
                 }
 
                 OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_SUBMIT_ATTEMPT: url=" + u + " filename=" + fn + " quality=" + vfilter);
@@ -4921,7 +4948,8 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         bool is_video_stream = (t.task_type == TaskType::kStreamHls || t.task_type == TaskType::kStreamDash || t.category == "Video" || is_yt);
                         std::string old_fn = t.file_name;
                         std::string old_sd = t.save_dir;
-                        if (!fn.empty()) t.file_name = fn;
+                        if (!final_fn.empty()) t.file_name = final_fn;
+                        else if (!fn.empty()) t.file_name = fn;
                         if (!sd.empty()) t.save_dir = sd;
                         t.scheduled = sched;
                         if (sched) {
@@ -4995,15 +5023,31 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                             }
                         }
 
+                        if (destination_conflict) {
+                            t.state = TaskState::kFailed;
+                            t.error_code = "ERR_FILE_EXISTS";
+                            t.error_message = "Destination file already exists: " +
+                                PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(t.save_dir) / PathSanitizer::Utf8ToPath(t.file_name));
+                            t.status_detail = "Waiting for a file conflict choice";
+                            ctx->controller->UpdateTask(t);
+                            ctx->submitted = true;
+                            HWND owner = GetWindow(hwnd, GW_OWNER);
+                            if (owner && IsWindow(owner)) PostMessageW(owner, WM_OPENIDM_SHOW_CONFLICT, 0, 0);
+                            OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_CONFLICT_DETECTED: taskId=" + ctx->existing_task_id + " file=" + t.file_name);
+                            DestroyWindow(hwnd);
+                            return 0;
+                        }
+
+                        bool was_already_active = (t.state == TaskState::kProbing || t.state == TaskState::kDownloading || t.state == TaskState::kMuxing);
                         if (t.state == TaskState::kFailed || t.state == TaskState::kPaused || t.state == TaskState::kQueued) {
-                            t.state = TaskState::kQueued;
-                            t.status_detail = "Queued";
+                            t.state = start_now ? TaskState::kQueued : TaskState::kPaused;
+                            t.status_detail = start_now ? "Queued" : "Paused";
                             t.error_code.clear();
                             t.error_message.clear();
                         }
 
                         ctx->controller->UpdateTask(t);
-                        if (start_now && t.state != TaskState::kCompleted) {
+                        if (start_now && !was_already_active && t.state != TaskState::kCompleted) {
                             ctx->controller->StartTask(ctx->existing_task_id);
                         }
                         ctx->submitted = true;
@@ -5190,7 +5234,7 @@ void ShowNewDownloadDialogWin32(
         }
     }
 
-    if (TryShowExistingConflictInsteadOfNewDownload(
+    if (existing_task_id.empty() && TryShowExistingConflictInsteadOfNewDownload(
             hwnd_parent, controller, candidate_url, suggested_filename, save_dir)) {
         return;
     }
@@ -5801,7 +5845,7 @@ LRESULT CALLBACK DeleteConfirmDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (!ctx->files_info.empty()) {
                 std::wstring path_str;
                 if (ctx->files_info.size() == 1) {
-                    path_str = L"Location: " + Utf8ToW((std::filesystem::path(ctx->files_info[0].second) / ctx->files_info[0].first).string());
+                    path_str = L"Location: " + Utf8ToW(ctx->files_info[0].second) + (ctx->files_info[0].second.empty() || ctx->files_info[0].second.back() == '\\' || ctx->files_info[0].second.back() == '/' ? L"" : L"\\") + Utf8ToW(ctx->files_info[0].first);
                 } else {
                     path_str = L"Target Folder: " + Utf8ToW(ctx->files_info[0].second) + L" (" + std::to_wstring(ctx->files_info.size()) + L" items)";
                 }
@@ -9011,6 +9055,12 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         return 0;
                     }
                     if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
+                        hit.task_id == "admin_startup_log") {
+                        ShowStartupLogDialogWin32(hwnd, *ctx->controller);
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                        return 0;
+                    }
+                    if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
                         hit.task_id == "check_for_updates") {
                         StartGitHubUpdateCheck(hwnd);
                         InvalidateRect(hwnd, nullptr, FALSE);
@@ -9329,6 +9379,9 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Settings & Configuration (Ctrl+,)...");
             AppendMenuW(hMenu, MF_STRING, IDM_CTX_BROWSER_STAT, L"Browser Integration Diagnostics...");
+            if (security::IsCurrentUserLocalAdmin()) {
+                AppendMenuW(hMenu, MF_STRING, IDM_CTX_STARTUP_LOG, L"Download Startup Log (Admin)...");
+            }
             AppendMenuW(hMenu, MF_STRING, IDM_CTX_ABOUT, L"About Radium Download Manager...");
 
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, nullptr);
@@ -9541,7 +9594,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 ofn.hwndOwner = hwnd;
                 ofn.lpstrFile = szFile;
                 ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
-                ofn.lpstrFilter = L"Torrent Files (*.torrent) *.torrent All Files (*.*) *.* ";
+                ofn.lpstrFilter = L"Torrent Files (*.torrent)\0*.torrent\0All Files (*.*)\0*.*\0\0";
                 ofn.nFilterIndex = 1;
                 ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
                 if (GetOpenFileNameW(&ofn)) {
@@ -9556,7 +9609,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                             TaskModel t;
                             t.task_type = TaskType::kTorrent;
                             t.url = tor_path;
-                            t.file_name = tinfo.name.empty() ? std::filesystem::path(tor_path).filename().string() : tinfo.name;
+                            t.file_name = tinfo.name.empty() ? PathSanitizer::PathToUtf8(std::filesystem::path(tor_path).filename()) : tinfo.name;
                             t.save_dir = default_dir;
                             t.total_bytes = tinfo.selected_bytes();
                             for (const auto& file : tinfo.files) {
@@ -9602,6 +9655,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 }
             } else if (cmd == IDM_CTX_SETTINGS) ctx->view->OpenSettingsCenter(SettingsCategory::kGeneral);
             else if (cmd == IDM_CTX_BROWSER_STAT) ctx->view->OpenSettingsCenter(SettingsCategory::kBrowserIntegration);
+            else if (cmd == IDM_CTX_STARTUP_LOG) ShowStartupLogDialogWin32(hwnd, *ctx->controller);
             else if (cmd == IDM_CTX_ABOUT) ctx->view->OpenSettingsCenter(SettingsCategory::kAboutAndDiagnostics);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -9629,7 +9683,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                                 TaskModel t;
                                 t.task_type = TaskType::kTorrent;
                                 t.url = tor_path;
-                                t.file_name = tinfo.name.empty() ? p.filename().string() : tinfo.name;
+                                t.file_name = tinfo.name.empty() ? PathSanitizer::PathToUtf8(p.filename()) : tinfo.name;
                                 t.save_dir = default_dir;
                                 t.total_bytes = tinfo.selected_bytes();
                                 for (const auto& file : tinfo.files) {
@@ -9667,7 +9721,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         }
                     } else {
                         std::string target_str = WToUtf8(filePath);
-                        ShowNewDownloadDialogWin32(hwnd, *ctx->view, *ctx->controller, target_str, p.filename().string());
+                        ShowNewDownloadDialogWin32(hwnd, *ctx->view, *ctx->controller, target_str, PathSanitizer::PathToUtf8(p.filename()));
                     }
                 }
             }
@@ -9677,8 +9731,16 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         }
         case WM_OPENIDM_SHOW_CONFLICT: {
             RefreshConflictDialog(*ctx);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            if (!IsWindowVisible(hwnd)) {
+                ShowWindow(hwnd, SW_SHOW);
+            }
+            if (IsIconic(hwnd)) {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+            ctx->view->SetWindowVisibility(true, false);
             SetForegroundWindow(hwnd);
+            BringWindowToTop(hwnd);
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         case WM_OPENIDM_TASK_NOTIFICATION: {

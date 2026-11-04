@@ -367,7 +367,16 @@ Result<std::filesystem::path> PathSanitizer::ResolveSafeOutputPath(
     if (ec) canonical_dir = save_dir;
 
     std::string safe_name = SanitizeFileName(candidate_filename);
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, safe_name.data(), static_cast<int>(safe_name.size()), nullptr, 0);
+    std::wstring wsafe(wlen, 0);
+    if (wlen > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, safe_name.data(), static_cast<int>(safe_name.size()), wsafe.data(), wlen);
+    }
+    std::filesystem::path target = canonical_dir / wsafe;
+#else
     std::filesystem::path target = canonical_dir / safe_name;
+#endif
 
     if (target.parent_path() != canonical_dir) {
         return Result<std::filesystem::path>::Err("ERR_SEC_PATH_TRAVERSAL", "Resolved path escaped target directory");
@@ -384,6 +393,18 @@ Result<std::filesystem::path> PathSanitizer::ResolveSafeOutputPath(
         return Result<std::filesystem::path>::Err("ERR_FILE_EXISTS", "Destination file already exists");
     }
 
+#ifdef _WIN32
+    std::wstring stem = target.stem().wstring();
+    std::wstring ext = target.extension().wstring();
+    for (int i = 1; i <= 9999; ++i) {
+        std::filesystem::path candidate = canonical_dir / (stem + L" (" + std::to_wstring(i) + L")" + ext);
+        std::filesystem::path candidate_part = candidate;
+        candidate_part += L".part";
+        if (!std::filesystem::exists(candidate, ec) && !std::filesystem::exists(candidate_part, ec)) {
+            return Result<std::filesystem::path>::Ok(candidate);
+        }
+    }
+#else
     std::string stem = target.stem().string();
     std::string ext = target.extension().string();
     for (int i = 1; i <= 9999; ++i) {
@@ -394,6 +415,7 @@ Result<std::filesystem::path> PathSanitizer::ResolveSafeOutputPath(
             return Result<std::filesystem::path>::Ok(candidate);
         }
     }
+#endif
     return Result<std::filesystem::path>::Err("ERR_FILE_RENAME_EXHAUSTED", "Could not find free auto-rename slot");
 }
 
@@ -405,7 +427,7 @@ Result<std::filesystem::path> PathSanitizer::CommitPartFile(
     uint64_t expected_bytes) {
     std::error_code ec;
     if (!std::filesystem::exists(part_file, ec)) {
-        return Result<std::filesystem::path>::Err("ERR_STORAGE_PART_MISSING", "Part file does not exist: " + part_file.string());
+        return Result<std::filesystem::path>::Err("ERR_STORAGE_PART_MISSING", "Part file does not exist: " + PathToUtf8(part_file));
     }
 
     if (expected_bytes > 0) {
@@ -421,7 +443,16 @@ Result<std::filesystem::path> PathSanitizer::CommitPartFile(
     std::filesystem::create_directories(canonical_dir, ec);
 
     std::string safe_name = SanitizeFileName(final_filename);
+#ifdef _WIN32
+    int commit_wlen = MultiByteToWideChar(CP_UTF8, 0, safe_name.data(), static_cast<int>(safe_name.size()), nullptr, 0);
+    std::wstring commit_wsafe(commit_wlen, 0);
+    if (commit_wlen > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, safe_name.data(), static_cast<int>(safe_name.size()), commit_wsafe.data(), commit_wlen);
+    }
+    std::filesystem::path initial_target = canonical_dir / commit_wsafe;
+#else
     std::filesystem::path initial_target = canonical_dir / safe_name;
+#endif
 
     // Helper for attempting an atomic non-replacing move
     auto try_atomic_move_no_replace = [](const std::filesystem::path& src, const std::filesystem::path& dst) -> int {
@@ -511,9 +542,9 @@ Result<std::filesystem::path> PathSanitizer::CommitPartFile(
             return Result<std::filesystem::path>::Ok(initial_target);
         }
         if (mv == 1) {
-            return Result<std::filesystem::path>::Err("ERR_FILE_EXISTS", "Destination file already exists: " + initial_target.string());
+            return Result<std::filesystem::path>::Err("ERR_FILE_EXISTS", "Destination file already exists: " + PathToUtf8(initial_target));
         }
-        return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", "Failed to commit part file to: " + initial_target.string());
+        return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", "Failed to commit part file to: " + PathToUtf8(initial_target));
     }
 
     if (policy == ConflictPolicy::kOverwrite) {
@@ -563,23 +594,43 @@ Result<std::filesystem::path> PathSanitizer::CommitPartFile(
     }
 
     // AutoRename policy:
-    int initial_mv = try_atomic_move_no_replace(part_file, initial_target);
-    if (initial_mv == 0) {
-        return Result<std::filesystem::path>::Ok(initial_target);
-    }
+    try {
+        int initial_mv = try_atomic_move_no_replace(part_file, initial_target);
+        if (initial_mv == 0) {
+            return Result<std::filesystem::path>::Ok(initial_target);
+        }
 
-    std::string stem = initial_target.stem().string();
-    std::string ext = initial_target.extension().string();
-    for (int i = 1; i <= 9999; ++i) {
-        std::filesystem::path candidate = canonical_dir / (stem + " (" + std::to_string(i) + ")" + ext);
-        int cand_mv = try_atomic_move_no_replace(part_file, candidate);
-        if (cand_mv == 0) {
-            return Result<std::filesystem::path>::Ok(candidate);
+#ifdef _WIN32
+        std::wstring stem = initial_target.stem().wstring();
+        std::wstring ext = initial_target.extension().wstring();
+        for (int i = 1; i <= 9999; ++i) {
+            std::filesystem::path candidate = canonical_dir / (stem + L" (" + std::to_wstring(i) + L")" + ext);
+            int cand_mv = try_atomic_move_no_replace(part_file, candidate);
+            if (cand_mv == 0) {
+                return Result<std::filesystem::path>::Ok(candidate);
+            }
+            if (cand_mv == 1) {
+                continue; // Candidate already exists; try next slot
+            }
+            return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", "Failed to commit candidate");
         }
-        if (cand_mv == 1) {
-            continue; // Candidate already exists; try next slot
+#else
+        std::string stem = initial_target.stem().string();
+        std::string ext = initial_target.extension().string();
+        for (int i = 1; i <= 9999; ++i) {
+            std::filesystem::path candidate = canonical_dir / (stem + " (" + std::to_string(i) + ")" + ext);
+            int cand_mv = try_atomic_move_no_replace(part_file, candidate);
+            if (cand_mv == 0) {
+                return Result<std::filesystem::path>::Ok(candidate);
+            }
+            if (cand_mv == 1) {
+                continue; // Candidate already exists; try next slot
+            }
+            return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", "Failed to commit candidate");
         }
-        return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", "Failed to commit candidate: " + candidate.string());
+#endif
+    } catch (const std::exception& ex) {
+        return Result<std::filesystem::path>::Err("ERR_STORAGE_COMMIT_FAILED", std::string("Filesystem exception in auto-rename: ") + ex.what());
     }
 
     return Result<std::filesystem::path>::Err("ERR_FILE_RENAME_EXHAUSTED", "Could not find free auto-rename slot");
@@ -874,6 +925,33 @@ bool PathSanitizer::IsWebpageWatchUrl(std::string_view url) {
         return true;
     }
     return false;
+}
+
+std::string PathSanitizer::PathToUtf8(const std::filesystem::path& p) {
+#ifdef _WIN32
+    const std::wstring& ws = p.native();
+    if (ws.empty()) return {};
+    int len = WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return {};
+    std::string out(static_cast<size_t>(len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()), out.data(), len, nullptr, nullptr);
+    return out;
+#else
+    return p.string();
+#endif
+}
+
+std::filesystem::path PathSanitizer::Utf8ToPath(std::string_view utf8_str) {
+#ifdef _WIN32
+    if (utf8_str.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8_str.data(), static_cast<int>(utf8_str.size()), nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring ws(static_cast<size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8_str.data(), static_cast<int>(utf8_str.size()), ws.data(), len);
+    return std::filesystem::path(ws);
+#else
+    return std::filesystem::path(utf8_str);
+#endif
 }
 
 } // namespace openidm

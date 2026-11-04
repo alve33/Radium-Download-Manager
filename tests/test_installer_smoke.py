@@ -159,9 +159,9 @@ def verify_pe_header(file_path: Path, expected_subsystem: int = 2, expected_arch
 
 def find_installer(dist_dir: Path, arch: str = "x64") -> Path:
     pattern = f"Radium-Setup-{arch}-*.exe"
-    candidates = list(dist_dir.glob(pattern)) + list(dist_dir.glob("Radium-Setup-*.exe")) + list(dist_dir.glob("Flux-Setup-*.exe"))
+    candidates = list(dist_dir.glob(pattern)) + list(dist_dir.glob("Radium-Setup-*.exe"))
     if not candidates:
-        candidates = list(dist_dir.rglob(pattern)) + list(dist_dir.rglob("Radium-Setup-*.exe")) + list(dist_dir.rglob("Flux-Setup-*.exe"))
+        candidates = list(dist_dir.rglob(pattern)) + list(dist_dir.rglob("Radium-Setup-*.exe"))
     full_candidates = [c for c in candidates if "Core" not in c.name and (arch in c.name or (arch == "x64" and "ARM64" not in c.name))]
     if full_candidates:
         return sorted(full_candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
@@ -171,7 +171,7 @@ def find_installer(dist_dir: Path, arch: str = "x64") -> Path:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Clean Installation Smoke Test for Flux")
+    parser = argparse.ArgumentParser(description="Clean Installation Smoke Test for Radium")
     parser.add_argument("--installer", type=str, default=None, help="Path to Inno Setup installer executable")
     parser.add_argument("--install-dir", type=str, default=None, help="Target installation directory")
     parser.add_argument("--dist-dir", type=str, default=None, help="Directory containing release artifacts")
@@ -281,7 +281,7 @@ def main():
         flux_exe = install_dir / "radium.exe" if (install_dir / "radium.exe").exists() else install_dir / "flux.exe"
         ver_proc = subprocess.run([str(flux_exe), "--version"], capture_output=True, text=True, check=True)
         ver_output = (ver_proc.stdout + "\n" + ver_proc.stderr).strip()
-        assert ("Radium Download Manager" in ver_output or "Radium" in ver_output or "Flux" in ver_output) and (
+        assert ("Radium Download Manager" in ver_output or "Radium" in ver_output) and (
             args.expected_version is None or args.expected_version in ver_output
         ), (
             f"Unexpected version output: stdout='{ver_proc.stdout}', stderr='{ver_proc.stderr}'"
@@ -326,7 +326,7 @@ def main():
 
         # Step 6: Verify Zero Leftover Temporary Files & Fault Injection Handling
         print("\n[Step 6/8] Verifying Error Recovery, Flaky Resume & Clean Part-File Lifecycle...")
-        leftover_parts = list(smoke_dl.rglob("*.part")) + list(smoke_dl.rglob("*.flux.part"))
+        leftover_parts = list(smoke_dl.rglob("*.part")) + list(smoke_dl.rglob("*.radium.part")) + list(smoke_dl.rglob("*.flux.part"))
         assert len(leftover_parts) == 0, f"Leftover part files detected: {leftover_parts}"
         print("  [OK] Zero unmerged .part temporary files detected after successful transfer.")
 

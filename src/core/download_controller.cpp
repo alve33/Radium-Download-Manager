@@ -6,6 +6,7 @@
 #include "common/json_mini.hpp"
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
+#include "common/startup_diagnostic.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -18,6 +19,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 
 namespace {
 void TriggerSystemShutdown() {
@@ -181,6 +184,9 @@ void DownloadController::SetTorrentMetadataSelectionCallback(
 
 DownloadController::~DownloadController() {
     Shutdown();
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
 }
 
 Result<void> DownloadController::Initialize() {
@@ -190,6 +196,9 @@ Result<void> DownloadController::Initialize() {
 
     auto open_res = m_store.Open(m_cfg.state_db_path);
     if (!open_res.ok()) return open_res;
+
+    // Initialize startup diagnostic storage directory
+    diagnostics::StartupDiagnosticRecorder::Instance().InitializeStorage(m_cfg.state_db_path.parent_path());
 
     auto rec_res = m_store.RecoverInterruptedTasks(65536);
     if (rec_res.ok() && *rec_res.value > 0) {
@@ -233,6 +242,9 @@ Result<void> DownloadController::Initialize() {
     }
 
     m_stopping = false;
+#ifdef _WIN32
+    timeBeginPeriod(1);
+#endif
     m_scheduler_thread = std::thread(&DownloadController::ScheduleLoop, this);
     return Result<void>::Ok();
 }
@@ -257,8 +269,8 @@ void DownloadController::LoadPersistedSettingsLocked() {
 #ifdef _WIN32
         if (!saved_dir.empty() && !saved_dir_user_selected && std::getenv("RADIUM_DOWNLOAD_DIR") == nullptr) {
             auto saved_path = std::filesystem::path(saved_dir).lexically_normal();
-            std::string leaf = saved_path.filename().string();
-            std::string parent = saved_path.parent_path().filename().string();
+            std::string leaf = PathSanitizer::PathToUtf8(saved_path.filename());
+            std::string parent = PathSanitizer::PathToUtf8(saved_path.parent_path().filename());
             std::transform(leaf.begin(), leaf.end(), leaf.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             std::transform(parent.begin(), parent.end(), parent.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (leaf == "radium" && parent == "downloads") {
@@ -507,12 +519,13 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
         }
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     if (!force_duplicate) {
         auto dup = core::DuplicateDetector::FindDuplicate(m_tasks, task.url, task.file_name, task.total_bytes, task.etag);
         if (dup.kind != core::DuplicateKind::kNone) {
             const auto& existing = dup.matched_task;
-            if (existing.state == TaskState::kQueued ||
+            if (existing.state == TaskState::kPaused ||
+                existing.state == TaskState::kQueued ||
                 existing.state == TaskState::kProbing ||
                 existing.state == TaskState::kDownloading ||
                 existing.state == TaskState::kMuxing) {
@@ -522,7 +535,8 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
         if (!task.correlation_id.empty()) {
             for (const auto& [id, existing] : m_tasks) {
                 if (existing.correlation_id == task.correlation_id &&
-                    (existing.state == TaskState::kQueued ||
+                    (existing.state == TaskState::kPaused ||
+                     existing.state == TaskState::kQueued ||
                      existing.state == TaskState::kProbing ||
                      existing.state == TaskState::kDownloading ||
                      existing.state == TaskState::kMuxing)) {
@@ -557,7 +571,21 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
         task.created_at_ms = NowEpochMs();
     }
     task.updated_at_ms = task.created_at_ms;
-    if (task.state != TaskState::kCompleted && task.state != TaskState::kFailed && task.state != TaskState::kDownloading) {
+    bool destination_conflict = false;
+    if (!force_duplicate && task.state != TaskState::kCompleted && task.state != TaskState::kFailed &&
+        task.conflict_policy == ConflictPolicy::kPrompt && !task.file_name.empty() && !task.save_dir.empty()) {
+        auto dest_res = PathSanitizer::ResolveSafeOutputPath(task.save_dir, task.file_name, ConflictPolicy::kPrompt);
+        if (!dest_res.ok() && dest_res.error->code == "ERR_FILE_EXISTS") {
+            destination_conflict = true;
+            task.state = TaskState::kPaused;
+            task.pause_reason = PauseReason::kNone;
+            task.error_code = "ERR_FILE_EXISTS";
+            task.error_message = "Destination file already exists: " + PathSanitizer::PathToUtf8(std::filesystem::path(task.save_dir) / task.file_name);
+            task.status_detail = "Waiting for a file conflict choice";
+        }
+    }
+
+    if (!destination_conflict && task.state != TaskState::kCompleted && task.state != TaskState::kFailed && task.state != TaskState::kDownloading) {
         task.state = (start_immediately && !task.scheduled) ? TaskState::kQueued : TaskState::kPaused;
         if (task.state == TaskState::kPaused) {
             task.pause_reason = task.scheduled ? PauseReason::kNone : PauseReason::kUser;
@@ -573,7 +601,43 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
     }
 
     m_tasks[task.task_id] = task;
+    lock.unlock();
+
+    // Wake the scheduler before optional diagnostic persistence. Startup
+    // diagnostics can touch disk; they must not sit on the task dispatch path.
     m_cv.notify_all();
+
+    if (destination_conflict) {
+#ifdef _WIN32
+        HWND hwnd_main = FindWindowW(L"Radium_MainWindowClass", nullptr);
+        if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_OPENIDM_SHOW_CONFLICT */, 0, 0);
+#endif
+        return Result<TaskModel>::Ok(task);
+    }
+
+    // Record task initialization event in startup diagnostics
+    {
+        std::string type_name = "HTTP";
+        if (task.task_type == TaskType::kStreamHls) type_name = "HLS";
+        else if (task.task_type == TaskType::kStreamDash) type_name = "DASH";
+        else if (task.task_type == TaskType::kTorrent) type_name = "Torrent";
+        else if (task.url.find("youtube.com") != std::string::npos || task.url.find("youtu.be") != std::string::npos) type_name = "YouTube";
+
+        if (!diagnostics::StartupDiagnosticRecorder::Instance().HasSession(task.task_id) &&
+            (task.correlation_id.empty() || !diagnostics::StartupDiagnosticRecorder::Instance().HasSession(task.correlation_id))) {
+            diagnostics::StartupDiagnosticRecorder::Instance().StartSession(
+                task.task_id,
+                task.correlation_id,
+                task.page_url,
+                task.url,
+                task.file_name,
+                type_name,
+                task.stream_options.video_filter,
+                task.total_bytes,
+                0);
+        }
+    }
+
     return Result<TaskModel>::Ok(task);
 }
 
@@ -625,7 +689,7 @@ Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const 
         return Result<TaskModel>::Err(staged_commit.error->code, staged_commit.error->message);
     }
     std::filesystem::path dest_path = *staged_commit.value;
-    task.file_name = dest_path.filename().string();
+    task.file_name = PathSanitizer::PathToUtf8(dest_path.filename());
 
     if (task.created_at_ms <= 0) {
         task.created_at_ms = NowEpochMs();
@@ -761,7 +825,16 @@ void DownloadController::ScheduleLoop() {
 
     while (true) {
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_cv.wait_for(lock, std::chrono::milliseconds(50), [&]() { return m_stopping; });
+        m_cv.wait_for(lock, std::chrono::milliseconds(50), [&]() {
+            if (m_stopping) return true;
+            for (const auto& [id, t] : m_tasks) {
+                if (t.state == TaskState::kQueued && m_active.find(id) == m_active.end()) return true;
+            }
+            for (const auto& [id, ctrl] : m_active) {
+                if (ctrl->finished.load()) return true;
+            }
+            return false;
+        });
         if (m_stopping) break;
 
         std::vector<std::thread> finished_workers;
@@ -786,6 +859,31 @@ void DownloadController::ScheduleLoop() {
 
         if (!m_active.empty()) {
             had_active = true;
+        }
+
+        // Fast-path task dispatch: dispatch eligible queued tasks immediately to worker threads
+        uint32_t max_conc = m_max_concurrent.load();
+        while (m_active.size() < max_conc) {
+            std::string next_id;
+            int32_t min_order = INT32_MAX;
+            int64_t oldest_ts = INT64_MAX;
+            for (const auto& [id, t] : m_tasks) {
+                if (t.state == TaskState::kQueued && m_active.find(id) == m_active.end()) {
+                    if (t.queue_order < min_order || (t.queue_order == min_order && t.created_at_ms < oldest_ts)) {
+                        min_order = t.queue_order;
+                        oldest_ts = t.created_at_ms;
+                        next_id = id;
+                    }
+                }
+            }
+            if (next_id.empty()) break;
+
+            m_tasks[next_id].state = TaskState::kProbing;
+            m_tasks[next_id].status_detail = "Connecting...";
+            auto ctrl = std::make_shared<ActiveTaskControl>();
+            ctrl->task_speed_limit_bps.store(m_tasks[next_id].speed_limit_bps);
+            m_active[next_id] = ctrl;
+            ctrl->worker_thread = std::thread(&DownloadController::RunTaskWorker, this, next_id, ctrl);
         }
 
         // 1. Check for scheduled tasks that reached their local schedule time
@@ -837,33 +935,39 @@ void DownloadController::ScheduleLoop() {
             }
         }
 
-        // 2. Check multi-queue schedules
-        auto queues_res = m_store.ListQueues();
-        if (queues_res.ok()) {
-            for (const auto& q : *queues_res.value) {
-                if (q.schedule_enabled) {
-                    bool in_queue_window = IsTimeInScheduledWindow(cur_hh_mm, q.start_time_local, q.stop_time_local);
-                    if (in_queue_window) {
-                        for (auto& [id, t] : m_tasks) {
-                            if (t.queue_id == q.queue_id && t.state == TaskState::kPaused &&
-                                t.pause_reason != PauseReason::kUser && t.pause_reason != PauseReason::kSystemSuspend && !t.scheduled) {
-                                t.state = TaskState::kQueued;
-                                t.status_detail = "Queued (Queue Schedule Started)";
-                                m_store.UpsertTask(t);
-                            }
+        // 2. Check multi-queue schedules (cached per minute to eliminate redundant repetitive SQLite queries)
+        static std::string last_queue_hh_mm;
+        static std::vector<QueueConfig> cached_queues;
+        if (cur_hh_mm != last_queue_hh_mm || cached_queues.empty()) {
+            last_queue_hh_mm = cur_hh_mm;
+            auto queues_res = m_store.ListQueues();
+            if (queues_res.ok()) {
+                cached_queues = *queues_res.value;
+            }
+        }
+        for (const auto& q : cached_queues) {
+            if (q.schedule_enabled) {
+                bool in_queue_window = IsTimeInScheduledWindow(cur_hh_mm, q.start_time_local, q.stop_time_local);
+                if (in_queue_window) {
+                    for (auto& [id, t] : m_tasks) {
+                        if (t.queue_id == q.queue_id && t.state == TaskState::kPaused &&
+                            t.pause_reason != PauseReason::kUser && t.pause_reason != PauseReason::kSystemSuspend && !t.scheduled) {
+                            t.state = TaskState::kQueued;
+                            t.status_detail = "Queued (Queue Schedule Started)";
+                            m_store.UpsertTask(t);
                         }
-                    } else if (!q.stop_time_local.empty() && cur_hh_mm == q.stop_time_local) {
-                        for (auto& [id, t] : m_tasks) {
-                            if (t.queue_id == q.queue_id && !t.scheduled &&
-                                (t.state == TaskState::kDownloading || t.state == TaskState::kProbing || t.state == TaskState::kQueued)) {
-                                auto ait = m_active.find(id);
-                                if (ait != m_active.end()) {
-                                    ait->second->pause_requested.store(true);
-                                }
-                                t.state = TaskState::kPaused;
-                                t.status_detail = "Paused (Queue Scheduled Stop " + q.stop_time_local + ")";
-                                m_store.UpsertTask(t);
+                    }
+                } else if (!q.stop_time_local.empty() && cur_hh_mm == q.stop_time_local) {
+                    for (auto& [id, t] : m_tasks) {
+                        if (t.queue_id == q.queue_id && !t.scheduled &&
+                            (t.state == TaskState::kDownloading || t.state == TaskState::kProbing || t.state == TaskState::kQueued)) {
+                            auto ait = m_active.find(id);
+                            if (ait != m_active.end()) {
+                                ait->second->pause_requested.store(true);
                             }
+                            t.state = TaskState::kPaused;
+                            t.status_detail = "Paused (Queue Scheduled Stop " + q.stop_time_local + ")";
+                            m_store.UpsertTask(t);
                         }
                     }
                 }
@@ -945,7 +1049,7 @@ void DownloadController::ScheduleLoop() {
             }
         }
 
-        uint32_t max_conc = m_max_concurrent.load();
+        max_conc = m_max_concurrent.load();
         while (m_active.size() < max_conc) {
             std::string next_id;
             int32_t min_order = INT32_MAX;
@@ -962,7 +1066,7 @@ void DownloadController::ScheduleLoop() {
             if (next_id.empty()) break;
 
             m_tasks[next_id].state = TaskState::kProbing;
-            m_tasks[next_id].status_detail = "Starting transfer...";
+            m_tasks[next_id].status_detail = "Connecting...";
             auto ctrl = std::make_shared<ActiveTaskControl>();
             ctrl->task_speed_limit_bps.store(m_tasks[next_id].speed_limit_bps);
             m_active[next_id] = ctrl;
@@ -1001,23 +1105,35 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
     OPENIDM_LOG_INFO("Controller", "Dispatching task=" + task_id + " type=" + task_type_str +
                      " correlation_id=" + local_task.correlation_id + " url=" + local_task.url);
 
+    diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+        task_id, "Scheduler dispatches task", "Worker thread executing for " + task_type_str);
+
     auto last_db_sync = std::chrono::steady_clock::now();
 
     bool preflight_conflict = false;
     if (local_task.task_type != TaskType::kTorrent &&
         (local_task.conflict_policy == ConflictPolicy::kPrompt || local_task.conflict_policy == ConflictPolicy::kFailIfExists)) {
+        std::string cand_name = local_task.file_name;
+        if (cand_name.empty()) {
+            cand_name = is_youtube_task ? "youtube_video.mp4" : PathSanitizer::ExtractFromUrl(local_task.url);
+        }
         auto destination = PathSanitizer::ResolveSafeOutputPath(
-            local_task.save_dir, local_task.file_name, local_task.conflict_policy);
+            local_task.save_dir, cand_name, local_task.conflict_policy);
         if (!destination.ok() && destination.error->code == "ERR_FILE_EXISTS") {
             preflight_conflict = true;
+            local_task.file_name = cand_name;
             local_task.error_code = local_task.conflict_policy == ConflictPolicy::kPrompt ? "ERR_FILE_EXISTS" : std::string{};
             local_task.error_message = local_task.conflict_policy == ConflictPolicy::kPrompt
-                ? "Destination file already exists: " + (std::filesystem::path(local_task.save_dir) / local_task.file_name).string()
+                ? "Destination file already exists: " + PathSanitizer::PathToUtf8(std::filesystem::path(local_task.save_dir) / cand_name)
                 : std::string{};
             local_task.state = local_task.conflict_policy == ConflictPolicy::kPrompt ? TaskState::kFailed : TaskState::kCanceled;
             local_task.status_detail = local_task.conflict_policy == ConflictPolicy::kPrompt
                 ? "Waiting for a file conflict choice"
                 : "Canceled because the destination file already exists";
+#ifdef _WIN32
+            HWND hwnd_main = FindWindowW(L"Radium_MainWindowClass", nullptr);
+            if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_OPENIDM_SHOW_CONFLICT */, 0, 0);
+#endif
         }
     }
 
@@ -1098,7 +1214,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                         local_task.file_name,
                         local_task.conflict_policy);
                     if (commit_res.ok()) {
-                        local_task.file_name = commit_res.value->filename().string();
+                        local_task.file_name = PathSanitizer::PathToUtf8(commit_res.value->filename());
                         local_task.part_path.clear();
                         local_task.state = TaskState::kCompleted;
                         local_task.downloaded_bytes = final_size;
@@ -1353,6 +1469,8 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                             t.segments = ep.segments;
                         }
                     }
+                    diagnostics::StartupDiagnosticRecorder::Instance().UpdateProgress(
+                        task_id, ep.downloaded_bytes, ep.total_bytes);
                     auto now = std::chrono::steady_clock::now();
                     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_db_sync).count() >= 500) {
                         last_db_sync = now;
@@ -1422,6 +1540,8 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 t.total_segments = sp.total_segments;
                 t.status_detail = sp.status_line;
             }
+            diagnostics::StartupDiagnosticRecorder::Instance().UpdateProgress(
+                task_id, sp.downloaded_bytes, sp.total_bytes);
         };
 
         if (is_yt) {
@@ -1612,6 +1732,12 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
         if (notify) callback(TaskNotification{task_id, to_save.file_name,
             to_save.state == TaskState::kCompleted,
             to_save.state == TaskState::kCompleted ? "Download completed" : to_save.error_message});
+
+        // Record terminal status in startup diagnostic recorder
+        diagnostics::StartupDiagnosticRecorder::Instance().CompleteSession(
+            task_id,
+            to_save.state == TaskState::kCompleted,
+            to_save.error_message);
     }
 
     ctrl->finished.store(true);

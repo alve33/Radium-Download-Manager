@@ -27,7 +27,7 @@
 
 ### 2.2 Client UI & Browser Extension
 - **[UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md)** — Deep Charcoal design system, GDI/Direct2D rendering, Per-Monitor DPI v2, and dialog specifications.
-- **[RADIUM_BRANDING.md](RADIUM_BRANDING.md)** — Visual identity, Coral Red accent styling, typography, and iconography.
+- **[RADIUM_BRANDING_SPECIFICATION.md](RADIUM_BRANDING_SPECIFICATION.md)** — Visual identity, Coral Red accent styling, typography, and iconography.
 - **[BROWSER_EXTENSION.md](BROWSER_EXTENSION.md)** — Manifest V3 browser extension architecture for Chromium and Firefox with closed Shadow DOM.
 - **[NATIVE_MESSAGING_AND_IPC.md](NATIVE_MESSAGING_AND_IPC.md)** — 32-bit length-prefixed stdio JSON wire protocol and ACL-restricted Windows Named Pipe.
 

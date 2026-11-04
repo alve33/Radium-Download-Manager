@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# OpenIDM / Flux - Read-Only Diagnostic Utility for Native Messaging and Browser Registration
+# Radium Download Manager - Read-Only Diagnostic Utility for Native Messaging and Browser Registration
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-native-messaging.ps1
@@ -157,19 +157,29 @@ Write-Host "--- 3. Desktop App and Named Pipe IPC Status ---" -ForegroundColor Y
 $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 Add-Finding -Category "IPC" -Check "Current User SID" -Status "PASS" -Details "SID = $userSid"
 
-$expectedPipeName = "Flux_IPC_$userSid"
-$pipePath = "\\.\pipe\$expectedPipeName"
+$primaryPipeName = "Radium_IPC_$userSid"
+$legacyPipeNames = @("Flux_IPC_$userSid", "OpenIDM_IPC_$userSid")
+$pipePath = "\\.\pipe\$primaryPipeName"
 
 $activePipes = [System.IO.Directory]::GetFiles("\\.\\pipe\\") | Where-Object { $_ -match "Radium|Flux_IPC|openidm" }
 if ($activePipes) {
-    $matchedPipe = $activePipes | Where-Object { $_ -match [regex]::Escape($expectedPipeName) }
-    if ($matchedPipe) {
-        Add-Finding -Category "IPC" -Check "Named Pipe Active" -Status "PASS" -Details "Found listening pipe: $matchedPipe"
+    $matchedPrimary = $activePipes | Where-Object { $_ -match [regex]::Escape($primaryPipeName) }
+    if ($matchedPrimary) {
+        Add-Finding -Category "IPC" -Check "Named Pipe Active" -Status "PASS" -Details "Found listening pipe: $matchedPrimary"
     } else {
-        Add-Finding -Category "IPC" -Check "Named Pipe Active" -Status "WARN" -Details "Found pipes ($($activePipes -join ', ')), but not user-specific $expectedPipeName"
+        $matchedLegacy = $null
+        foreach ($lp in $legacyPipeNames) {
+            $m = $activePipes | Where-Object { $_ -match [regex]::Escape($lp) }
+            if ($m) { $matchedLegacy = $m; break }
+        }
+        if ($matchedLegacy) {
+            Add-Finding -Category "IPC" -Check "Named Pipe Active" -Status "PASS" -Details "Found listening pipe in backward-compatibility mode: $matchedLegacy"
+        } else {
+            Add-Finding -Category "IPC" -Check "Named Pipe Active" -Status "WARN" -Details "Found pipes ($($activePipes -join ', ')), but not user-specific $primaryPipeName"
+        }
     }
 } else {
-    Add-Finding -Category "IPC" -Check "Named Pipe Active" -Status "FAIL" -Details "No Radium/Flux named pipe is currently listening! Is Radium running?"
+    Add-Finding -Category "IPC" -Check "Named Pipe Active" -Status "FAIL" -Details "No Radium named pipe is currently listening! Is Radium running?"
 }
 
 $fluxProcs = Get-Process -Name "*radium*", "*flux*", "*openidm*" -ErrorAction SilentlyContinue
@@ -296,9 +306,9 @@ Write-Host ""
 Write-Host "Manual Browser Verification Steps:" -ForegroundColor Cyan
 Write-Host "1. In Brave, navigate to: brave://extensions" -ForegroundColor Gray
 Write-Host "2. Enable Developer mode (top-right)." -ForegroundColor Gray
-Write-Host "3. Find 'Flux Download Manager'. Note the exact Extension ID displayed." -ForegroundColor Gray
-Write-Host "4. Click 'service worker' under 'Inspect views' on the Flux extension card." -ForegroundColor Gray
+Write-Host "3. Find 'Radium Download Manager'. Note the exact Extension ID displayed." -ForegroundColor Gray
+Write-Host "4. Click 'service worker' under 'Inspect views' on the Radium extension card." -ForegroundColor Gray
 Write-Host "5. In the DevTools Console that opens, observe live logs when clicking a download link." -ForegroundColor Gray
-Write-Host "   - Look for: [Flux Trace] NATIVE_RPC_RESULT or NATIVE_HOST_ATTEMPT_FAILED" -ForegroundColor Gray
+Write-Host "   - Look for: [Radium Trace] NATIVE_RPC_RESULT or NATIVE_HOST_ATTEMPT_FAILED" -ForegroundColor Gray
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""

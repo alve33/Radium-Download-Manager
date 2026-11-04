@@ -9,7 +9,7 @@
 
 ## 1. Design Objectives & Upstream Inspiration
 
-The Ordinary File Download Engine (`openidm::engine::WinHttpDownloadEngine`) handles all direct HTTP/1.1 and HTTP/2 single-file transfers (`.zip`, `.iso`, `.exe`, `.pdf`, and progressive `.mp4`/`.webm` video files). It adapts the three core algorithmic innovations of [Brisk Download Manager](https://github.com/BrisklyDev/brisk) into native C++20 on top of the Windows `WinHTTP` asynchronous API and Windows I/O Completion Ports (IOCP):
+The Ordinary File Download Engine (`radium::engine::WinHttpDownloadEngine`) handles all direct HTTP/1.1 and HTTP/2 single-file transfers (`.zip`, `.iso`, `.exe`, `.pdf`, and progressive `.mp4`/`.webm` video files). It adapts the three core algorithmic innovations of [Brisk Download Manager](https://github.com/BrisklyDev/brisk) into native C++20 on top of the Windows `WinHTTP` asynchronous API and Windows I/O Completion Ports (IOCP):
 1. **Dynamic Connection Spawning (`FR-003`):** Starts every download with a single connection (`Worker 0`) and spawns additional workers (`1 .. N-1`) only after byte-range capability is confirmed and active throughput justifies concurrency.
 2. **Dynamic Connection Reuse / Work-Stealing (`FR-003`):** When any worker finishes its assigned `[start_offset, end_offset]` range, it immediately steals the back half of the largest remaining active segment (`>= 2 MiB` left), keeping all connections busy until the final megabyte.
 3. **Automatic Stall Reset (`FR-004`):** Monitors per-worker sliding-window throughput and resets individual hung connections at their exact persisted `current_offset` without failing the task.
@@ -22,18 +22,18 @@ The Ordinary File Download Engine (`openidm::engine::WinHttpDownloadEngine`) han
 stateDiagram-v2
     [*] --> Queued : AddTask()
     Queued --> Probing : Scheduler starts task
-    Probing --> Downloading : 200 OK or 206 Partial Content<br/>(.openidm.part pre-allocated)
+    Probing --> Downloading : 200 OK or 206 Partial Content<br/>(.<task_id>.part pre-allocated)
     Probing --> Failed : 4xx/5xx Fatal or Disk Full
     Downloading --> Paused : User Pause / App Shutdown
     Paused --> Probing : User Resume (Validator Check)
     Downloading --> Verifying : All segments current_offset > end_offset
     Downloading --> Failed : Unrecoverable Network/Disk Error
-    Verifying --> Completed : Atomic Rename (.openidm.part -> final)
+    Verifying --> Completed : Atomic Rename (.<task_id>.part -> final)
     Verifying --> Failed : Checksum or Size Mismatch
     Queued --> Canceled : User Cancel
     Probing --> Canceled : User Cancel
-    Downloading --> Canceled : User Cancel (Delete .openidm.part)
-    Paused --> Canceled : User Cancel (Delete .openidm.part)
+    Downloading --> Canceled : User Cancel (Delete .<task_id>.part)
+    Paused --> Canceled : User Cancel (Delete .<task_id>.part)
 ```
 
 ---
@@ -54,7 +54,7 @@ Instead of relying solely on `HEAD` (which many signed CDNs such as AWS S3 pre-s
    - If `Accept-Ranges: bytes` is present (some servers ignore `Range: bytes=0-` with open-ended range), `Worker 1` tests `Range: bytes=<mid>-<total-1>`. Only if `Worker 1` receives `206 Partial Content` is `range_supported` upgraded to `true`.
 3. **Case C — Server responds `200 OK` with `Transfer-Encoding: chunked` (No `Content-Length`):**
    - `range_supported = false`, `total_bytes = 0 (Unknown)`, `pause_supported = false`.
-   - Download proceeds on `Worker 0` alone, appending sequentially to `<filename>.openidm.part`.
+   - Download proceeds on `Worker 0` alone, appending sequentially to `<filename>.<task_id>.part`.
 
 ### 3.2 Guard Against Misbehaving Servers During Multi-Segment Transfers (`RISK-006`)
 Every secondary worker (`Worker 1 .. N-1`) requests `Range: bytes=<start>-<end>`. Upon receiving headers (`WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE`):
@@ -95,11 +95,11 @@ When a worker asks the scheduler for work and there is no unassigned segment:
 
 ## 5. Disk Writes, Pre-Allocation, and File Integrity (`FR-026`)
 
-1. **Shared Partial File:** The Windows implementation opens `<dest_dir>\\<filename>.openidm.part` with `CreateFileW` using `GENERIC_READ | GENERIC_WRITE`, `FILE_SHARE_READ | FILE_SHARE_WRITE`, `OPEN_ALWAYS`, and `FILE_ATTRIBUTE_NORMAL`. It sets the logical length with `SetFilePointerEx` and `SetEndOfFile`.
+1. **Shared Partial File:** The Windows implementation opens `<dest_dir>\\<filename>.<task_id>.part` with `CreateFileW` using `GENERIC_READ | GENERIC_WRITE`, `FILE_SHARE_READ | FILE_SHARE_WRITE`, `OPEN_ALWAYS`, and `FILE_ATTRIBUTE_NORMAL`. It sets the logical length with `SetFilePointerEx` and `SetEndOfFile`.
 2. **Synchronous Chunk Handling:** Each `PerformGet` reads with a reusable `256 KiB` buffer via synchronous `WinHttpReadData`; the worker callback writes the received chunk through `PlatformPartFile::PWrite` at the segment offset. Disk-write and per-segment lock wait times are not currently measured.
 3. **Final Flush & Commit:** After workers join, the engine calls `FlushFileBuffers` before finalizing the partial file. Any configured checksum is verified before the final path is committed.
-   - If the user provided an expected checksum (`SHA-256` / `MD5`), stream `.openidm.part` through Windows CNG (`BCryptHashData`).
-   - Atomically rename `<filename>.openidm.part` to `<filename>` via `SetFileInformationByHandle` (`FileRenameInfoEx`), applying the configured conflict policy (`Auto-Rename`, `Overwrite`, or `Prompt`).
+   - If the user provided an expected checksum (`SHA-256` / `MD5`), stream `.<task_id>.part` through Windows CNG (`BCryptHashData`).
+   - Atomically rename `<filename>.<task_id>.part` to `<filename>` via `SetFileInformationByHandle` (`FileRenameInfoEx`), applying the configured conflict policy (`Auto-Rename`, `Overwrite`, or `Prompt`).
 
 For the Win32 `prompt` policy, single-file tasks preflight the destination before network work. The commit operation still performs an atomic no-replace attempt to catch a file created during transfer; `ERR_FILE_EXISTS` then follows the same user-choice flow. A selected Overwrite uses a same-volume atomic replacement or a destination-side temporary copy followed by atomic replacement, so a failed copy cannot truncate the previous file.
 

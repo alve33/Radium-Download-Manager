@@ -1071,10 +1071,10 @@ function addOrDeduplicateMediaCandidate(tabId, candidate) {
         }
       }
     }
-    if (candidate.videoUrl && !existing.videoUrl) {
+    if (candidate.videoUrl) {
       existing.videoUrl = candidate.videoUrl;
     }
-    if (candidate.pairedAudioUrl && !existing.pairedAudioUrl) {
+    if (candidate.pairedAudioUrl) {
       existing.pairedAudioUrl = candidate.pairedAudioUrl;
     }
     if (candidate.requiresCipherExtraction !== undefined) {

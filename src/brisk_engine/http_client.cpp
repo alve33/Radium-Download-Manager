@@ -807,7 +807,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         }
 
         HINTERNET hSession = WinHttpOpen(
-            L"Radium/1.0.0 (Windows NT 10.0; Win64; x64)",
+            L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             access_type,
             proxy_name,
             proxy_bypass,
@@ -815,10 +815,10 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         if (!hSession) {
             return Result<HttpResponseMeta>::Err("ERR_NET_INIT", "WinHttpOpen failed", true);
         }
-        int resolve_timeout = std::clamp(timeout_ms, 2000, 8000);
-        int connect_timeout = std::clamp(timeout_ms, 3000, 10000);
-        int send_timeout = std::clamp(timeout_ms, 5000, 15000);
-        int recv_timeout = std::clamp(timeout_ms, 5000, 20000);
+        int resolve_timeout = std::clamp(timeout_ms, 2000, 15000);
+        int connect_timeout = std::clamp(timeout_ms, 3000, 15000);
+        int send_timeout = std::clamp(timeout_ms, 5000, 30000);
+        int recv_timeout = std::clamp(timeout_ms, 5000, 60000);
         WinHttpSetTimeouts(hSession, resolve_timeout, connect_timeout, send_timeout, recv_timeout);
 
         // Enable modern HTTP/2 protocol flag for multiplexing and TCP efficiency on supported Windows versions
@@ -994,8 +994,9 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             }
             DWORD bytes_read = 0;
             if (!WinHttpReadData(hRequest, rbuf.get(), static_cast<DWORD>(kSocketBufSize), &bytes_read)) {
+                DWORD err = GetLastError();
                 cleanup_winhttp();
-                return Result<HttpResponseMeta>::Err("ERR_NET_TIMEOUT", "WinHttpReadData timeout or error", true, true);
+                return Result<HttpResponseMeta>::Err("ERR_NET_TIMEOUT", "WinHttpReadData failed (error " + std::to_string(err) + ")", true, true);
             }
             if (bytes_read == 0) break;
             if (on_chunk && !on_chunk(rbuf.get(), bytes_read)) {
@@ -1014,7 +1015,11 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         // POSIX Socket + OpenSSL Implementation
         // ---------------------------------------------------------------------
         std::string connect_host = pu.host;
-        if (const char* host_map = std::getenv("FLUX_HOST_RESOLVER_MAP")) {
+        const char* host_map = std::getenv("RADIUM_HOST_RESOLVER_MAP");
+        if (!host_map || host_map[0] == '\0') {
+            host_map = std::getenv("FLUX_HOST_RESOLVER_MAP");
+        }
+        if (host_map && host_map[0] != '\0') {
             std::string map_s(host_map);
             std::string lower_map = ToLower(map_s);
             std::string key = ToLower(pu.host) + "=";

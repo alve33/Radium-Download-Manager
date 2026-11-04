@@ -40,7 +40,7 @@ jobs:
         run: |
           cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build Flux Targets
+      - name: Build Radium Targets
         run: |
           cmake --build build --config Release --target radium radium-nmh
 

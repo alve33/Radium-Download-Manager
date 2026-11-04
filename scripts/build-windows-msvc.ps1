@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Radium Download Manager -- Reproducible Windows 11 x64 Portable Build, PE32+ Verification & Test Pipeline
-# Detects MSVC / Windows SDK / CMake, compiles flux.exe (WIN32 GUI subsystem),
-# flux-nmh.exe (CUI subsystem), and flux_unit_tests.exe, validates PE32+ x64 headers,
+# Detects MSVC / Windows SDK / CMake, compiles radium.exe (WIN32 GUI subsystem),
+# radium-nmh.exe (CUI subsystem), radium_unit_tests.exe, and radium_core_tests.exe, validates PE32+ x64 headers,
 # provisions stream workers, runs automated unit/extension/integration tests, and stages
 # the portable application at dist/Radium.exe with the loadable browser extension in extension/.
 # Note: Does NOT create an installer, setup executable, or MSI by default (Release Requirement 6).
@@ -83,8 +83,8 @@ if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed with exit code $LAS
 # -----------------------------------------------------------------------------
 # 3. Compile Windows x64 Targets
 # -----------------------------------------------------------------------------
-Write-Host "`n==> [3/7] Compiling Windows x64 targets (radium, radium-nmh, radium_unit_tests, N_m3u8DL-RE)..."
-$BuildTargets = @("sqlite3", "radium", "radium-nmh", "N_m3u8DL-RE", "radium_unit_tests")
+Write-Host "`n==> [3/7] Compiling Windows x64 targets (radium, radium-nmh, radium_unit_tests, radium_core_tests, N_m3u8DL-RE)..."
+$BuildTargets = @("sqlite3", "radium", "radium-nmh", "N_m3u8DL-RE", "radium_unit_tests", "radium_core_tests")
 foreach ($bt in $BuildTargets) {
     & $CMakeCmd --build $BuildDir --config Release --target $bt
     if ($LASTEXITCODE -ne 0) { throw "CMake compilation of target $bt failed with exit code $LASTEXITCODE" }
@@ -142,6 +142,7 @@ function Verify-PeBinary([string]$FilePath, [int]$ExpectedSubsystem, [string]$Su
 Verify-PeBinary (Join-Path $BuildDir "radium.exe") 2 "IMAGE_SUBSYSTEM_WINDOWS_GUI"
 Verify-PeBinary (Join-Path $BuildDir "radium-nmh.exe") 3 "IMAGE_SUBSYSTEM_WINDOWS_CUI"
 Verify-PeBinary (Join-Path $BuildDir "radium_unit_tests.exe") 3 "IMAGE_SUBSYSTEM_WINDOWS_CUI"
+Verify-PeBinary (Join-Path $BuildDir "radium_core_tests.exe") 3 "IMAGE_SUBSYSTEM_WINDOWS_CUI"
 Verify-PeBinary (Join-Path $BuildDir "N_m3u8DL-RE.exe") 3 "IMAGE_SUBSYSTEM_WINDOWS_CUI"
 
 # -----------------------------------------------------------------------------
@@ -233,8 +234,24 @@ if (Test-Path $builtWorker) {
 } elseif (Test-Path (Join-Path $ToolsWinDir "N_m3u8DL-RE.exe")) {
     Copy-Item -Force (Join-Path $ToolsWinDir "N_m3u8DL-RE.exe") (Join-Path $DistToolsWinDir "N_m3u8DL-RE.exe")
 }
-Copy-Item -Force (Join-Path $ToolsWinDir "ffmpeg.exe") (Join-Path $DistToolsWinDir "ffmpeg.exe")
-Copy-Item -Force (Join-Path $ToolsWinDir "yt-dlp.exe") (Join-Path $DistToolsWinDir "yt-dlp.exe")
+function Copy-ToolIfDifferent($src, $dst) {
+    if (Test-Path $dst) {
+        if ((Get-Item $src).Length -eq (Get-Item $dst).Length) {
+            return
+        }
+    }
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            Copy-Item -Force $src $dst -ErrorAction Stop
+            break
+        } catch {
+            if ($attempt -eq 4) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+Copy-ToolIfDifferent (Join-Path $ToolsWinDir "ffmpeg.exe") (Join-Path $DistToolsWinDir "ffmpeg.exe")
+Copy-ToolIfDifferent (Join-Path $ToolsWinDir "yt-dlp.exe") (Join-Path $DistToolsWinDir "yt-dlp.exe")
 
 # Clean browser extension staging (strictly excludes development/test files)
 $extSrc = Join-Path $RepoRoot "extension"
@@ -293,7 +310,11 @@ $hashLines | Out-File -Encoding utf8 -FilePath $ChecksumReport
 if (-not $SkipTests) {
     Write-Host "`n==> [7/7] Executing Test Suites..."
 
-    Write-Host "  --> [A] C++20 Unit and Regression Tests..."
+    Write-Host "  --> [A1] C++20 Core Unit Tests..."
+    & (Join-Path $BuildDir "radium_core_tests.exe")
+    if ($LASTEXITCODE -ne 0) { throw "C++20 core unit test suite failed!" }
+
+    Write-Host "  --> [A2] C++20 Unit and Regression Tests..."
     & (Join-Path $BuildDir "radium_unit_tests.exe")
     if ($LASTEXITCODE -ne 0) { throw "C++20 unit test suite failed!" }
 

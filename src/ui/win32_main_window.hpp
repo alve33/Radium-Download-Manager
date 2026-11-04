@@ -321,7 +321,7 @@ struct BrowserIntegrationStatusView {
 
 struct AboutDialogView {
     std::string app_name{"Radium Download Manager"};
-    std::string version{FLUX_VERSION_STRING};
+    std::string version{RADIUM_VERSION_STRING};
     std::string license{"Apache-2.0"};
     std::string target_platform{"Windows 11 x64 (Native Win32 + Direct2D/GDI)"};
     std::vector<std::string> upstream_attributions;
@@ -625,6 +625,7 @@ private:
 #ifdef _WIN32
 void ShowDeleteConfirmationDialogWin32(HWND hwnd_parent, DesktopView& view, DownloadController& controller);
 bool ShowSimpleInputDialogWin32(HWND hwnd_parent, const std::wstring& title, const std::wstring& prompt, const std::wstring& initial_value, std::wstring& out_value);
+void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller);
 void CopyTextToClipboardWin32(HWND hwnd, const std::string& text);
 #endif
 
