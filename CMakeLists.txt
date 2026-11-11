@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
+# Radium Download Manager — Native C++20 / Win32 Build Orchestration
 cmake_minimum_required(VERSION 3.24)
 # Read authoritative VERSION file
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" RADIUM_AUTHORITATIVE_VERSION)

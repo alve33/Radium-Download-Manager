@@ -2,7 +2,7 @@
   "version": 3,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 20,
+    "minor": 24,
     "patch": 0
   },
   "configurePresets": [
@@ -31,6 +31,18 @@
       }
     },
     {
+      "name": "windows-arm64-release",
+      "displayName": "Windows ARM64 Release",
+      "description": "Target Windows ARM64 with MSVC in Release configuration",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "ARM64",
+      "binaryDir": "${sourceDir}/build/win-arm64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
       "name": "ninja-multi-config",
       "displayName": "Ninja Multi-Config",
       "description": "Multi-config build with Ninja",
@@ -53,6 +65,12 @@
       "displayName": "Build Windows x64 Debug",
       "configurePreset": "windows-x64-debug",
       "configuration": "Debug"
+    },
+    {
+      "name": "windows-arm64-release",
+      "displayName": "Build Windows ARM64 Release",
+      "configurePreset": "windows-arm64-release",
+      "configuration": "Release"
     }
   ],
   "testPresets": [

@@ -1247,11 +1247,37 @@ async function runTests() {
   // 1. Verify manifest.firefox.json declares full background script sequence
   assert.deepStrictEqual(mFox.background.scripts, ["js/init.js", "js/function.js", "js/background.js"],
     "BUG-039: Firefox manifest must declare init.js, function.js, and background.js in order");
+
   // 2. Verify content-script enforces strict per-anchor authorization token on radiumDirectBlobDownload
   const csText = fs.readFileSync(path.join(rootDir, "extension", "js", "content-script.js"), "utf8");
   assert.ok(csText.includes('ev.data.action === "radiumDirectBlobDownload"'), "Content script handles direct blob download");
   assert.ok(csText.includes('g_authorizedBlobTokens'), "SEC-001: Content script maintains anchor authorization registry");
   assert.ok(csText.includes('authToken'), "SEC-001: Content script enforces anchor-bound authToken verification");
+
+  // Verify categories.generated.js is declared before content-script.js across Chromium and Firefox manifests
+  const chrContentScripts = mDev.content_scripts.find(cs => cs.js && cs.js.includes("js/content-script.js"));
+  assert.ok(chrContentScripts, "Chromium manifest contains content-script entry");
+  assert.deepStrictEqual(chrContentScripts.js, ["js/categories.generated.js", "js/content-script.js"],
+    "Chromium manifest loads categories.generated.js immediately before content-script.js");
+
+  const foxContentScripts = mFox.content_scripts.find(cs => cs.js && cs.js.includes("js/content-script.js"));
+  assert.ok(foxContentScripts, "Firefox manifest contains content-script entry");
+  assert.deepStrictEqual(foxContentScripts.js, ["js/categories.generated.js", "js/content-script.js"],
+    "Firefox manifest loads categories.generated.js immediately before content-script.js");
+
+  // Verify generated categories load in Node context and match radium_config.json
+  const configJson = JSON.parse(fs.readFileSync(path.join(rootDir, "config", "radium_config.json"), "utf8"));
+  const { RADIUM_FILE_CATEGORIES } = require("../extension/js/categories.generated.js");
+  assert.ok(RADIUM_FILE_CATEGORIES && typeof RADIUM_FILE_CATEGORIES === "object", "RADIUM_FILE_CATEGORIES exported and defined");
+  for (const [catName, extList] of Object.entries(configJson.file_categories)) {
+    for (const ext of extList) {
+      assert.strictEqual(RADIUM_FILE_CATEGORIES[ext.toLowerCase()], catName, `Category mapping for .${ext} matches config`);
+    }
+  }
+
+  // Verify content-script.js no longer contains hardcoded fallback category mappings
+  assert.ok(!csText.includes('zip: "Compressed"'), "content-script.js eliminated duplicate hardcoded category mappings");
+  console.log("  [Category Single Source of Truth] verified categories.generated.js loaded in Chromium & Firefox and matches config -> PASS");
 
   // Run full adversarial test suite
   const { testSec001AdversarialSuite } = require("./test_sec001_adversarial.js");

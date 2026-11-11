@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/branding/RDM_Logo.svg" alt="Logo officiel de Radium Download Manager" width="128" height="128">
+  <img src="assets/branding/RDM_Logo.svg" alt="Logo de Radium Download Manager" width="128" height="128">
 </p>
 
 <p align="center">
@@ -16,8 +16,8 @@
 
 <p align="center">
   <b>Gestionnaire de téléchargements rapide et fluide pour Windows 11 avec capture vidéo intégrée.</b><br>
-  Accélérez les téléchargements multiconnexions et capturez des vidéos depuis vos navigateurs (HLS, DASH et flux web).<br>
-  Application native C++20 et Win32 ultra-légère, sans la surcharge d'Electron, avec un minimum de RAM et zéro nuisance.
+  Accélérez vos téléchargements de fichiers grâce au découpage multiconnexion et capturez les vidéos en ligne (HLS, DASH et flux web) en un seul clic.<br>
+  Application native C++20 et Win32 ultra-légère, sans le moindre surcoût lié à Electron — consommation minimale de mémoire vive et exécution discrète sans processus d'arrière-plan inutiles.
 </p>
 
 <p align="center">
@@ -31,153 +31,276 @@
 </p>
 
 <p align="center">
-  <a href="#vue-densemble"><b>Présentation</b></a> ·
   <a href="#téléchargements-et-installation"><b>Téléchargements</b></a> ·
   <a href="#fonctionnalités-clés"><b>Fonctionnalités</b></a> ·
   <a href="#thèmes-clair-et-sombre"><b>Thèmes</b></a> ·
   <a href="#interface-multilingue"><b>Langues</b></a> ·
-  <a href="#captures-décran"><b>Captures</b></a> ·
-  <a href="#benchmarks-de-performance"><b>Performances</b></a> ·
-  <a href="#moteur-de-téléchargement-haute-performance"><b>Moteur</b></a> ·
+  <a href="#tests-de-performance-benchmarks"><b>Performances</b></a> ·
+  <a href="#moteur-de-téléchargement-haute-performance"><b>Moteur de téléchargement</b></a> ·
   <a href="#téléchargements-bittorrent"><b>BitTorrent</b></a> ·
-  <a href="#pipeline-de-flux-adaptatif"><b>Flux Multimédia</b></a> ·
-  <a href="#intégration-du-navigateur"><b>Navigateur</b></a> ·
-  <a href="#architecture-interne"><b>Architecture</b></a> ·
-  <a href="#tests-et-vérification"><b>Tests</b></a> ·
-  <a href="#licence-et-crédits"><b>Licence</b></a>
+  <a href="#intégration-au-navigateur"><b>Navigateur</b></a> ·
+  <a href="#architecture-technique"><b>Architecture</b></a> ·
+  <a href="#compilation-du-code-source"><b>Compilation</b></a>
 </p>
 
 <br>
 
 <p align="center">
-  <img src="docs/images/readme/radium-main-window.png" alt="Fenêtre principale de Radium Download Manager" width="100%">
-  <br>
-  <sub>Fenêtre principale de Radium : thème sombre Deep Charcoal, jauges de progression segmentées en direct, télémétrie de vitesse et filtres de catégories.</sub>
+  <img src="docs/images/readme/radium-main-window.png" alt="Interface principale de Radium Download Manager" width="100%">
 </p>
-
-<br>
 
 ## Vue d'ensemble
 
-Radium est un gestionnaire de téléchargements moderne et léger pour Windows 11, conçu pour remplacer les logiciels encombrants et saturés de publicités. Il associe des téléchargements segmentés ultra-rapides à la capture vidéo en un clic et au multiplexage de flux.
+Radium est un gestionnaire de téléchargements moderne, performant et open-source conçu spécifiquement pour Windows 11. Conçu pour remplacer les logiciels traditionnels souvent vieillissants, payants ou saturés de publicités, il réunit le téléchargement segmenté multiconnexion et la capture de médias web dans une interface sobre et fluide.
 
 <table>
   <tr>
-    <td width="25%" valign="top">
-      <h3>⚡ Rapidité Native</h3>
-      Zéro surcharge Electron. Conçu exclusivement en ISO C++20 avec Win32 et Direct2D/GDI. Démarrage instantané et empreinte RAM minime (18 à 22 Mo en pointe lors de transferts de plusieurs gigaoctets).
+    <td width="33%" valign="top">
+      <h3>⚡ Bande passante saturée</h3>
+      Moteur de téléchargement HTTP/HTTPS segmenté basé sur des E/S asynchrones natives (WinHTTP + IOCP), avec division dynamique des plages d'octets et réattribution adaptative du travail restant.
     </td>
-    <td width="25%" valign="top">
-      <h3>🔀 Moteur Adaptatif</h3>
-      Mise à l'échelle dynamique (1 à 32 connexions) avec vol de travail adaptatif (work-stealing). Temps de téléchargement réduit de 16,5% à 19,2% par rapport à IDM sur des transferts réels de 500 Mo.
+    <td width="33%" valign="top">
+      <h3>🌐 Capture web intelligente</h3>
+      Extension légère Manifest V3 pour Chromium et Firefox. Elle détecte les listes de lecture HLS (.m3u8), les flux DASH (.mpd) et les fichiers directs, tout en affichant un bouton discret au-dessus des lecteurs vidéo.
     </td>
-    <td width="25%" valign="top">
-      <h3>🌐 Capture Navigateur</h3>
-      Extension Manifest V3 pour Chrome, Brave, Edge et Firefox. Détection sécurisée des flux via des canaux nommés Windows (Named Pipes) protégés par ACL utilisateur, sans port localhost non authentifié.
-    </td>
-    <td width="25%" valign="top">
-      <h3>🧲 BitTorrent &amp; Flux</h3>
-      Moteur BitTorrent v1 intégré avec support des liens magnet (BEP 9), annonces de trackers et arborescence de fichiers interactive. Traitement externe de flux via N_m3u8DL-RE et FFmpeg dans des Windows Job Objects isolés.
+    <td width="33%" valign="top">
+      <h3>🧲 BitTorrent & Traitement de flux</h3>
+      Moteur BitTorrent v1 intégré avec prise en charge des liens magnet (BEP 9), annonces par trackers et sélection granulaire des fichiers. Les flux vidéo sont traités dans des Job Objects Windows isolés avec N_m3u8DL-RE et FFmpeg.
     </td>
   </tr>
 </table>
-
-<br>
 
 ## Téléchargements et Installation
 
-La version stable la plus récente est **[v1.0.0](https://github.com/sayedalve/Radium-Download-Manager/releases/tag/v1.0.0)** :
+Radium est distribué sous forme d'archive portable pour Windows x64 ainsi que via des installeurs MSIX et Inno Setup.
 
-| Paquet | Architecture | Format | Description |
-| :--- | :---: | :---: | :--- |
-| **Installeur Radium (Standard)** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Installeur recommandé pour Windows 11 / 10 x64 |
-| **Radium Portable Complet** | x64 | [Archive ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | Version portable intégrant N_m3u8DL-RE et FFmpeg |
-| **Radium Portable Core** | x64 | [Archive ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | Version portable légère (outils de flux requis séparément) |
-| **Installeur Core** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | Installeur sans binaires externes de flux |
-| **Installeur ARM64** | ARM64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Installeur natif pour Windows 11 sur ARM |
-| **Radium Portable Complet (ARM64)** | ARM64 | [Archive ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | Version portable avec outils ARM64 |
-| **Extension de navigateur** | Multi-navigateur | [Code source](extension/) | Extension Manifest V3 pour Chrome, Edge, Brave, Firefox |
+| Paquet | Architecture | Lien de téléchargement |
+| :--- | :---: | :--- |
+| **Radium Portable (Complet)** | x64 | [Archive ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
+| **Radium Portable (Cœur léger)** | x64 | [Archive ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
 
-Sommes de contrôle de sécurité : [SHA256SUMS.txt](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt).
+### Installation rapide de l'extension de navigateur
 
-> [!IMPORTANT]
-> ### 🧩 Configuration de l'extension de navigateur (Étape manuelle requise)
-> **L'extension n'est pas intégrée automatiquement dans l'installeur.** Vous devez charger les fichiers manuellement :
-> 1. Téléchargez ou clonez le dossier [`extension/`](extension/) depuis ce dépôt.
-> 2. Lancez Radium pour enregistrer l'hôte de messagerie native dans le registre Windows.
-> 3. Ouvrez la gestion des extensions de votre navigateur Chromium (`chrome://extensions`, `edge://extensions`), activez le **Mode développeur**, puis cliquez sur **Charger l'extension non empaquetée** et sélectionnez le dossier `extension`.
-> 4. Pour Firefox, ouvrez `about:debugging#/runtime/this-firefox`, cliquez sur **Charger un module temporaire...** et choisissez le fichier `manifest.firefox.json`.
-> 5. Avec la version portable, exécutez `scripts\register-native-messaging.ps1` au préalable.
+> [!TIP]
+> **L'extension navigateur est distribuée de façon modulaire.** Vous pouvez charger le dossier [`extension/`](extension/) directement en mode développeur dans votre navigateur :
+> 1. **Navigateurs Chromium (Chrome, Edge, Brave) :** Ouvrez `chrome://extensions`, activez le **Mode développeur** puis cliquez sur **Charger l'extension non empaquetée** et sélectionnez le dossier `extension/`.
+> 2. **Firefox :** Ouvrez `about:debugging#/runtime/this-firefox`, cliquez sur **Charger un module temporaire...** et sélectionnez le fichier `manifest.firefox.json` situé dans le dossier `extension/`.
+> 3. **Enregistrement de l'hôte Native Messaging :** Exécutez le script PowerShell `scripts/register-native-messaging.ps1` afin d'enregistrer l'hôte IPC local dans le registre Windows.
 
-<br>
+## Fonctionnalités clés
+
+<p align="center">
+  <img src="docs/images/readme/radium-new-download-dialog.jpg" alt="Fenêtre de nouveau téléchargement de Radium" width="90%">
+</p>
+
+### Téléchargement HTTP & HTTPS segmenté
+- **Découpage dynamique en vol :** Les connexions actives se scindent dynamiquement pour saturer les plages d'octets restantes dès que des fils de travail se libèrent.
+- **Entrées/Sorties asynchrones à faible latence :** Utilise les ports d'achèvement d'E/S Windows (IOCP) et des fichiers partiellement alloués (sparse files) pour éviter tout ralentissement du disque dur.
+- **Validation atomique des fichiers :** Les téléchargements s'écrivent dans des fichiers temporaires `*.radium.part` et ne sont renommés qu'après validation complète de leur intégrité.
+- **Reprise fiable des téléchargements :** Gestion stricte des en-têtes `Range` et des balises `ETag` pour reprendre un transfert interrompu sans corruption de données.
+
+### Téléchargements BitTorrent
+- **Résolution instantanée des liens Magnet :** Récupère les métadonnées en quelques secondes grâce à l'extension BEP 9 sans nécessiter de fichier .torrent préalable.
+- **Sélection interactive des fichiers :** Examinez l'arborescence complète du torrent et cochez uniquement les fichiers que vous souhaitez rapatrier.
+- **Persistance transactionnelle :** Suivi en temps réel dans SQLite 3 (mode WAL) pour survivre sans perte aux pannes de courant ou arrêts brutaux.
+
+### Sécurité et robustesse du système
+- **Isolation dans des Windows Job Objects :** Les processus auxiliaires (FFmpeg, N_m3u8DL-RE) sont rattachés à un Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) assurant leur fermeture instantanée si Radium quitte.
+- **Communication inter-processus sécurisée :** Aucun port réseau local ouvert ; l'extension communique exclusivement par tubes nommés Windows protégés par des listes de contrôle d'accès (`\\.\pipe\Radium_IPC_<UserSID>`).
+- **Protection contre les injections de commandes :** Les URL et paramètres système sont rigoureusement assainis avant exécution, et les jetons sensibles transitent par des fichiers de réponse protégés (`@job.rsp`).
 
 ## Thèmes Clair et Sombre
 
-Radium s'intègre harmonieusement à Windows 11 en offrant une prise en charge native des thèmes clair et sombre :
+Radium intègre une interface moderne conforme aux directives graphiques de Windows 11, avec une prise en charge complète des thèmes clair et sombre :
 
-- **Mode Clair (Light Mode) :** Toile blanche lumineuse (`#FFFFFF`), surfaces neutres (`#F5F7F9`), accents Bleu Ciel (`#168BCB`) et contraste de texte idéal pour le jour (`#202124`).
-- **Mode Sombre (Dark Mode) :** Palette ardoise sombre (`#0F172A` / `#161618`), accent Rouge Corail iconique (`#FF4757`) et violet céleste pour les flux (`#8B5CF6`).
-- **Bouton d'accès direct :** Un bouton dédié dans la barre d'outils permet de basculer instantanément d'un clic entre le mode clair et le mode sombre avec mémorisation automatique.
-- **Synchronisation système :** Détection automatique du paramètre Windows (`AppsUseLightTheme`).
+<div align="center">
 
-<br>
+| Thème clair (Light) | Thème sombre (Dark) |
+| :---: | :---: |
+| <img src="docs/images/readme/radium-main-window.png" alt="Thème clair" width="460"> | <img src="docs/images/readme/radium-main-window.png" alt="Thème sombre" width="460"> |
+
+</div>
+
+- **Détection automatique du système :** S'aligne par défaut sur la préférence de couleur d'application configurée dans Windows 11 (`AppsUseLightTheme`).
+- **Basculement manuel :** Choisissez librement votre mode d'affichage (`light`, `dark` ou `system`) depuis le centre de paramètres.
+- **Rendu fluide et sans scintillement :** Dessin natif à double mémoire tampon (GDI / Direct2D) assurant des animations et des redimensionnements sans artefact visuel.
 
 ## Interface Multilingue
 
-Radium est conçu pour les utilisateurs du monde entier grâce à son moteur d'internationalisation natif hors ligne.
+Radium propose un catalogue linguistique complet couvrant 12 langues internationales, modifiables instantanément sans redémarrer le logiciel :
 
-> [!NOTE]
-> La documentation GitHub est proposée dans **12 langues principales** (via le sélecteur ci-dessus). L'application de bureau Radium propose quant à elle **24 langues et écritures natives** intégrées !
-
-### Langues prises en charge dans l'application
-L'application Radium intègre nativement les langues suivantes :
-- **Anglais (English)** (`en`) — Langue de référence
-- **Japonais (日本語)** (`ja`), **Chinois simplifié (简体中文)** (`zh-CN`), **Chinois traditionnel (繁體中文)** (`zh-TW`), **Coréen (한국어)** (`ko`), **Espagnol (Español)** (`es`), **Français (Français)** (`fr`), **Portugais brésilien (Português - Brasil)** (`pt-BR`), **Allemand (Deutsch)** (`de-DE`), **Russe (Русский)** (`ru-RU`), **Italien (Italiano)** (`it-IT`), **Arabe (العربية - RTL)** (`ar-SA`).
-- Ainsi que le vietnamien, le néerlandais, le polonais, le turc, l'indonésien, le persan (RTL), l'ukrainien, le tchèque, le roumain, le thaï, le suédois et le grec.
-
-<br>
+- **Changement dynamique :** L'ensemble des textes, boîtes de dialogue et infobulles s'actualisent en direct lors de la sélection d'une langue.
+- **Détection automatique :** S'initialise automatiquement sur la langue de l'interface utilisateur de Windows (`GetUserDefaultUILanguage`).
+- **Catalogue centralisé :** Toutes les traductions de l'application de bureau sont rigoureusement versionnées dans `translations/desktop.json`.
 
 ## Captures d'écran
 
-<p align="center">
-  <img src="docs/images/readme/radium-main-window.png" alt="Interface principale de Radium" width="100%">
-  <br>
-  <sub><b>Fenêtre Principale :</b> Tableau de bord avec suivi en temps réel des segments et de la bande passante.</sub>
-</p>
+<div align="center">
 
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/images/readme/radium-new-download-dialog.jpg" alt="Fenêtre de nouveau téléchargement" width="100%">
-      <br>
-      <sub><b>Sonde Préalable :</b> Analyse des en-têtes et calcul de l'espace disque.</sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/images/readme/radium-add-torrent-dialog.jpg" alt="Fenêtre d'ajout de torrent" width="100%">
-      <br>
-      <sub><b>Gestion BitTorrent :</b> Arborescence sélective et vérification de hachage.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" valign="top">
-      <img src="docs/images/readme/radium-settings-dialog.jpg" alt="Centre de configuration" width="100%">
-      <br>
-      <sub><b>Centre de Configuration :</b> Sélection des langues dans leur écriture d'origine, gestion des thèmes et réglages réseau.</sub>
-    </td>
-  </tr>
-</table>
+| Fenêtre principale et liste des tâches | Centre de configuration et paramètres réseau |
+| :---: | :---: |
+| <img src="docs/images/readme/radium-main-window.png" alt="Fenêtre principale" width="460"> | <img src="docs/images/readme/radium-settings-dialog.jpg" alt="Paramètres" width="460"> |
 
-<br>
+</div>
+
+## Tests de performance (Benchmarks)
+
+Radium fait l'objet de comparaisons rigoureuses et continues face à **Internet Download Manager (IDM 6.43.15)** et à des utilitaires en ligne de commande, sur des fichiers strictement identiques.
+
+### Face-à-face : Radium (v0.3.5 Dev Build) vs Internet Download Manager (Transfert de 500 Mo sur Internet réel)
+
+Ce banc d'essai a évalué les deux logiciels lors du téléchargement d'un fichier de test identique de **500 000 000 octets** (`https://sg-lg.regxa.com/500MB.test`) sur une machine Windows 11. Deux essais consécutifs ont été réalisés en alternant l'ordre de passage afin d'équilibrer les aléas réseau. Les deux logiciels ont téléchargé avec succès et validé l'empreinte cryptographique exacte (**SHA-256 :** `b16f001a0731c8636f163586c16276b3714b8977242b67ae05fa60b96f685ebc`).
+
+| Essai | Ordre | Durée Radium | Durée IDM | Réduction du temps | Débit (Radium / IDM) | Pic RAM (Radium / IDM) | Gain en mémoire |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Essai 1** | IDM en premier, puis Radium | **184,75 s** | 221,21 s | **16,48%** (-36,46 s) | **2,71 Mo/s** / 2,26 Mo/s (+19,91%) | **20,5 Mo** / 53,8 Mo | **61,90%** |
+| **Essai 2** | Radium en premier, puis IDM | **140,09 s** | 173,46 s | **19,24%** (-33,37 s) | **3,57 Mo/s** / 2,88 Mo/s (+23,96%) | **20,4 Mo** / 122,2 Mo | **83,31%** |
+| **Moyenne** | Moyenne cumulée des essais | **162,42 s** | 197,34 s | **17,69%** (-34,92 s) | **3,14 Mo/s** / 2,57 Mo/s (+22,18%) | **20,4 Mo** / 88,0 Mo | **76,76%** |
+
+```
+Comparaison du temps de transfert de 500 Mo (Le plus court est le meilleur ▼)
+─────────────────────────────────────────────────────────────────────────────
+Essai 1 (IDM en premier) :
+  IDM 6.43.15     ████████████████████████████████████ 221,21 s
+  Radium v0.3.5   ████████████████████████████ 184,75 s (-16,48% de temps)
+
+Essai 2 (Radium en premier) :
+  IDM 6.43.15     ████████████████████████████ 173,46 s
+  Radium v0.3.5   ██████████████████████ 140,09 s (-19,24% de temps)
+─────────────────────────────────────────────────────────────────────────────
+Moyenne combinée :
+  IDM 6.43.15     ████████████████████████████████ 197,34 s
+  Radium v0.3.5   ██████████████████████████ 162,42 s (17,69% plus rapide)
+```
+
+#### Facteurs techniques expliquant cette efficacité :
+1. **Division adaptative des plages :** Calcul dynamique basé sur la vitesse : `clamp(4 × transfer_speed_bps × 0.25 s, 1 MiB, 16 MiB)`. Ce mécanisme a réduit les données de connexion gaspillées de **57,3%** lors du premier essai et de **42,4%** lors du second.
+2. **Parallélisation immédiate :** Dès l'amorce du téléchargement, les fils de travail disponibles sont immédiatement affectés à des segments propres, maintenant les 8 connexions à pleine charge.
+3. **E/S asynchrones sans réassemblage :** Les écritures directes sur disque évitent la phase de fusion finale qui sature le processeur et la mémoire, stabilisant la consommation de Radium à environ 20 Mo de RAM, contre 54 à 122 Mo pour IDM.
+
+## Moteur de téléchargement haute performance
+
+Inspiré des travaux ouverts de [Brisk](https://github.com/BrisklyDev/brisk), Radium propose un moteur de téléchargement concurrent de pointe :
+
+```
+                      ┌────────────────────────────────────────┐
+                      │      Fichier cible (ex: 500 Mo)        │
+                      └────────────────────────────────────────┘
+                       /             |            |                    Worker 0 (0-125Mo)   Worker 1 (125-250Mo)  Worker 2     Worker 3
+        [████████████████]   [████████░░░░░░░░]   [████░░░░]   [████████████████]
+            (Terminé)             (Actif)          (Actif)         (Terminé)
+                                                      ▲
+                                                      │ Vole le reste inachevé
+                                                 Worker disponible
+```
+
+1. **Sondage initial :** Requête rapide pour vérifier la prise en charge des plages d'octets et identifier le nom du fichier.
+2. **Ouverture parallèle :** Établissement progressif des connexions jusqu'à la limite choisie (par défaut 8, maximum 32).
+3. **Vol de travail adaptatif :** Dès qu'un fil termine sa tâche, il scinde le segment inachevé le plus grand parmi les connexions actives.
+4. **Repli sécurisé :** Si un serveur rejette les requêtes partielles, la plage est réassignée au fil d'origine sans perte de données.
+5. **Écriture atomique :** Écriture directe dans un fichier sparse préalloué, suivie d'un renommage atomique immédiat.
+
+## Téléchargements BitTorrent
+
+Prise en charge intégrée et native du protocole BitTorrent v1 :
+- **Résolution des liens Magnet :** Récupération rapide des métadonnées grâce à l'extension BEP 9.
+- **Découverte par Trackers et DHT :** Prise en charge complète des annonces HTTP/UDP et de la table de hachage distribuée (DHT).
+- **Vérification d'intégrité par hachage :** Vérification rigoureuse des pièces en SHA-1 avec mode « endgame » pour finaliser rapidement les derniers blocs.
+- **Sélection personnalisée des fichiers :** Interface en arborescence permettant d'exclure les éléments superflus avant le lancement.
+- **Tolérance aux pannes :** Sauvegarde transactionnelle permanente de l'état dans SQLite.
+
+## Canalisation adaptative de flux vidéo
+
+Pour les flux vidéo modernes segmentés (HLS et DASH), Radium orchestre des outils tiers spécialisés :
+- **Cloisonnement dans des Job Objects :** Exécution sous un Job Object Windows garantissant l'arrêt propre de tous les processus fils si Radium est fermé.
+- **Confidentialité des identifiants :** Les cookies et en-têtes d'authentification transitent exclusivement par des fichiers de réponses temporaires sécurisés (`@job.rsp`).
+- **Assemblage sans perte :** Fusion automatique et remultiplexage sans réencodage vers des conteneurs standard MP4 ou MKV à l'aide de FFmpeg.
+
+*Remarque : Conformément aux règles de conformité légale, Radium ne prend pas en charge et ne contourne aucun mécanisme de chiffrement DRM.*
+
+## Intégration au navigateur
+
+L'extension Manifest V3 assure une passerelle directe et transparente entre vos navigateurs et Radium :
+
+```
+┌─────────────────────────────────┐
+│ Navigateur (Chromium / Firefox) │
+│  ├── Détection webRequest       │
+│  └── Bouton flottant sur vidéos │
+└───────────────┬─────────────────┘
+                │ Stdio (JSON-RPC 32-bit avec préfixe de taille)
+┌───────────────▼─────────────────┐
+│ radium-nmh.exe (Hôte natif)     │
+└───────────────┬─────────────────┘
+                │ Tube nommé Windows : \.\pipe\Radium_IPC_<UserSID>
+┌───────────────▼─────────────────┐
+│ radium.exe (Application bureau) │
+└─────────────────────────────────┘
+```
+
+- **Aucun port réseau ouvert :** Utilise exclusivement des tubes nommés sécurisés par les listes de contrôle d'accès de votre session utilisateur.
+- **Filtrage intelligent des flux :** Isole les listes maîtresses (.m3u8) et ignore les avalanches de fragments temporaires (.ts, .m4s).
+- **Repli automatique et transparent :** Si l'application de bureau n'est pas lancée ou si vous annulez, le navigateur reprend automatiquement le téléchargement de manière standard.
+
+## Architecture technique
+
+```mermaid
+flowchart TD
+    Ext["Extension Navigateur<br><i>(Manifest V3)</i>"] -->|Native Messaging| NMH["radium-nmh.exe<br><i>(Passerelle IPC)</i>"]
+    NMH -->|Tube nommé| Ctrl["Contrôleur de téléchargement<br><i>(Cœur applicatif)</i>"]
+    UI["Interface Win32<br><i>(GDI / Direct2D)</i>"] <--> Ctrl
+    Ctrl --> Engine["Moteur HTTP<br><i>(WinHTTP + IOCP)</i>"]
+    Ctrl --> Torrent["Moteur BitTorrent<br><i>(Protocole v1)</i>"]
+    Ctrl --> WorkerMgr["Gestionnaire d'assistants<br><i>(Windows Job Objects)</i>"]
+    Ctrl <--> DB[("SQLite 3<br><i>(Mode WAL)</i>")]
+    WorkerMgr --> N_M3U8["N_m3u8DL-RE<br><i>Téléchargeur de flux</i>"]
+    WorkerMgr --> FFmpeg["FFmpeg<br><i>Multiplexage & Fusion</i>"]
+```
+
+## Compilation du code source
+
+Prérequis : **Windows 11 x64**, **Visual Studio 2022 (MSVC 19.38+)** avec la charge de travail C++ de bureau et **CMake 3.25+**.
+
+```powershell
+# Cloner le dépôt
+git clone https://github.com/sayedalve/Radium-Download-Manager.git
+cd Radium-Download-Manager
+
+# Compiler l'ensemble des exécutables et créer l'archive portable
+powershell -ExecutionPolicy Bypass -File scripts/build-windows-msvc.ps1
+```
+
+## Tests et Assurance Qualité
+
+Radium dispose d'une suite de tests complète couvrant les unités de code, l'intégration système et les scénarios de bout en bout :
+
+```powershell
+# Exécuter les tests unitaires et d'intégration C++
+ctest --test-dir build/win-x64 --output-on-failure -C Release
+
+# Exécuter la suite de tests automatisée de l'extension
+npm test
+```
+
+## Compatibilité avec les serveurs HTTP
+
+Radium prend en charge tout serveur HTTP/HTTPS conforme à la norme RFC 7233 (`206 Partial Content`). Si un serveur distant ne gère pas les requêtes de plages d'octets, Radium bascule automatiquement sur un téléchargement sécurisé à connexion unique.
+
+## Contribuer
+
+Les contributions au projet sont les bienvenues ! Veuillez consulter notre guide [CONTRIBUTING.md](CONTRIBUTING.md) et vous référer aux principes d'architecture décrits dans [docs/INDEX.md](docs/INDEX.md) avant d'ouvrir une pull request.
 
 ## Licence et Crédits
 
-Radium Download Manager est distribué sous la **Licence Apache 2.0** ([Apache-2.0](LICENSE)).
+Radium Download Manager est distribué sous la **licence Apache-2.0**. Pour plus de précisions, reportez-vous au fichier [LICENSE](LICENSE).
 
-Composants tiers : [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL-2.1+ / LGPL-3.0), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Domaine public), [nlohmann/json](https://github.com/nlohmann/json) (MIT).
+### Composants tiers et remerciements
+- **[Brisk](https://github.com/BrisklyDev/brisk)** – Source d'inspiration pour le moteur de téléchargement segmenté en C++ (GPL-3.0).
+- **[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE)** – Assistant de traitement et de téléchargement de flux HLS/DASH (MIT).
+- **[FFmpeg](https://ffmpeg.org/)** – Moteur de multiplexage audio et vidéo (LGPL-2.1+ / GPL-3.0).
+- **[SQLite 3](https://www.sqlite.org/)** – Base de données transactionnelle embarquée pour l'historique et les états (Domaine public).
 
-<br>
-
+---
 <p align="center">
-  <sub>Radium Download Manager · Gestionnaire de téléchargements natif et haute performance pour Windows.</sub><br>
-  <sub>Développé en C++20 et Win32 sous licence Apache-2.0.</sub>
+  <sub>Radium Download Manager · Gestionnaire de téléchargements natif et performant pour Windows 11</sub>
 </p>

@@ -880,14 +880,8 @@ function extractEligiblePageLinks(doc) {
   const seen = new Set();
   const results = [];
 
-  const extCategories = (typeof RADIUM_FILE_CATEGORIES !== "undefined") ? RADIUM_FILE_CATEGORIES : {
-    zip: "Compressed", rar: "Compressed", "7z": "Compressed", tar: "Compressed", gz: "Compressed", bz2: "Compressed", xz: "Compressed",
-    pdf: "Documents", doc: "Documents", docx: "Documents", xls: "Documents", xlsx: "Documents", ppt: "Documents", pptx: "Documents", epub: "Documents", txt: "Documents", csv: "Documents",
-    exe: "Applications", msi: "Applications", dmg: "Applications", pkg: "Applications", deb: "Applications", rpm: "Applications", apk: "Applications",
-    mp4: "Video", mkv: "Video", webm: "Video", mov: "Video", avi: "Video", flv: "Video",
-    mp3: "Music", m4a: "Music", flac: "Music", wav: "Music", ogg: "Music",
-    jpg: "Images", jpeg: "Images", png: "Images", gif: "Images", webp: "Images", svg: "Images"
-  };
+  // Single source of truth loaded via js/categories.generated.js
+  const extCategories = (typeof RADIUM_FILE_CATEGORIES !== "undefined") ? RADIUM_FILE_CATEGORIES : {};
 
   for (const a of anchors) {
     const rawHref = a.getAttribute("href") || "";
