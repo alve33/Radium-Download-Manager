@@ -183,12 +183,14 @@ build:windows-arm64:
         $arm64Cl = & $vsWhere -latest -products "*" -find "**\bin\Host*\arm64\cl.exe"
       }
       if (-not $arm64Cl) {
-        Write-Host "ARM64 C++ tools not found. Adding Microsoft.VisualStudio.Component.VC.Tools.ARM64..." -ForegroundColor Yellow
-        $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
-        if (Test-Path $setupExe) {
-          $installArgs = @("modify", "--installPath", "$vsInst", "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64", "--quiet", "--wait", "--norestart")
-          $process = Start-Process -FilePath $setupExe -ArgumentList $installArgs -Wait -PassThru
-          Write-Host "Visual Studio Installer completed with exit code: $($process.ExitCode)"
+        Write-Host "ARM64 C++ tools not found. Downloading vs_BuildTools bootstrapper to install Microsoft.VisualStudio.Component.VC.Tools.ARM64..." -ForegroundColor Yellow
+        $btUrl = "https://aka.ms/vs/17/release/vs_BuildTools.exe"
+        $btPath = "$env:TEMP\vs_BuildTools.exe"
+        & curl.exe -sSL -o $btPath $btUrl
+        if (Test-Path $btPath) {
+          $installArgs = @("--quiet", "--wait", "--norestart", "--nocache", "--installPath", "$vsInst", "--add", "Microsoft.VisualStudio.Workload.VCTools", "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64")
+          $process = Start-Process -FilePath $btPath -ArgumentList $installArgs -Wait -PassThru
+          Write-Host "vs_BuildTools installer completed with exit code: $($process.ExitCode)"
         }
       }
 

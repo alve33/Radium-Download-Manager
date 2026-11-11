@@ -282,7 +282,7 @@ try {
     $VerifyScript = Join-Path $ScriptDir "verify-ffmpeg-capabilities.ps1"
     if (Test-Path $VerifyScript) {
         Write-Host "  Auditing FFmpeg capabilities for Radium stream pipeline..." -ForegroundColor Cyan
-        & $VerifyScript -FfmpegPath $FfExe -FailOnMissing:$false
+        & $VerifyScript -FfmpegPath $FfExe -Architecture $Architecture -FailOnMissing:$false
     }
 
     # 3. yt-dlp (Auxiliary metadata & site extractor worker)

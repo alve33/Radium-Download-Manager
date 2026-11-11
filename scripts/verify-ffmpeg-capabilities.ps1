@@ -18,7 +18,9 @@
 param(
     [string]$FfmpegPath = "",
     [switch]$RunSmokeTests = $false,
-    [bool]$FailOnMissing = $true
+    [bool]$FailOnMissing = $true,
+    [ValidateSet("x64", "ARM64")]
+    [string]$Architecture = "x64"
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,10 +70,17 @@ if ($bytes.Length -lt 256 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
 }
 $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
 $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-if ($machine -ne 0x8664) {
-    throw "Target is not x64 (IMAGE_FILE_MACHINE_AMD64 0x8664); got 0x$($machine.ToString('X4'))"
+if ($Architecture -eq "ARM64") {
+    if ($machine -ne 0xAA64 -and $machine -ne 0x8664) {
+        throw "Target is not ARM64 (0xAA64) or x64 (0x8664); got 0x$($machine.ToString('X4'))"
+    }
+    Write-Host "  [OK] Valid Windows PE32+ ARM64 (0x$($machine.ToString('X4'))) machine header verified." -ForegroundColor Green
+} else {
+    if ($machine -ne 0x8664) {
+        throw "Target is not x64 (IMAGE_FILE_MACHINE_AMD64 0x8664); got 0x$($machine.ToString('X4'))"
+    }
+    Write-Host "  [OK] Valid Windows PE32+ x64 (AMD64) machine header verified." -ForegroundColor Green
 }
-Write-Host "  [OK] Valid Windows PE32+ x64 (AMD64) machine header verified." -ForegroundColor Green
 
 # -----------------------------------------------------------------------------
 # 2. Query Version and Build Configuration
