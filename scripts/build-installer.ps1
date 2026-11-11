@@ -15,7 +15,9 @@ param(
 
     [string]$OutputDir = "",
 
-    [string]$BuildDir = ""
+    [string]$BuildDir = "",
+
+    [string]$OutputFilename = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -131,14 +133,28 @@ if ($Type -in @("Full", "Both")) {
     $fullArgs = @(
         "/DMyAppVersion=$Version",
         "/DTargetArch=$Architecture",
-        "/O$OutputDir",
-        $issScript
+        "/O$OutputDir"
     )
+    if ($OutputFilename) {
+        $fullArgs += "/DOutputFilename=$OutputFilename"
+    }
+    $fullArgs += $issScript
     & $isccPath $fullArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Inno Setup compilation failed for Full installer with exit code $LASTEXITCODE"
     }
     Write-Host "[+] Successfully compiled Full Installer!" -ForegroundColor Green
+
+    # Also stage canonical standard naming if not already custom
+    if (-not $OutputFilename) {
+        $archLabel = if ($Architecture -eq "ARM64") { "arm64" } else { "x64" }
+        $canonicalExe = Join-Path $OutputDir "Radium-Download-Manager-v$Version-Windows-$archLabel-Setup.exe"
+        $compiledFull = Join-Path $OutputDir "Radium-Setup-$Architecture-$Version.exe"
+        if (Test-Path $compiledFull) {
+            Copy-Item -Force $compiledFull $canonicalExe
+            Write-Host "[+] Staged canonical installer: $canonicalExe" -ForegroundColor Green
+        }
+    }
 }
 
 if ($Type -in @("Core", "Both")) {

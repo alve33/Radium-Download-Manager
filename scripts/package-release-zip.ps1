@@ -332,6 +332,29 @@ function Build-PackageArchive([string]$Type, [string]$ZipFileName) {
             }
         }
 
+        # Portable Mode Activation & Standalone Readme
+        $portableMarker = Join-Path $stageDir "radium.portable"
+        [System.IO.File]::WriteAllText($portableMarker, "# Portable mode active: data stored in ./data directory`n", [System.Text.Encoding]::UTF8)
+        $components += "radium.portable"
+
+        $portableReadme = @"
+Radium Download Manager - Portable Edition
+===========================================
+Version: $Version
+Architecture: $Architecture
+Edition: $Type
+
+How to Run:
+1. Extract the contents of this archive to any folder of your choice (e.g. C:\PortableApps\Radium or a USB drive).
+2. Run 'radium.exe'.
+3. In portable mode (signaled by the presence of 'radium.portable'), Radium automatically stores all settings, download histories, and task databases in a local 'data' folder inside this directory instead of writing to the Windows registry or AppData.
+4. To register the browser extension with your installed browsers, navigate to 'manifests' and follow the instructions or configure your browser to load the unpacked extension from the 'extension' directory.
+
+No installation or administrative privileges required.
+"@
+        [System.IO.File]::WriteAllText((Join-Path $stageDir "README.txt"), $portableReadme, [System.Text.Encoding]::UTF8)
+        $components += "README.txt"
+
         # Stream Workers Handling - single standard location tools\win-x64
         $toolsDest = Join-Path $stageDir "tools\win-x64"
         New-Item -ItemType Directory -Force -Path $toolsDest | Out-Null
@@ -429,10 +452,16 @@ Official Upstream Projects:
 # 5. Execute Requested Packaging Runs
 $createdZips = @()
 
+$canonicalPortableName = "Radium-Download-Manager-v$Version-Windows-$Architecture-Portable.zip"
 $zipPrefix = "Radium-v$Version-Windows-$Architecture"
 if ($PackageType -in @("Full", "Both") -and $Nm3u8dlExe -and $FfmpegExe) {
     $fullZip = Build-PackageArchive -Type "Full" -ZipFileName "$zipPrefix-Full.zip"
     $createdZips += $fullZip
+
+    # Also stage canonical standard naming: Radium-Download-Manager-v1.0.0-Windows-<arch>-Portable.zip
+    $canonicalZip = Join-Path $OutputDir $canonicalPortableName
+    Copy-Item -Force $fullZip $canonicalZip
+    $createdZips += $canonicalZip
 
     # Also stage legacy alias Radium-v$Version-Windows-<arch>.zip for backward compatibility
     $compatZip = Join-Path $OutputDir "$zipPrefix.zip"
@@ -443,6 +472,12 @@ if ($PackageType -in @("Full", "Both") -and $Nm3u8dlExe -and $FfmpegExe) {
 if ($PackageType -in @("Core", "Both")) {
     $coreZip = Build-PackageArchive -Type "Core" -ZipFileName "$zipPrefix-Core.zip"
     $createdZips += $coreZip
+
+    if (-not (Test-Path (Join-Path $OutputDir $canonicalPortableName))) {
+        $canonicalZip = Join-Path $OutputDir $canonicalPortableName
+        Copy-Item -Force $coreZip $canonicalZip
+        $createdZips += $canonicalZip
+    }
 }
 
 # 6. Checksums and SHA256SUMS.txt Generation
@@ -460,6 +495,9 @@ if (-not $SkipHash -and $createdZips.Count -gt 0) {
         $filesToHash += $z
     }
     $setupCandidates = @(
+        (Join-Path $OutputDir "Radium-Download-Manager-v$Version-Windows-$Architecture-Setup.exe"),
+        (Join-Path $OutputDir "Radium-Download-Manager-v$Version-Windows-x64-Setup.exe"),
+        (Join-Path $OutputDir "Radium-Download-Manager-v$Version-Windows-arm64-Setup.exe"),
         (Join-Path $OutputDir "Radium-Setup-$Architecture-$Version.exe"),
         (Join-Path $OutputDir "Radium-Setup-$Architecture-Core-$Version.exe"),
         (Join-Path $OutputDir "Radium-Setup-x64-$Version.exe"),

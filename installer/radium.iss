@@ -92,18 +92,26 @@ PrivilegesRequiredOverridesAllowed=dialog
 #if TargetArch == "ARM64"
 ArchitecturesAllowed=arm64
 ArchitecturesInstallIn64BitMode=arm64
-#ifdef CoreOnly
-  #define BaseFilename "Radium-Setup-ARM64-Core-" + MyAppVersion
+#ifdef OutputFilename
+  #define BaseFilename OutputFilename
 #else
-  #define BaseFilename "Radium-Setup-ARM64-" + MyAppVersion
+  #ifdef CoreOnly
+    #define BaseFilename "Radium-Setup-ARM64-Core-" + MyAppVersion
+  #else
+    #define BaseFilename "Radium-Setup-ARM64-" + MyAppVersion
+  #endif
 #endif
 #else
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-#ifdef CoreOnly
-  #define BaseFilename "Radium-Setup-x64-Core-" + MyAppVersion
+#ifdef OutputFilename
+  #define BaseFilename OutputFilename
 #else
-  #define BaseFilename "Radium-Setup-x64-" + MyAppVersion
+  #ifdef CoreOnly
+    #define BaseFilename "Radium-Setup-x64-Core-" + MyAppVersion
+  #else
+    #define BaseFilename "Radium-Setup-x64-" + MyAppVersion
+  #endif
 #endif
 #endif
 OutputDir=..\dist
