@@ -333,49 +333,58 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     int w = m_window_width;
     int h = m_window_height;
 
-    int sidebar_w = m.sidebar_width;
+    int sidebar_w = std::clamp((w * 163 + 500) / 1000,
+        DesignSystem::ScaleForDpi(160, m.dpi), DesignSystem::ScaleForDpi(275, m.dpi));
     int content_x = sidebar_w;
-    int content_w = std::max(1, w - sidebar_w);
     int bar_h = m.toolbar_height;
     g.toolbar_rect = {content_x, 0, w, bar_h};
     g.sidebar_rect = {0, 0, sidebar_w, h};
+    const bool compact_toolbar = w < DesignSystem::ScaleForDpi(1240, m.dpi);
 
     int chk_s = DesignSystem::ScaleForDpi(20, m.dpi);
     int chk_y = (bar_h - chk_s) / 2;
-    g.select_all_checkbox_rect = {content_x + 12, chk_y, content_x + 12 + chk_s, chk_y + chk_s};
+    int add_btn_w = DesignSystem::ScaleForDpi(152, m.dpi);
+    int add_btn_x = content_x + DesignSystem::ScaleForDpi(12, m.dpi);
+    g.add_download_button_rect = {add_btn_x, (bar_h - m.button_height) / 2, add_btn_x + add_btn_w,
+        (bar_h + m.button_height) / 2};
+    g.select_all_checkbox_rect = {g.add_download_button_rect.right + DesignSystem::ScaleForDpi(12, m.dpi), chk_y,
+        g.add_download_button_rect.right + DesignSystem::ScaleForDpi(12, m.dpi) + chk_s, chk_y + chk_s};
 
     int sort_w = DesignSystem::ScaleForDpi(84, m.dpi);
     int sort_h = DesignSystem::ScaleForDpi(36, m.dpi);
     int sort_y = (bar_h - sort_h) / 2;
-    g.sort_dropdown_rect = {content_x + 12 + chk_s + 8, sort_y, content_x + 12 + chk_s + 8 + sort_w, sort_y + sort_h};
+    g.sort_dropdown_rect = {g.select_all_checkbox_rect.right + DesignSystem::ScaleForDpi(8, m.dpi), sort_y,
+        g.select_all_checkbox_rect.right + DesignSystem::ScaleForDpi(8, m.dpi) + sort_w, sort_y + sort_h};
 
     // Keep enough room for the funnel, caret, and the longest common category
     // label so the filter text does not touch either icon at standard DPI.
     int filt_w = DesignSystem::ScaleForDpi(124, m.dpi);
     int filt_x = g.sort_dropdown_rect.right + 10;
     g.filter_dropdown_rect = {filt_x, sort_y, filt_x + filt_w, sort_y + sort_h};
+    if (compact_toolbar) {
+        g.select_all_checkbox_rect = {0, 0, 0, 0};
+        g.sort_dropdown_rect = {0, 0, 0, 0};
+        g.filter_dropdown_rect = {0, 0, 0, 0};
+    }
 
-    int btn_h = DesignSystem::ScaleForDpi(36, m.dpi);
+    int btn_h = m.button_height;
     int by = (bar_h - btn_h) / 2;
 
-    constexpr int kStartAllButtonWidth = 84;
-    constexpr int kPauseAllButtonWidth = 88;
-    constexpr int kClearHistoryButtonWidth = 108;
+    const int kStartAllButtonWidth = compact_toolbar ? 88 : 96;
+    const int kPauseAllButtonWidth = compact_toolbar ? 88 : 100;
+    const int kClearHistoryButtonWidth = compact_toolbar ? 104 : 120;
     constexpr int kToolbarActionGap = 8;
 
-    int add_btn_w = DesignSystem::ScaleForDpi(132, m.dpi);
-    int add_btn_x = w - add_btn_w - 12;
-    g.add_download_button_rect = {add_btn_x, by, add_btn_x + add_btn_w, by + btn_h};
     int theme_button_w = DesignSystem::ScaleForDpi(40, m.dpi);
-    g.theme_button_rect = {add_btn_x - theme_button_w - DesignSystem::ScaleForDpi(8, m.dpi), by,
-        add_btn_x - DesignSystem::ScaleForDpi(8, m.dpi), by + btn_h};
+    g.theme_button_rect = {w - theme_button_w - DesignSystem::ScaleForDpi(12, m.dpi), by,
+        w - DesignSystem::ScaleForDpi(12, m.dpi), by + btn_h};
 
     int settings_btn_x = g.theme_button_rect.left;
     g.settings_button_rect = {0, 0, 0, 0};
     g.search_sliders_rect = {0, 0, 0, 0};
 
         int search_max_w = DesignSystem::ScaleForDpi(260, m.dpi);
-    int essential_actions_left = filt_x + filt_w + DesignSystem::ScaleForDpi(12, m.dpi);
+    int essential_actions_left = (compact_toolbar ? g.add_download_button_rect.right : filt_x + filt_w) + DesignSystem::ScaleForDpi(12, m.dpi);
     int essential_actions_w = DesignSystem::ScaleForDpi(
         kStartAllButtonWidth + kToolbarActionGap +
         kPauseAllButtonWidth + kToolbarActionGap + kClearHistoryButtonWidth, m.dpi);
@@ -387,25 +396,30 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     auto tb = ComputeToolbarState();
     struct BtnDef { ToolbarActionId id; const char* label; bool enabled; bool primary; int base_w; };
     const BtnDef defs[] = {
-        {ToolbarActionId::kAddUrl,       "+ Add download", tb.can_add_url,       true,  145},
+        {ToolbarActionId::kAddUrl,       "+ Add download", tb.can_add_url,       true,  152},
+        {ToolbarActionId::kStart,        "Start",          tb.can_start,         false, 40},
+        {ToolbarActionId::kPause,        "Pause",          tb.can_pause,         false, 40},
+        {ToolbarActionId::kRemove,       "Remove",         tb.can_remove,        false, 40},
         {ToolbarActionId::kStartAll,     "Start all",      tb.can_start_all,     false, kStartAllButtonWidth},
         {ToolbarActionId::kPauseAll,     "Pause all",      tb.can_pause_all,     false, kPauseAllButtonWidth},
         {ToolbarActionId::kClearHistory, "Clear History",  tb.can_clear_history, false, kClearHistoryButtonWidth},
-        {ToolbarActionId::kStart,        "Start",          tb.can_start,         false, 70},
-        {ToolbarActionId::kPause,        "Pause",          tb.can_pause,         false, 72},
         {ToolbarActionId::kResume,       "Resume",         tb.can_resume,        false, 82},
         {ToolbarActionId::kRetry,        "Retry",          tb.can_retry,         false, 70},
         {ToolbarActionId::kCancel,       "Cancel",         tb.can_cancel,        false, 78},
         {ToolbarActionId::kSettings,     "Settings",       tb.can_open_settings, false, 36}
     };
-    int act_x = filt_x + filt_w + DesignSystem::ScaleForDpi(12, m.dpi);
+    int act_x = essential_actions_left;
     int max_act_x = search_x - DesignSystem::ScaleForDpi(12, m.dpi);
-    for (size_t i = 0; i < 10; ++i) {
+    for (size_t i = 0; i < std::size(defs); ++i) {
         const auto& d = defs[i];
         RectI brc{0, 0, 0, 0};
         if (i == 0) {
             brc = g.add_download_button_rect;
-        } else if (i == 9) {
+        } else if (i + 1 == std::size(defs)) {
+            brc = {0, 0, 0, 0};
+        } else if (compact_toolbar && (d.id == ToolbarActionId::kStart || d.id == ToolbarActionId::kPause ||
+            d.id == ToolbarActionId::kRemove || d.id == ToolbarActionId::kResume || d.id == ToolbarActionId::kRetry ||
+            d.id == ToolbarActionId::kCancel)) {
             brc = {0, 0, 0, 0};
         } else if (d.enabled) {
             int bw = DesignSystem::ScaleForDpi(d.base_w, m.dpi);
@@ -424,8 +438,8 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
         {SidebarCategory::kCompleted, counts.completed},
         {SidebarCategory::kPaused, counts.paused}
     };
-    int nav_top = DesignSystem::ScaleForDpi(92, m.dpi);
-    int nav_h = DesignSystem::ScaleForDpi(40, m.dpi);
+    int nav_top = DesignSystem::ScaleForDpi(100, m.dpi);
+    int nav_h = DesignSystem::ScaleForDpi(48, m.dpi);
     for (size_t i = 0; i < 4; ++i) {
         const auto& [cat, cnt] = cats[i];
         RectI crc{DesignSystem::ScaleForDpi(12, m.dpi), nav_top + static_cast<int>(i) * (nav_h + DesignSystem::ScaleForDpi(4, m.dpi)), sidebar_w - DesignSystem::ScaleForDpi(12, m.dpi), nav_top + static_cast<int>(i + 1) * nav_h + static_cast<int>(i) * DesignSystem::ScaleForDpi(4, m.dpi)};
@@ -442,11 +456,22 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     };
 
     int hdr_h = m.table_header_height;
-    int sb_h = 0; // Bottom status bar permanently removed
     int det_h = m_selected_task_id.empty() ? 0 : std::min(m.details_panel_height, std::max(DesignSystem::ScaleForDpi(104, m.dpi), h / 4));
-    g.table_header_rect = {content_x, bar_h, w, bar_h + hdr_h};
-    g.table_body_rect = {content_x, bar_h + hdr_h, w, h - sb_h - det_h};
-    g.details_panel_rect = {content_x, h - sb_h - det_h, w, h - sb_h};
+    const int panel_inset = DesignSystem::ScaleForDpi(16, m.dpi);
+    const int panel_gap = DesignSystem::ScaleForDpi(12, m.dpi);
+    const int table_top = bar_h + panel_gap;
+    const int table_bottom = h - det_h - (det_h > 0 ? panel_gap : panel_inset);
+    const int table_left = content_x + panel_inset;
+    const int table_right = w - panel_inset;
+    g.table_header_rect = {table_left, table_top, table_right, table_top + hdr_h};
+    g.table_body_rect = {table_left, table_top + hdr_h, table_right, table_bottom};
+    if (compact_toolbar) {
+        const int compact_check_size = DesignSystem::ScaleForDpi(20, m.dpi);
+        g.select_all_checkbox_rect = {table_left + DesignSystem::ScaleForDpi(12, m.dpi),
+            table_top + (hdr_h - compact_check_size) / 2, table_left + DesignSystem::ScaleForDpi(12, m.dpi) + compact_check_size,
+            table_top + (hdr_h + compact_check_size) / 2};
+    }
+    g.details_panel_rect = {content_x, h - det_h, w, h};
     g.status_bar_rect = {0, h, w, h};
     g.status_toggle_off_rect = {0, 0, 0, 0};
 
@@ -482,7 +507,7 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     int col_added_w= base_col_added_w;
 
     // Intelligent responsive hiding and adaptation at narrow client widths
-    int total_avail = content_w - 32;
+    int total_avail = std::max(1, table_right - table_left - DesignSystem::ScaleForDpi(24, m.dpi));
     if (total_avail < DesignSystem::ScaleForDpi(700, m.dpi)) {
         col_ul_w = 0; // Preserve Added; hide Upload first at narrow widths
     }
@@ -517,37 +542,36 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
         ? std::min(available_for_name, std::max(col_name_w, min_name_w))
         : std::max(DesignSystem::ScaleForDpi(120, m.dpi), available_for_name);
 
-    int cx = content_x + 12;
-    g.table_columns.push_back({SortColumn::kFileName, GetLocalizationManager().Translate("Name"), {cx, bar_h, cx + col_name_total_w, bar_h + hdr_h}});
-    cx += col_name_total_w;
+    const int name_header_left = table_left + DesignSystem::ScaleForDpi(compact_toolbar ? 48 : 12, m.dpi);
+    const int name_header_width = col_name_total_w - (name_header_left - (table_left + DesignSystem::ScaleForDpi(12, m.dpi)));
+    int cx = name_header_left;
+    g.table_columns.push_back({SortColumn::kFileName, GetLocalizationManager().Translate("Name"), {cx, table_top, cx + name_header_width, table_top + hdr_h}});
+    cx = table_left + DesignSystem::ScaleForDpi(12, m.dpi) + col_name_total_w;
 
-    g.table_columns.push_back({SortColumn::kSize, GetLocalizationManager().Translate("Size"), {cx, bar_h, cx + col_size_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kSize, GetLocalizationManager().Translate("Size"), {cx, table_top, cx + col_size_w, table_top + hdr_h}});
     cx += col_size_w;
 
-    g.table_columns.push_back({SortColumn::kStatus, GetLocalizationManager().Translate("Status"), {cx, bar_h, cx + col_stat_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kStatus, GetLocalizationManager().Translate("Status"), {cx, table_top, cx + col_stat_w, table_top + hdr_h}});
     cx += col_stat_w;
 
-    g.table_columns.push_back({SortColumn::kSpeed, GetLocalizationManager().Translate("Download"), {cx, bar_h, cx + col_dl_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kSpeed, GetLocalizationManager().Translate("Download"), {cx, table_top, cx + col_dl_w, table_top + hdr_h}});
     cx += col_dl_w;
 
-    g.table_columns.push_back({SortColumn::kDownloadType, GetLocalizationManager().Translate("Upload"), {cx, bar_h, cx + col_ul_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kDownloadType, GetLocalizationManager().Translate("Upload"), {cx, table_top, cx + col_ul_w, table_top + hdr_h}});
     cx += col_ul_w;
 
-    g.table_columns.push_back({SortColumn::kCreatedAt, GetLocalizationManager().Translate("Added"), {cx, bar_h, cx + col_added_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kCreatedAt, GetLocalizationManager().Translate("Added"), {cx, table_top, cx + col_added_w, table_top + hdr_h}});
     cx += col_added_w;
 
-    g.table_columns.push_back({SortColumn::kProgress, GetLocalizationManager().Translate("Progress"), {cx, bar_h, cx, bar_h + hdr_h}});
-    g.table_columns.push_back({SortColumn::kEta, GetLocalizationManager().Translate("ETA"), {cx, bar_h, cx, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kProgress, GetLocalizationManager().Translate("Progress"), {cx, table_top, cx, table_top + hdr_h}});
+    g.table_columns.push_back({SortColumn::kEta, GetLocalizationManager().Translate("ETA"), {cx, table_top, cx, table_top + hdr_h}});
 
     const int body_h = std::max(1, g.table_body_rect.height());
     int row_h = m.table_row_height;
     const int base_row_count = body_h / row_h;
-    const int body_remainder = body_h % row_h;
     const int next_row_height = body_h / (base_row_count + 1);
-    // If the body is only a few pixels short of fitting another standard row,
-    // tighten the rows slightly so that the otherwise empty strip can show it.
-    if (base_row_count > 0 && body_remainder >= row_h - DesignSystem::ScaleForDpi(8, m.dpi) &&
-        next_row_height >= DesignSystem::ScaleForDpi(44, m.dpi)) {
+    // Keep rows spacious while using a comfortable 48px minimum to reveal one more item.
+    if (base_row_count > 0 && next_row_height >= DesignSystem::ScaleForDpi(48, m.dpi)) {
         row_h = next_row_height;
     }
     g.task_row_height = row_h;
@@ -558,11 +582,11 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
 
     for (const auto& r : visible_rows) {
         if (ry + row_h > g.table_body_rect.bottom) break;
-        RectI row_rc{content_x, ry, w, ry + row_h};
-        RectI fn_rc{content_x + 12 + col_chk_w, ry, content_x + 12 + col_name_total_w, ry + row_h};
-        RectI prog_rc{content_x + 12 + col_chk_w + 4, ry + row_h - 14, content_x + 12 + col_chk_w + std::min(160, std::max(50, col_name_total_w - col_chk_w - 70)), ry + row_h - 11};
+        RectI row_rc{table_left, ry, table_right, ry + row_h};
+        RectI fn_rc{table_left + 12 + col_chk_w, ry, table_left + 12 + col_name_total_w, ry + row_h};
+        RectI prog_rc{table_left + 12 + col_chk_w + 4, ry + row_h - 14, table_left + 12 + col_chk_w + std::min(160, std::max(50, col_name_total_w - col_chk_w - 70)), ry + row_h - 11};
         RectI act_rc{dl_col_left, ry + (row_h - 22) / 2, dl_col_left + 22, ry + (row_h + 22) / 2};
-        RectI chk_rc{content_x + 12, ry + (row_h - 20) / 2, content_x + 32, ry + (row_h + 20) / 2};
+        RectI chk_rc{table_left + 12, ry + (row_h - 20) / 2, table_left + 32, ry + (row_h + 20) / 2};
         g.task_rows.push_back({r.task_id, row_rc, fn_rc, prog_rc, act_rc, chk_rc, act_rc});
         ry += row_h;
     }
@@ -1642,8 +1666,7 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
         switch (t.state) {
             case TaskState::kCompleted:
                 row.status_indicator_color = m_palette.status_success;
-                row.progress_fill_color = m_palette.mode == ThemeMode::kLight
-                    ? m_palette.accent_primary : m_palette.status_success;
+                row.progress_fill_color = m_palette.accent_primary;
                 break;
             case TaskState::kFailed:
             case TaskState::kCanceled:
@@ -8085,12 +8108,12 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
 
     RECT det_rc = ToWinRect(rect);
 
-    // Floating rounded glass card with subtle border
+    // Dedicated rounded detail card
     int margin_x = DesignSystem::ScaleForDpi(16, m.dpi);
     int margin_y = DesignSystem::ScaleForDpi(6, m.dpi);
     RECT card_rc{det_rc.left + margin_x, det_rc.top + margin_y, det_rc.right - margin_x, det_rc.bottom - margin_y};
-    int card_radius = DesignSystem::ScaleForDpi(10, m.dpi);
-    DrawGlassPanelGdi(hdc, card_rc, card_radius, pal.glass_surface, pal.glass_border, 1, false);
+    int card_radius = DesignSystem::ScaleForDpi(14, m.dpi);
+    DrawRoundedBoxGdi(hdc, card_rc, card_radius, pal.surface_primary, pal.border_subtle, 1);
 
     auto geometry = view.ComputeLayoutGeometry(view.GetScrollOffset());
     for (size_t i = 0; i < geometry.details_action_buttons.size(); ++i) {
@@ -8100,29 +8123,29 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
         const bool is_primary = action.is_primary || action.action_id == DetailsActionId::kRemoveHistory;
         ColorRgba bg = is_primary ? (hovered ? pal.accent_hover : pal.accent_primary) :
             (hovered ? pal.surface_hover : pal.surface_elevated);
-        DrawRoundedBoxGdi(hdc, button_rc, DesignSystem::ScaleForDpi(6, m.dpi), bg,
+        DrawRoundedBoxGdi(hdc, button_rc, DesignSystem::ScaleForDpi(8, m.dpi), bg,
                           is_primary ? bg : pal.border_subtle, is_primary ? 0 : 1);
         SetTextColor(hdc, is_primary ? RGB(255, 255, 255) : pal.text_secondary.ToWin32ColorRef());
         std::wstring label = Utf8ToW(action.label);
-        int text_inset = DesignSystem::ScaleForDpi(8, m.dpi);
+        int text_inset = DesignSystem::ScaleForDpi(12, m.dpi);
         RECT label_rc{button_rc.left + text_inset, button_rc.top, button_rc.right - text_inset, button_rc.bottom};
         DrawTextW(hdc, label.c_str(), -1, &label_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 
-    // Left Icon Box
-    int icon_box_w = DesignSystem::ScaleForDpi(42, m.dpi);
-    int icon_box_h = DesignSystem::ScaleForDpi(46, m.dpi);
-    int icon_box_x = card_rc.left + DesignSystem::ScaleForDpi(14, m.dpi);
+    // Left Icon Box (~56-60px matching Reference)
+    int icon_box_w = DesignSystem::ScaleForDpi(58, m.dpi);
+    int icon_box_h = DesignSystem::ScaleForDpi(58, m.dpi);
+    int icon_box_x = card_rc.left + DesignSystem::ScaleForDpi(16, m.dpi);
     int icon_box_y = card_rc.top + (card_rc.bottom - card_rc.top - icon_box_h) / 2;
     RECT icon_box_rc{icon_box_x, icon_box_y, icon_box_x + icon_box_w, icon_box_y + icon_box_h};
-    DrawRoundedBoxGdi(hdc, icon_box_rc, DesignSystem::ScaleForDpi(8, m.dpi), pal.surface_elevated, pal.border_subtle, 1);
+    DrawRoundedBoxGdi(hdc, icon_box_rc, DesignSystem::ScaleForDpi(10, m.dpi), pal.surface_elevated, pal.border_subtle, 1);
 
     // Media / File Icon inside icon box
     FormattedTaskRow dummy_row{};
     dummy_row.full_filename_tooltip = details.file_name;
     dummy_row.is_stream = !details.stream_format.empty();
-    int icon_w = DesignSystem::ScaleForDpi(20, m.dpi);
-    int icon_h = DesignSystem::ScaleForDpi(24, m.dpi);
+    int icon_w = DesignSystem::ScaleForDpi(32, m.dpi);
+    int icon_h = DesignSystem::ScaleForDpi(36, m.dpi);
     int icon_x = icon_box_rc.left + (icon_box_w - icon_w) / 2;
     int icon_y = icon_box_rc.top + (icon_box_h - icon_h) / 2;
     DrawFileTypeIconGdi(hdc, icon_x, icon_y, icon_w, icon_h, dummy_row, pal);
@@ -8144,6 +8167,11 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
         int col1_w = total_avail_w / 2 - DesignSystem::ScaleForDpi(12, m.dpi);
         int col2_x = text_left + col1_w + DesignSystem::ScaleForDpi(24, m.dpi);
         int col2_w = text_right - col2_x;
+        RECT details_divider{col2_x - DesignSystem::ScaleForDpi(12, m.dpi),
+            card_rc.top + DesignSystem::ScaleForDpi(18, m.dpi),
+            col2_x - DesignSystem::ScaleForDpi(11, m.dpi),
+            card_rc.bottom - DesignSystem::ScaleForDpi(18, m.dpi)};
+        FillRectSolid(hdc, details_divider, pal.border_subtle);
 
         // Col 1, Row 1: Filename + Engine Badge
         RECT fn_rc{text_left, top_y, text_left + col1_w, top_y + line_h};
@@ -8257,7 +8285,15 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     // 0. Base Matte Charcoal Canvas
     FillRectSolid(hdc, client_rc, pal.app_background);
     SetBkMode(hdc, TRANSPARENT);
+    RECT table_panel_rc{geom.table_header_rect.left, geom.table_header_rect.top,
+        geom.table_header_rect.right, geom.table_body_rect.bottom};
+    DrawRoundedBoxGdi(hdc, table_panel_rc, DesignSystem::ScaleForDpi(14, m.dpi),
+        pal.surface_primary, pal.border_subtle, 1);
 
+    HFONT hFontTitle = CreateFontW(
+        -m.font_title_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
     HFONT hFontBody = CreateFontW(
         -m.font_body_px, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -8281,18 +8317,18 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     FillRectSolid(hdc, sidebar_rc, pal.surface_primary);
     RECT sidebar_divider{sidebar_rc.right - 1, 0, sidebar_rc.right, h};
     FillRectSolid(hdc, sidebar_divider, pal.border_subtle);
-    int brand_icon_size = DesignSystem::ScaleForDpi(28, m.dpi);
+    int brand_icon_size = DesignSystem::ScaleForDpi(40, m.dpi);
     int brand_icon_x = DesignSystem::ScaleForDpi(16, m.dpi);
-    int brand_icon_y = DesignSystem::ScaleForDpi(22, m.dpi);
+    int brand_icon_y = DesignSystem::ScaleForDpi(20, m.dpi);
     HICON brand_icon = reinterpret_cast<HICON>(GetClassLongPtrW(hwnd, GCLP_HICON));
     if (brand_icon) DrawIconEx(hdc, brand_icon_x, brand_icon_y, brand_icon, brand_icon_size, brand_icon_size, 0, nullptr, DI_NORMAL);
-    RECT brand_rc{brand_icon_x + brand_icon_size + DesignSystem::ScaleForDpi(8, m.dpi), DesignSystem::ScaleForDpi(16, m.dpi),
-                  sidebar_rc.right - DesignSystem::ScaleForDpi(12, m.dpi), DesignSystem::ScaleForDpi(54, m.dpi)};
-    SelectObject(hdc, hFontBold);
+    RECT brand_rc{brand_icon_x + brand_icon_size + DesignSystem::ScaleForDpi(8, m.dpi), DesignSystem::ScaleForDpi(12, m.dpi),
+                  sidebar_rc.right - DesignSystem::ScaleForDpi(12, m.dpi), DesignSystem::ScaleForDpi(40, m.dpi)};
+    SelectObject(hdc, hFontTitle);
     SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
     DrawTextW(hdc, L"Radium", -1, &brand_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    brand_rc.top += DesignSystem::ScaleForDpi(22, m.dpi);
-    brand_rc.bottom += DesignSystem::ScaleForDpi(22, m.dpi);
+    brand_rc.top = DesignSystem::ScaleForDpi(40, m.dpi);
+    brand_rc.bottom = DesignSystem::ScaleForDpi(62, m.dpi);
     SelectObject(hdc, hFontSmall);
     SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
     DrawTextW(hdc, L"Download Manager", -1, &brand_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -8301,18 +8337,34 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         RECT item_rc = ToWinRect(item.rect);
         bool selected = item.selected;
         bool hovered = view.GetHoveredSidebarIndex() == static_cast<int>(i);
-        if (selected || hovered) DrawRoundedBoxGdi(hdc, item_rc, DesignSystem::ScaleForDpi(6, m.dpi),
-            selected ? pal.surface_selected : pal.surface_hover, selected ? pal.surface_selected : pal.surface_hover, 0);
-        if (selected) {
-            RECT indicator{item_rc.left, item_rc.top + 8, item_rc.left + DesignSystem::ScaleForDpi(3, m.dpi), item_rc.bottom - 8};
-            FillRectSolid(hdc, indicator, pal.accent_primary);
+        if (selected || hovered) {
+            ColorRgba item_bg = selected ? pal.surface_selected : pal.surface_hover;
+            ColorRgba item_border = selected ? ColorRgba{pal.accent_primary.r, pal.accent_primary.g, pal.accent_primary.b, 60}.BlendOver(pal.surface_primary) : item_bg;
+            DrawRoundedBoxGdi(hdc, item_rc, DesignSystem::ScaleForDpi(10, m.dpi), item_bg, item_border, selected ? 1 : 0);
         }
-        RECT label_rc{item_rc.left + DesignSystem::ScaleForDpi(14, m.dpi), item_rc.top,
-                      item_rc.right - DesignSystem::ScaleForDpi(8, m.dpi), item_rc.bottom};
-        SelectObject(hdc, selected ? hFontSmallBold : hFontSmall);
+        static constexpr const wchar_t* kNavGlyphs[] = {L"◈", L"◔", L"✓", L"Ⅱ"};
+        RECT icon_rc{item_rc.left + DesignSystem::ScaleForDpi(14, m.dpi), item_rc.top,
+                     item_rc.left + DesignSystem::ScaleForDpi(38, m.dpi), item_rc.bottom};
+        SelectObject(hdc, hFontBold);
+        SetTextColor(hdc, selected ? pal.accent_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
+        DrawTextW(hdc, kNavGlyphs[i], -1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        RECT label_rc{item_rc.left + DesignSystem::ScaleForDpi(46, m.dpi), item_rc.top,
+                      item_rc.right - DesignSystem::ScaleForDpi(46, m.dpi), item_rc.bottom};
+        SelectObject(hdc, selected ? hFontBold : hFontBody);
         SetTextColor(hdc, selected ? pal.text_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
         std::wstring label = Utf8ToW(item.label);
         DrawTextW(hdc, label.c_str(), -1, &label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (item.count > 0) {
+            const int badge_w = DesignSystem::ScaleForDpi(30, m.dpi);
+            RECT badge_rc{item_rc.right - badge_w - DesignSystem::ScaleForDpi(8, m.dpi),
+                item_rc.top + DesignSystem::ScaleForDpi(9, m.dpi), item_rc.right - DesignSystem::ScaleForDpi(8, m.dpi),
+                item_rc.bottom - DesignSystem::ScaleForDpi(9, m.dpi)};
+            DrawRoundedBoxGdi(hdc, badge_rc, badge_rc.bottom - badge_rc.top, selected ? pal.surface_elevated : pal.surface_primary,
+                pal.border_subtle, 1);
+            const std::wstring count = std::to_wstring(item.count);
+            SetTextColor(hdc, selected ? pal.text_primary.ToWin32ColorRef() : pal.text_muted.ToWin32ColorRef());
+            DrawTextW(hdc, count.c_str(), -1, &badge_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
     }
     RECT sidebar_language_rc = ToWinRect(geom.sidebar_language_rect);
     const bool language_hovered = view.GetHoveredDetailsBtnIndex() == -3;
@@ -8384,7 +8436,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     } else if (add_hp > 0.0f) {
         add_bg = pal.accent_primary.Interpolate(pal.accent_hover, add_hp);
     }
-    DrawRoundedBoxGdi(hdc, add_rc, DesignSystem::ScaleForDpi(6, m.dpi), add_bg, add_bg, 0);
+    DrawRoundedBoxGdi(hdc, add_rc, DesignSystem::ScaleForDpi(10, m.dpi), add_bg, add_bg, 0);
     SelectObject(hdc, hFontBold);
     SetTextColor(hdc, RGB(255, 255, 255));
     std::wstring add_download_text = L"+ " + Utf8ToW(GetLocalizationManager().Translate("Add download"));
@@ -8421,20 +8473,46 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
             btn_bg = pal.glass_surface.Interpolate(pal.glass_elevated, hp);
             btn_border = pal.glass_border.Interpolate(pal.glass_highlight, hp);
         }
-        DrawGlassPanelGdi(hdc, brc, 16, btn_bg, btn_border, 1, false);
+        const bool is_start_all = btn.action_id == ToolbarActionId::kStartAll;
+        const bool is_pause_all = btn.action_id == ToolbarActionId::kPauseAll;
+        const bool is_icon_action = btn.action_id == ToolbarActionId::kStart ||
+            btn.action_id == ToolbarActionId::kPause || btn.action_id == ToolbarActionId::kRemove;
+        DrawRoundedBoxGdi(hdc, brc, is_icon_action ? brc.bottom - brc.top : DesignSystem::ScaleForDpi(10, m.dpi),
+            btn_bg, btn_border, 1);
 
         SelectObject(hdc, hFontSmallBold);
-        const bool is_start_all = btn.action_id == ToolbarActionId::kStartAll;
+        ColorRgba txt_col = hovered ? pal.text_primary : pal.text_secondary;
         if (is_start_all) {
-            const ColorRgba start_all_bg = hovered ? pal.surface_pressed : pal.surface_selected;
-            DrawRoundedBoxGdi(hdc, brc, DesignSystem::ScaleForDpi(8, m.dpi), start_all_bg,
-                              pal.accent_primary, 1);
+            RECT separator{brc.left - DesignSystem::ScaleForDpi(5, m.dpi), brc.top + DesignSystem::ScaleForDpi(8, m.dpi),
+                brc.left - DesignSystem::ScaleForDpi(4, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(8, m.dpi)};
+            FillRectSolid(hdc, separator, pal.border_subtle);
         }
-        ColorRgba txt_col = is_start_all ? pal.accent_primary : (hovered ? pal.text_primary : pal.text_secondary);
+        if (is_icon_action) {
+            RECT glyph_rc{brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(10, m.dpi),
+                brc.right - DesignSystem::ScaleForDpi(10, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(10, m.dpi)};
+            if (btn.action_id == ToolbarActionId::kStart) {
+                DrawPlayGlyphGdi(hdc, glyph_rc, txt_col);
+            } else if (btn.action_id == ToolbarActionId::kPause) {
+                DrawPauseGlyphGdi(hdc, glyph_rc, txt_col);
+            } else {
+                SetTextColor(hdc, txt_col.ToWin32ColorRef());
+                DrawTextW(hdc, L"×", -1, &glyph_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            }
+            continue;
+        }
         SetTextColor(hdc, txt_col.ToWin32ColorRef());
         std::wstring wlbl = Utf8ToW(btn.label);
         int text_inset = DesignSystem::ScaleForDpi(8, m.dpi);
         RECT label_rc{brc.left + text_inset, brc.top, brc.right - text_inset, brc.bottom};
+        if (is_start_all) {
+            label_rc.left += DesignSystem::ScaleForDpi(6, m.dpi);
+            DrawPlayGlyphGdi(hdc, {brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(12, m.dpi),
+                brc.left + DesignSystem::ScaleForDpi(23, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(12, m.dpi)}, txt_col);
+        } else if (is_pause_all) {
+            label_rc.left += DesignSystem::ScaleForDpi(6, m.dpi);
+            DrawPauseGlyphGdi(hdc, {brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(12, m.dpi),
+                brc.left + DesignSystem::ScaleForDpi(23, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(12, m.dpi)}, txt_col);
+        }
         DrawTextW(hdc, wlbl.c_str(), -1, &label_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 
@@ -8469,7 +8547,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                           (is_resizing || is_hovered) ? pal.accent_primary : pal.border_subtle);
         }
     }
-    RECT hdr_div{0, header_rc.bottom - 1, w, header_rc.bottom};
+    RECT hdr_div{header_rc.left, header_rc.bottom - 1, header_rc.right, header_rc.bottom};
     FillRectSolid(hdc, hdr_div, pal.border_subtle);
     }
 
@@ -8555,8 +8633,8 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
             DrawTextW(hdc, widx.c_str(), -1, &idx_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
             int icon_x = idx_rc.right + 6;
-            int icon_w = DesignSystem::ScaleForDpi(20, m.dpi);
-            int icon_h = DesignSystem::ScaleForDpi(24, m.dpi);
+            int icon_w = DesignSystem::ScaleForDpi(24, m.dpi);
+            int icon_h = DesignSystem::ScaleForDpi(28, m.dpi);
             int icon_y = rrc.top + (rrc.bottom - rrc.top - icon_h) / 2;
             DrawFileTypeIconGdi(hdc, icon_x, icon_y, icon_w, icon_h, r, pal);
 
@@ -8576,7 +8654,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
             int progress_right = name_right - DesignSystem::ScaleForDpi(8, m.dpi);
             int pct_width = DesignSystem::ScaleForDpi(48, m.dpi);
             int pct_gap = DesignSystem::ScaleForDpi(8, m.dpi);
-            int bar_max_w = std::min(DesignSystem::ScaleForDpi(160, m.dpi),
+            int bar_max_w = std::min(DesignSystem::ScaleForDpi(260, m.dpi),
                                      progress_right - bar_x - pct_gap - pct_width);
             int bar_h = DesignSystem::ScaleForDpi(8, m.dpi);
             if (bar_max_w > 0) {
@@ -8759,11 +8837,17 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                 RECT add_time_rc = ToWinRect(geom.table_columns[5].rect);
                 add_time_rc.top = rrc.top;
                 add_time_rc.bottom = rrc.bottom;
-                add_time_rc.right -= DesignSystem::ScaleForDpi(8, m.dpi);
+                add_time_rc.right -= DesignSystem::ScaleForDpi(32, m.dpi);
                 SelectObject(hdc, hFontBody);
                 SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
                 std::wstring wadd = Utf8ToW(r.added_time_text);
                 DrawTextW(hdc, wadd.c_str(), -1, &add_time_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+                // Row Context Menu 3-dots indicator (Actions)
+                RECT menu_rc{geom.table_columns[5].rect.right - DesignSystem::ScaleForDpi(28, m.dpi), rrc.top,
+                             geom.table_columns[5].rect.right - DesignSystem::ScaleForDpi(4, m.dpi), rrc.bottom};
+                SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
+                DrawTextW(hdc, L"···", -1, &menu_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             }
         }
     }
@@ -8980,6 +9064,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     }
 
     SelectObject(hdc, old_font);
+    DeleteObject(hFontTitle);
     DeleteObject(hFontBody);
     DeleteObject(hFontBold);
     DeleteObject(hFontSmall);
@@ -10386,8 +10471,10 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 ctx->view->CheckAndAutoScrollNewOrStartedDownloads();
                 // Sync Windows taskbar progress indicator
                 SyncTaskbarProgress(hwnd, ctx->pTaskbarList, *ctx->view, ctx);
-                // Always repaint: active downloads, smooth animations, icon pulses
-                InvalidateRect(hwnd, nullptr, FALSE);
+                // Only trigger repaint if there are active downloads, animations running, or window state changed
+                if (ctx->controller && (ctx->controller->HasActiveTasks() || ctx->view->GetAnimationState().IsActive())) {
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
             }
             return 0;
         }

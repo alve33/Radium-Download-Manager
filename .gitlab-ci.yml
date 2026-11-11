@@ -176,16 +176,30 @@ build:windows-arm64:
       }
 
       Write-Host "Detected Visual Studio installation: $vsInst"
-      $vcvars_cross = Join-Path $vsInst "VC\Auxiliary\Build\vcvarsamd64_arm64.bat"
-      if (-not (Test-Path $vcvars_cross)) {
-        throw "ARM64 cross-compiler batch file not found: $vcvars_cross"
+
+      # 2. Verify or Install MSVC ARM64 Build Tools
+      $arm64Cl = $null
+      if ($vsWhere) {
+        $arm64Cl = & $vsWhere -latest -products "*" -find "**\bin\Host*\arm64\cl.exe"
+      }
+      if (-not $arm64Cl) {
+        Write-Host "ARM64 C++ tools not found. Adding Microsoft.VisualStudio.Component.VC.Tools.ARM64..." -ForegroundColor Yellow
+        $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+        if (Test-Path $setupExe) {
+          $installArgs = @("modify", "--installPath", "$vsInst", "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64", "--quiet", "--wait", "--norestart")
+          $process = Start-Process -FilePath $setupExe -ArgumentList $installArgs -Wait -PassThru
+          Write-Host "Visual Studio Installer completed with exit code: $($process.ExitCode)"
+        }
       }
 
-      # 2. Configure and Cross-Compile ARM64 Targets
-      cmd.exe /c "call `"$vcvars_cross`" && cmake -B build/win-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
+      $vcvars_cross = Join-Path $vsInst "VC\Auxiliary\Build\vcvarsamd64_arm64.bat"
+      $vcvars_cmd = if (Test-Path $vcvars_cross) { "`"$vcvars_cross`"" } else { "`"$(Join-Path $vsInst 'VC\Auxiliary\Build\vcvarsall.bat')`" x64_arm64" }
+
+      # 3. Configure and Cross-Compile ARM64 Targets
+      cmd.exe /c "call $vcvars_cmd && cmake -B build/win-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
       if ($LASTEXITCODE -ne 0) { throw "CMake build failed for Windows ARM64 with exit code $LASTEXITCODE" }
 
-      # 3. Provision Architecture-Specific Stream Workers
+      # 4. Provision Architecture-Specific Stream Workers
       powershell -ExecutionPolicy Bypass -File scripts/fetch-workers.ps1 -TargetDir tools/win-arm64 -Architecture ARM64
   artifacts:
     name: radium-binaries-arm64-$CI_COMMIT_REF_SLUG

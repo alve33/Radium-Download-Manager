@@ -403,3 +403,11 @@ The per-peer outstanding block request window was raised from 6 to 64 (96 KiB to
 
 `TestTorrentRateMeterUsesPayloadDeltas` covers baseline initialization, delta divided by monotonic elapsed time, sub-500 ms coalescing, multiple-peer cumulative aggregation, idle-to-zero behavior, counter rollback, upload direction, multi-torrent rate summation, and concurrent calls. Upload accounting advances only after `SendAll` successfully transmits the complete peer payload. The engine resamples active rates on a 500 ms cadence so idle rates clear even when no peer messages arrive. Windows Release build passed for `radium.exe`, `radium_unit_tests.exe`, and `radium_core_tests.exe`; the suites passed 81/81 and 6/6. Existing mock peer transfer/integrity coverage also passed as part of the 81-suite run. Real swarm comparisons and one-peer/multi-peer/multi-torrent, pause/resume, seeding, low/high-speed, reconnect, and mixed HTTP+torrent network benchmarks remain unverified.
 
+### Reference-focused main-window layout follow-up (2026-11-12)
+
+| Verification | Result |
+| :--- | :--- |
+| MSVC Release build (`radium.exe`, `radium_unit_tests.exe`) | **PASS** |
+| `radium_unit_tests.exe` | **PASS, 81/81 suites**; includes responsive sidebar/table insets, compact toolbar bounds, details actions, DPI metrics, selection, filtering, sorting, and hit testing. |
+| Dark/light reference-scale live visual comparison | **Pending**; the running portable executable must be closed before the staged `dist/Radium.exe` can be replaced and inspected. |
+

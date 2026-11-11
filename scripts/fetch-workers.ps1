@@ -13,16 +13,16 @@ param(
     [string]$TargetDir = "",
     [ValidateSet("x64", "ARM64")]
     [string]$Architecture = "x64",
-    [string]$Nm3u8dlUrl = "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.3.0-beta/N_m3u8DL-RE_v0.3.0-beta_win-x64_20241203.zip",
-    [string]$Nm3u8dlExpectedSha256 = "E5C93A8DE0C58C50922C17A8A3BABD7D2193FB43B1A7FACD0B18DE9274EF8061",
+    [string]$Nm3u8dlUrl = "",
+    [string]$Nm3u8dlExpectedSha256 = "",
     [string]$FfmpegUrl = "",
     [string]$FfmpegExpectedSha256 = "",
     [switch]$UseUpstreamFfmpeg = $false,
     [switch]$PreferNativeWorker = $true,
     [ValidateSet("standard", "min")]
     [string]$YtDlpFlavor = "standard",
-    [string]$YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
-    [string]$YtDlpExpectedSha256 = "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a",
+    [string]$YtDlpUrl = "",
+    [string]$YtDlpExpectedSha256 = "",
     [switch]$Force = $false,
     [switch]$SkipChecksumVerification = $false
 )
@@ -107,6 +107,34 @@ Write-Host "=================================================================" -
 Write-Host "Target Directory: $TargetDir" -ForegroundColor White
 
 try {
+    if (-not $Nm3u8dlUrl) {
+        if ($Architecture -eq "ARM64") {
+            $Nm3u8dlUrl = "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.3.0-beta/N_m3u8DL-RE_v0.3.0-beta_win-arm64_20241203.zip"
+            if (-not $Nm3u8dlExpectedSha256) {
+                $Nm3u8dlExpectedSha256 = "90E9365F14E859AB7478D6D64EC3C95E05C5834224F4DB15F727B6EC576C36F1"
+            }
+        } else {
+            $Nm3u8dlUrl = "https://github.com/nilaoda/N_m3u8DL-RE/releases/download/v0.3.0-beta/N_m3u8DL-RE_v0.3.0-beta_win-x64_20241203.zip"
+            if (-not $Nm3u8dlExpectedSha256) {
+                $Nm3u8dlExpectedSha256 = "E5C93A8DE0C58C50922C17A8A3BABD7D2193FB43B1A7FACD0B18DE9274EF8061"
+            }
+        }
+    }
+
+    if (-not $YtDlpUrl) {
+        if ($Architecture -eq "ARM64") {
+            $YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_arm64.exe"
+            if (-not $YtDlpExpectedSha256) {
+                $YtDlpExpectedSha256 = "05B438997BAFC3AFFDFDA9D041353C9D73E04DC842207254B655B0887C4445B0"
+            }
+        } else {
+            $YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe"
+            if (-not $YtDlpExpectedSha256) {
+                $YtDlpExpectedSha256 = "66674953FE251B89F4D08C5F0E35E0728679BD67AB3D7D05C0562AF101DD3E7A"
+            }
+        }
+    }
+
     # 1. N_m3u8DL-RE (Native C++ Stream Worker / Upstream Fallback)
     $NmExe = Join-Path $TargetDir "N_m3u8DL-RE.exe"
     $stagedFromNative = $false
@@ -123,11 +151,12 @@ try {
 
     if (-not $stagedFromNative -and $PreferNativeWorker) {
         $nativeCandidates = @(
+            (Join-Path $RepoRoot "build\win-$Architecture\Release\N_m3u8DL-RE.exe"),
             (Join-Path $RepoRoot "build\win-x64\Release\N_m3u8DL-RE.exe"),
             (Join-Path $RepoRoot "build\Release\N_m3u8DL-RE.exe"),
+            (Join-Path $RepoRoot "build\win-$Architecture\N_m3u8DL-RE.exe"),
             (Join-Path $RepoRoot "build\win-x64\N_m3u8DL-RE.exe"),
-            (Join-Path $RepoRoot "build\N_m3u8DL-RE.exe"),
-            (Join-Path $RepoRoot "dist\tools\win-x64\N_m3u8DL-RE.exe")
+            (Join-Path $RepoRoot "dist\tools\win-$Architecture\N_m3u8DL-RE.exe")
         )
         foreach ($cand in $nativeCandidates) {
             if (Test-Path $cand) {
@@ -147,9 +176,15 @@ try {
     if (-not $stagedFromNative) {
         $needNmDownload = $Force -or (-not (Verify-ExistingBinary $NmExe $Nm3u8dlExpectedSha256 $Architecture))
         if ($needNmDownload) {
-            Write-Host "`n[1/3] Downloading upstream nilaoda/N_m3u8DL-RE win-x64..." -ForegroundColor Cyan
+            Write-Host "`n[1/3] Downloading upstream nilaoda/N_m3u8DL-RE ($Nm3u8dlUrl)..." -ForegroundColor Cyan
             $NmZip = Join-Path $TmpDir "nm3u8dl.zip"
-            Invoke-WebRequest -Uri $Nm3u8dlUrl -OutFile $NmZip -UseBasicParsing
+            try {
+                $wc = New-Object System.Net.WebClient
+                $wc.Headers.Add("User-Agent", "Mozilla/5.0")
+                $wc.DownloadFile($Nm3u8dlUrl, $NmZip)
+            } catch {
+                & curl.exe -sSL -A "Mozilla/5.0" -o $NmZip $Nm3u8dlUrl
+            }
             Expand-Archive -Path $NmZip -DestinationPath (Join-Path $TmpDir "nm") -Force
             $FoundNm = Get-ChildItem -Path (Join-Path $TmpDir "nm") -Filter "N_m3u8DL-RE.exe" -Recurse | Select-Object -First 1
             if (-not $FoundNm) { throw "N_m3u8DL-RE.exe not found in downloaded archive: $NmZip" }
@@ -170,7 +205,13 @@ try {
     $FfExe = Join-Path $TargetDir "ffmpeg.exe"
 
     if (-not $FfmpegUrl) {
-        if ($UseUpstreamFfmpeg) {
+        if ($Architecture -eq "ARM64") {
+            # Verified native Windows ARM64 FFmpeg 8.1.1 build
+            $FfmpegUrl = "https://github.com/ShareX/FFmpeg/releases/download/v8.1.1/ffmpeg-8.1.1-win-arm64.zip"
+            if (-not $FfmpegExpectedSha256) {
+                $FfmpegExpectedSha256 = "00883F38A1A49DEDB805B9A1DF0BE0876427585D9290930D2398B48BA5FECAAE"
+            }
+        } elseif ($UseUpstreamFfmpeg) {
             $FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
             Write-Warning "[LARGE FALLBACK] Explicitly using monolithic upstream FFmpeg (161+ MiB). Package size will exceed 20 MB budget."
         } else {
@@ -195,12 +236,18 @@ try {
 
     if ($needFfDownload) {
         $flavorDesc = if ($UseUpstreamFfmpeg) { "upstream monolithic" } else { "minimal LGPL" }
-        Write-Host "`n[2/3] Downloading $flavorDesc FFmpeg win-x64 ($FfmpegUrl)..." -ForegroundColor Cyan
+        Write-Host "`n[2/3] Downloading $flavorDesc FFmpeg ($FfmpegUrl)..." -ForegroundColor Cyan
         $FfZip = Join-Path $TmpDir "ffmpeg.zip"
         try {
-            Invoke-WebRequest -Uri $FfmpegUrl -OutFile $FfZip -UseBasicParsing
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.Add("User-Agent", "Mozilla/5.0")
+            $wc.DownloadFile($FfmpegUrl, $FfZip)
         } catch {
-            throw "Failed to download minimal FFmpeg from ${FfmpegUrl}: $($_.Exception.Message)`nSilent fallback to bloated upstream monolithic FFmpeg (161+ MiB) is strictly prohibited to prevent package size regressions.`nTo explicitly allow large upstream worker, specify -UseUpstreamFfmpeg."
+            Write-Host "WebClient download failed: $($_.Exception.Message), trying curl.exe fallback..." -ForegroundColor Yellow
+            & curl.exe -sSL -A "Mozilla/5.0" -o $FfZip $FfmpegUrl
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $FfZip)) {
+                throw "Failed to download minimal FFmpeg from ${FfmpegUrl}: $($_.Exception.Message)`nSilent fallback to bloated upstream monolithic FFmpeg (161+ MiB) is strictly prohibited to prevent package size regressions.`nTo explicitly allow large upstream worker, specify -UseUpstreamFfmpeg."
+            }
         }
         Expand-Archive -Path $FfZip -DestinationPath (Join-Path $TmpDir "ff") -Force
         $FoundFf = Get-ChildItem -Path (Join-Path $TmpDir "ff") -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
@@ -217,7 +264,7 @@ try {
             Write-Host "  [INFO] Verified PE64. Computed SHA-256 for ffmpeg.exe: $actual" -ForegroundColor Cyan
         }
         $downloadedFfSize = (Get-Item $FoundFf.FullName).Length
-        if (-not $UseUpstreamFfmpeg -and $downloadedFfSize -gt 25MB) {
+        if (-not $UseUpstreamFfmpeg -and $Architecture -ne "ARM64" -and $downloadedFfSize -gt 25MB) {
             throw "Downloaded FFmpeg executable ($($FoundFf.FullName)) is $([Math]::Round($downloadedFfSize/1MB, 2)) MiB, exceeding the 25 MB ceiling for minimal builds."
         }
         Copy-Item -Force $FoundFf.FullName $FfExe
@@ -251,7 +298,13 @@ try {
     if ($needYtDownload) {
         Write-Host "`n[3/3] Downloading upstream yt-dlp ($YtDlpFlavor flavor)..." -ForegroundColor Cyan
         $YtDl = Join-Path $TmpDir "yt-dlp.exe"
-        Invoke-WebRequest -Uri $YtDlpUrl -OutFile $YtDl -UseBasicParsing
+        try {
+            $wc = New-Object System.Net.WebClient
+            $wc.Headers.Add("User-Agent", "Mozilla/5.0")
+            $wc.DownloadFile($YtDlpUrl, $YtDl)
+        } catch {
+            & curl.exe -sSL -A "Mozilla/5.0" -o $YtDl $YtDlpUrl
+        }
         Assert-Pe64Executable $YtDl $Architecture
         if ($YtDlpExpectedSha256) {
             Assert-Sha256Checksum $YtDl $YtDlpExpectedSha256
