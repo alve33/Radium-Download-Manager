@@ -264,13 +264,16 @@ test:verify-architectures:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   script:
     - |
-      function Verify-PeMachine([string]$path, [uint16]$expectedMachine, [string]$archName) {
+      function Verify-PeMachine {
+        param([string]$path, [uint16]$expectedMachine, [string]$archName)
         if (-not (Test-Path $path)) { throw "Missing expected binary: $path" }
         $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $path).Path)
         $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
         $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
         if ($machine -ne $expectedMachine) {
-          throw "Architecture mismatch for $path: Expected $archName (0x$($expectedMachine.ToString('X4'))), got 0x$($machine.ToString('X4'))"
+          $hexExpected = $expectedMachine.ToString('X4')
+          $hexGot = $machine.ToString('X4')
+          throw "Architecture mismatch for ${path}: Expected ${archName} (0x${hexExpected}), got 0x${hexGot}"
         }
         Write-Host "Verified $archName PE header: $path" -ForegroundColor Green
       }

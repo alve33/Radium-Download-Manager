@@ -508,6 +508,7 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     TEST_ASSERT(r_spec->correlation_id == special_corr_id, "Special correlation preserved in report");
 
     // Clean up temporary test files
+    ctrl.Shutdown();
     std::error_code ec;
     std::filesystem::remove_all(work_dir, ec);
 
