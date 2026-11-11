@@ -183,7 +183,18 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
     stream_obj["output_format"] = task.stream_options.output_format;
     stream_obj["thread_count"] = task.stream_options.thread_count;
     stream_obj["concurrent_download"] = task.stream_options.concurrent_download;
-    stream_obj["custom_hls_key_hex"] = task.stream_options.custom_hls_key_hex;
+    if (!task.stream_options.custom_hls_key_hex.empty()) {
+        auto prot_key = CryptoUtils::ProtectSecret(task.stream_options.custom_hls_key_hex);
+        if (prot_key.ok()) {
+            std::string b64 = CryptoUtils::Base64Encode(std::string_view(
+                reinterpret_cast<const char*>(prot_key.value->data()), prot_key.value->size()));
+            stream_obj["custom_hls_key_hex_dpapi"] = b64;
+        } else {
+            stream_obj["custom_hls_key_hex"] = task.stream_options.custom_hls_key_hex;
+        }
+    } else {
+        stream_obj["custom_hls_key_hex"] = "";
+    }
     stream_obj["cached_manifest_body"] = task.stream_options.cached_manifest_body;
     if (!task.torrent_file_paths.empty()) {
         json::Array selection;
@@ -194,6 +205,11 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
             selection.push_back(std::move(entry));
         }
         stream_obj["torrent_selection"] = std::move(selection);
+    }
+    if (!task.torrent_fastresume_bitfield.empty()) {
+        stream_obj["torrent_fastresume_bitfield"] = task.torrent_fastresume_bitfield;
+        stream_obj["torrent_fastresume_mtime"] = static_cast<int64_t>(task.torrent_fastresume_mtime);
+        stream_obj["torrent_fastresume_filesize"] = static_cast<int64_t>(task.torrent_fastresume_filesize);
     }
 
     const char* sql = R"SQL(
@@ -521,9 +537,20 @@ static TaskModel ParseTaskRow(sqlite3_stmt* stmt) {
             t.stream_options.audio_filter = s_val["audio_filter"].as_string("all");
             t.stream_options.subtitle_filter = s_val["subtitle_filter"].as_string("all");
             t.stream_options.output_format = s_val["output_format"].as_string("mp4");
-            t.stream_options.thread_count = static_cast<uint32_t>(s_val["thread_count"].as_int64(8));
+            t.stream_options.thread_count = static_cast<uint32_t>(s_val["thread_count"].as_int64(32));
             t.stream_options.concurrent_download = s_val["concurrent_download"].as_bool(true);
-            t.stream_options.custom_hls_key_hex = s_val["custom_hls_key_hex"].as_string("");
+            if (s_val.contains("custom_hls_key_hex_dpapi")) {
+                std::string b64 = s_val["custom_hls_key_hex_dpapi"].as_string("");
+                auto raw_bytes = CryptoUtils::Base64Decode(b64);
+                auto unprot = CryptoUtils::UnprotectSecret(raw_bytes);
+                if (unprot.ok()) {
+                    t.stream_options.custom_hls_key_hex = *unprot.value;
+                } else {
+                    t.stream_options.custom_hls_key_hex = "";
+                }
+            } else {
+                t.stream_options.custom_hls_key_hex = s_val["custom_hls_key_hex"].as_string("");
+            }
             t.stream_options.cached_manifest_body = s_val["cached_manifest_body"].as_string("");
             if (s_val.contains("torrent_selection") && s_val["torrent_selection"].is_array()) {
                 for (const auto& entry : s_val["torrent_selection"].as_array()) {
@@ -531,6 +558,11 @@ static TaskModel ParseTaskRow(sqlite3_stmt* stmt) {
                     t.torrent_file_paths.push_back(entry["path"].as_string(""));
                     t.torrent_file_selection.push_back(entry["selected"].as_bool(true) ? 1 : 0);
                 }
+            }
+            if (s_val.contains("torrent_fastresume_bitfield")) {
+                t.torrent_fastresume_bitfield = s_val["torrent_fastresume_bitfield"].as_string("");
+                t.torrent_fastresume_mtime = s_val["torrent_fastresume_mtime"].as_int64(0);
+                t.torrent_fastresume_filesize = static_cast<uint64_t>(s_val["torrent_fastresume_filesize"].as_int64(0));
             }
         }
     } catch (...) {}

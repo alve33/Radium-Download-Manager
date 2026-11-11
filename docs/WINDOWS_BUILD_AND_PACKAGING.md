@@ -1,5 +1,9 @@
 # Windows Build and Packaging Specification
 
+## Offline desktop translation catalog
+
+Release and development builds stage `translations/desktop.json` beside the executable. The catalog is loaded offline at runtime. The Windows portable build script copies the catalog into the build and distribution directories and includes it in checksum validation. The portable application is always named `dist\Radium.exe`; if it is running, staging stops with instructions to close it and retry rather than terminate it or publish an alternate app name. Current catalog coverage is partial; this packaging step does not imply full translation support.
+
 **Document Status:** Active Build & Packaging Specification (`v1.0.0`)  
 **Last Reviewed:** 2026-11-04  
 **Scope:** Compiler and Windows SDK requirements, CMake configuration, native C++20 stream worker compilation, dynamic worker discovery, Inno Setup installer, and clean-machine distribution validation.  

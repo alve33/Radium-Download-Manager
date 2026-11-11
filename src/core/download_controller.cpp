@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "core/download_controller.hpp"
 #include "brisk_engine/http_client.hpp"
+#include "engine_stream/video_extractor.hpp"
 
+#include "common/central_config.hpp"
 #include "common/crypto_utils.hpp"
 #include "common/json_mini.hpp"
 #include "common/logger.hpp"
@@ -12,6 +14,7 @@
 #include <chrono>
 #include <iomanip>
 #include <optional>
+#include <set>
 #include <sstream>
 
 #ifdef _WIN32
@@ -254,7 +257,10 @@ void DownloadController::LoadPersistedSettingsLocked() {
     if (!sres.ok() || sres.value->empty()) return;
     try {
         auto val = json::Parse(*sres.value);
-        m_settings.theme = val["theme"].as_string("coral_dark");
+        m_settings.theme = val["theme"].as_string("system");
+        m_settings.language = val["language"].as_string("en");
+        const bool migrate_legacy_system_language = m_settings.language == "system";
+        if (migrate_legacy_system_language) m_settings.language = "en";
         if (m_settings.theme == "dark") {
             m_settings.theme = "coral_dark";
         }
@@ -336,7 +342,7 @@ void DownloadController::LoadPersistedSettingsLocked() {
             static_cast<uint32_t>(val["retryIntervalSec"].as_int64(15)), 1u, 3600u);
         m_settings.queue_completion_action = val["queueCompletionAction"].as_string("NONE");
 
-        if (migrate_legacy_conflict_default || migrate_legacy_download_default) SaveSettingsLocked();
+        if (migrate_legacy_conflict_default || migrate_legacy_download_default || migrate_legacy_system_language) SaveSettingsLocked();
 
         m_cfg.stall_timeout_ms = m_settings.stall_timeout_ms;
         m_cfg.min_split_bytes = m_settings.min_split_bytes;
@@ -348,6 +354,7 @@ void DownloadController::LoadPersistedSettingsLocked() {
 Result<void> DownloadController::SaveSettingsLocked() {
     json::Value obj = json::Object{};
     obj["theme"] = m_settings.theme;
+    obj["language"] = m_settings.language;
     obj["maxConcurrentTasks"] = static_cast<int64_t>(m_settings.max_concurrent_tasks);
     obj["speedLimitBps"] = static_cast<int64_t>(m_settings.speed_limit_bps);
     obj["defaultConnectionsPerTask"] = static_cast<int64_t>(m_settings.default_connections_per_task);
@@ -472,35 +479,40 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
         if (!ftp_res.ok()) return Result<TaskModel>::Err(ftp_res.error->code, ftp_res.error->message);
         if (task.file_name.empty()) task.file_name = ftp_res.value->file_name;
     } else if (task.url.find("magnet:?") == 0) {
-        task.task_type = TaskType::kTorrent;
-        auto mag_res = torrent::TorrentParser::ParseMagnetUri(task.url);
-        if (!mag_res.ok()) return Result<TaskModel>::Err(mag_res.error->code, mag_res.error->message);
-        if (task.file_name.empty()) task.file_name = mag_res.value->name;
+        if constexpr (!radium::config::FeatureRegistry::kTorrentEngine.empty()) {
+            task.task_type = TaskType::kTorrent;
+            auto mag_res = torrent::TorrentParser::ParseMagnetUri(task.url);
+            if (!mag_res.ok()) return Result<TaskModel>::Err(mag_res.error->code, mag_res.error->message);
+            if (task.file_name.empty()) task.file_name = mag_res.value->name;
+        } else {
+            return Result<TaskModel>::Err("ERR_FEATURE_DISABLED", "Torrent downloads are disabled in build feature registry");
+        }
     } else if (task.task_type == TaskType::kTorrent || task.url.ends_with(".torrent") ||
                (std::filesystem::exists(task.url) && std::filesystem::path(task.url).extension() == ".torrent")) {
-        task.task_type = TaskType::kTorrent;
-        std::error_code ec;
-        if (std::filesystem::exists(task.url, ec)) {
-            auto tor_res = torrent::TorrentParser::ParseTorrentFile(task.url);
-            if (!tor_res.ok()) return Result<TaskModel>::Err(tor_res.error->code, tor_res.error->message);
-            if (task.file_name.empty()) task.file_name = tor_res.value->name;
-            task.total_bytes = task.torrent_file_paths.empty() ? tor_res.value->total_length : 0;
-            if (task.torrent_file_paths.empty()) {
-                for (const auto& file : tor_res.value->files) {
-                    task.torrent_file_paths.push_back(file.relative_path.generic_string());
-                    task.torrent_file_selection.push_back(file.selected ? 1 : 0);
+        if constexpr (!radium::config::FeatureRegistry::kTorrentEngine.empty()) {
+            task.task_type = TaskType::kTorrent;
+            std::error_code ec;
+            if (std::filesystem::exists(task.url, ec)) {
+                auto tor_res = torrent::TorrentParser::ParseTorrentFile(task.url);
+                if (!tor_res.ok()) return Result<TaskModel>::Err(tor_res.error->code, tor_res.error->message);
+                if (task.file_name.empty()) task.file_name = tor_res.value->name;
+                task.total_bytes = task.torrent_file_paths.empty() ? tor_res.value->total_length : 0;
+                if (task.torrent_file_paths.empty()) {
+                    for (const auto& file : tor_res.value->files) {
+                        task.torrent_file_paths.push_back(file.relative_path.generic_string());
+                        task.torrent_file_selection.push_back(file.selected ? 1 : 0);
+                    }
+                    task.total_bytes = tor_res.value->selected_bytes();
+                } else if (task.torrent_file_paths.size() == tor_res.value->files.size()) {
+                    uint64_t selected_bytes = 0;
+                    for (size_t i = 0; i < tor_res.value->files.size() && i < task.torrent_file_selection.size(); ++i) {
+                        selected_bytes += task.torrent_file_selection[i] ? tor_res.value->files[i].length : 0;
+                    }
+                    task.total_bytes = selected_bytes;
                 }
-                task.total_bytes = tor_res.value->selected_bytes();
-            } else if (task.torrent_file_paths.size() == tor_res.value->files.size()) {
-                uint64_t selected_bytes = 0;
-                for (size_t i = 0; i < tor_res.value->files.size() && i < task.torrent_file_selection.size(); ++i) {
-                    selected_bytes += task.torrent_file_selection[i] ? tor_res.value->files[i].length : 0;
-                }
-                task.total_bytes = selected_bytes;
             }
         } else {
-            auto parsed_u = brisk::HttpClient::ParseUrl(task.url);
-            if (!parsed_u.ok()) return Result<TaskModel>::Err(parsed_u.error->code, parsed_u.error->message);
+            return Result<TaskModel>::Err("ERR_FEATURE_DISABLED", "Torrent downloads are disabled in build feature registry");
         }
     } else if (stream::RtspMmsAdapter::IsStreamUrl(task.url)) {
         task.task_type = TaskType::kRtsp;
@@ -649,6 +661,14 @@ core::DuplicateMatch DownloadController::CheckDuplicateTask(
     const std::string& exclude_task_id) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return core::DuplicateDetector::FindDuplicate(m_tasks, url, file_name, file_size, etag, exclude_task_id);
+}
+
+core::DuplicateMatch DownloadController::CheckDestinationConflict(
+    const std::string& save_dir,
+    const std::string& file_name,
+    const std::string& exclude_task_id) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return core::DuplicateDetector::FindDestinationConflict(m_tasks, save_dir, file_name, exclude_task_id);
 }
 
 Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const std::filesystem::path& staged_file_path) {
@@ -938,11 +958,18 @@ void DownloadController::ScheduleLoop() {
         // 2. Check multi-queue schedules (cached per minute to eliminate redundant repetitive SQLite queries)
         static std::string last_queue_hh_mm;
         static std::vector<QueueConfig> cached_queues;
-        if (cur_hh_mm != last_queue_hh_mm || cached_queues.empty()) {
-            last_queue_hh_mm = cur_hh_mm;
+        // An empty queue list is a valid cached result. Retrying ListQueues on
+        // every 50 ms scheduler pass kept SQLite work inside m_mutex forever
+        // for the common no-custom-queues case, blocking AddTask/StartTask from
+        // acquiring the controller lock and delaying worker dispatch.
+        if (cur_hh_mm != last_queue_hh_mm) {
+            lock.unlock();
             auto queues_res = m_store.ListQueues();
+            lock.lock();
+            if (m_stopping) break;
             if (queues_res.ok()) {
                 cached_queues = *queues_res.value;
+                last_queue_hh_mm = cur_hh_mm;
             }
         }
         for (const auto& q : cached_queues) {
@@ -1077,8 +1104,8 @@ void DownloadController::ScheduleLoop() {
 
 void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<ActiveTaskControl> ctrl) {
     TaskModel local_task;
-    int stall_timeout_ms = 3000;
-    uint64_t min_split_bytes = 131072;
+    int stall_timeout_ms = radium::config::NetworkPoliciesConfig::kStallTimeoutMs;
+    uint64_t min_split_bytes = radium::config::NetworkPoliciesConfig::kMinSplitBytes;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_tasks.find(task_id);
@@ -1092,18 +1119,37 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
     }
 
     std::string task_type_str = TaskTypeToString(local_task.task_type);
+    bool is_direct_manifest = (local_task.url.find(".m3u8") != std::string::npos ||
+                               local_task.url.find(".mpd") != std::string::npos);
     bool is_youtube_task = (local_task.url.find("youtube.com") != std::string::npos ||
                             local_task.url.find("youtu.be") != std::string::npos ||
                             local_task.page_url.find("youtube.com") != std::string::npos ||
                             local_task.page_url.find("youtu.be") != std::string::npos ||
-                            local_task.stream_options.cached_manifest_body.find("\"radiumType\":\"YOUTUBE_STREAM\"") != std::string::npos || local_task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
-                            local_task.stream_options.cached_manifest_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos);
+                            local_task.stream_options.cached_manifest_body.find("\"radiumType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
+                            local_task.stream_options.cached_manifest_body.find("\"radiumType\":\"SITE_EXTRACTION\"") != std::string::npos ||
+                            local_task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
+                            local_task.stream_options.cached_manifest_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos ||
+                            (!is_direct_manifest && engine_stream::VideoExtractionManager::IsSupportedVideoSiteUrl(local_task.url)));
     if (is_youtube_task) {
         task_type_str = "YOUTUBE_EXTRACTION";
     }
 
     OPENIDM_LOG_INFO("Controller", "Dispatching task=" + task_id + " type=" + task_type_str +
                      " correlation_id=" + local_task.correlation_id + " url=" + local_task.url);
+
+    if (!diagnostics::StartupDiagnosticRecorder::Instance().HasSession(task_id) &&
+        (local_task.correlation_id.empty() || !diagnostics::StartupDiagnosticRecorder::Instance().HasSession(local_task.correlation_id))) {
+        diagnostics::StartupDiagnosticRecorder::Instance().StartSession(
+            task_id,
+            local_task.correlation_id,
+            local_task.page_url,
+            local_task.url,
+            local_task.file_name,
+            task_type_str,
+            local_task.stream_options.video_filter,
+            local_task.total_bytes,
+            0);
+    }
 
     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
         task_id, "Scheduler dispatches task", "Worker thread executing for " + task_type_str);
@@ -1205,6 +1251,19 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                         local_task.error_code = "ERR_CHECKSUM_MISMATCH";
                         local_task.error_message = "Downloaded FTP file SHA-256 did not match expected checksum";
                         local_task.status_detail = "Failed: SHA-256 mismatch";
+                    }
+                } else if (!local_task.expected_md5.empty()) {
+                    auto calc_md5 = CryptoUtils::ComputeFileMd5Hex(part_p);
+                    auto to_low = [](std::string s) {
+                        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        return s;
+                    };
+                    if (!calc_md5.ok() || to_low(calc_md5.value.value()) != to_low(local_task.expected_md5)) {
+                        checksum_ok = false;
+                        local_task.state = TaskState::kFailed;
+                        local_task.error_code = "ERR_CHECKSUM_MISMATCH";
+                        local_task.error_message = "Downloaded FTP file MD5 did not match expected checksum";
+                        local_task.status_detail = "Failed: MD5 mismatch";
                     }
                 }
                 if (checksum_ok) {
@@ -1462,7 +1521,11 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                             t.total_bytes = ep.total_bytes;
                             t.speed_bps = ep.speed_bps;
                             t.range_supported = ep.range_supported;
-                            t.status_detail = local_task.status_detail;
+                            if (!ep.status_detail.empty()) {
+                                t.status_detail = ep.status_detail;
+                            } else if (!local_task.status_detail.empty()) {
+                                t.status_detail = local_task.status_detail;
+                            }
                             if (!ep.resolved_filename.empty()) t.file_name = ep.resolved_filename;
                             if (!ep.etag.empty()) t.etag = ep.etag;
                             if (!ep.last_modified.empty()) t.last_modified = ep.last_modified;
@@ -2376,6 +2439,11 @@ Result<void> DownloadController::UpdateSettings(const AppSettings& settings) {
         if (m_settings.theme != "coral_dark" && m_settings.theme != "dark" && m_settings.theme != "light" && m_settings.theme != "system" && m_settings.theme != "classic_blue") {
             m_settings.theme = "coral_dark";
         }
+        static const std::set<std::string> supported_languages{
+            "en", "ja", "zh-CN", "zh-TW", "ko", "es", "fr", "vi", "pt-BR", "de-DE", "ru-RU", "it-IT",
+            "nl-NL", "pl-PL", "tr-TR", "id-ID", "ar-SA", "fa-IR", "uk-UA", "cs-CZ", "ro-RO", "th-TH", "sv-SE", "el-GR"
+        };
+        if (!supported_languages.contains(m_settings.language)) m_settings.language = "en";
         if (!m_settings.default_download_dir.empty()) {
             m_cfg.default_download_dir = m_settings.default_download_dir;
             std::error_code ec;
@@ -2394,24 +2462,24 @@ Result<void> DownloadController::UpdateSettings(const AppSettings& settings) {
 
 Result<AppSettings> DownloadController::RestoreDefaultSettings() {
     AppSettings defaults;
-    defaults.theme = "coral_dark";
-    defaults.max_concurrent_tasks = 3;
-    defaults.speed_limit_bps = 0;
-    defaults.default_connections_per_task = 8;
+    defaults.theme = std::string(radium::config::DefaultSettingsConfig::kTheme);
+    defaults.max_concurrent_tasks = radium::config::DefaultSettingsConfig::kMaxConcurrentTasks;
+    defaults.speed_limit_bps = radium::config::DefaultSettingsConfig::kSpeedLimitBps;
+    defaults.default_connections_per_task = radium::config::DefaultSettingsConfig::kDefaultConnectionsPerTask;
     defaults.default_download_dir = PathSanitizer::GetDefaultDownloadsDir(PathSanitizer::GetExecutableDir()).string();
     defaults.default_download_dir_user_selected = false;
     defaults.conflict_policy = ConflictPolicy::kPrompt;
-    defaults.auto_start_downloads = true;
-    defaults.stall_timeout_ms = 3000;
-    defaults.min_split_bytes = 131072;
-    defaults.browser_capture_enabled = true;
-    defaults.min_capture_size_bytes = 1048576;
-    defaults.close_to_tray = true;
-    defaults.start_minimized = false;
-    defaults.reduced_motion = false;
-    defaults.show_completion_notification = true;
+    defaults.auto_start_downloads = radium::config::DefaultSettingsConfig::kAutoStartDownloads;
+    defaults.stall_timeout_ms = radium::config::DefaultSettingsConfig::kStallTimeoutMs;
+    defaults.min_split_bytes = radium::config::DefaultSettingsConfig::kMinSplitBytes;
+    defaults.browser_capture_enabled = radium::config::DefaultSettingsConfig::kBrowserCaptureEnabled;
+    defaults.min_capture_size_bytes = radium::config::DefaultSettingsConfig::kMinCaptureSizeBytes;
+    defaults.close_to_tray = radium::config::DefaultSettingsConfig::kCloseToTray;
+    defaults.start_minimized = radium::config::DefaultSettingsConfig::kStartMinimized;
+    defaults.reduced_motion = radium::config::DefaultSettingsConfig::kReducedMotion;
+    defaults.show_completion_notification = radium::config::DefaultSettingsConfig::kShowCompletionNotification;
 
-    defaults.proxy_mode = "system";
+    defaults.proxy_mode = std::string(radium::config::DefaultSettingsConfig::kProxyMode);
     defaults.proxy_server = "";
     defaults.proxy_bypass = "";
     defaults.proxy_username = "";
@@ -2420,9 +2488,9 @@ Result<AppSettings> DownloadController::RestoreDefaultSettings() {
     defaults.server_auth_password_encrypted = "";
     defaults.custom_extension_categories = {};
     defaults.site_rules = {};
-    defaults.max_auto_retries = 5;
-    defaults.retry_interval_sec = 15;
-    defaults.queue_completion_action = "NONE";
+    defaults.max_auto_retries = radium::config::DefaultSettingsConfig::kMaxAutoRetries;
+    defaults.retry_interval_sec = radium::config::DefaultSettingsConfig::kRetryIntervalSec;
+    defaults.queue_completion_action = std::string(radium::config::DefaultSettingsConfig::kQueueCompletionAction);
 
     auto ures = UpdateSettings(defaults);
     if (!ures.ok()) return Result<AppSettings>::Err(ures.error->code, ures.error->message);
@@ -2495,6 +2563,25 @@ std::optional<TaskModel> DownloadController::GetTask(const std::string& task_id)
     auto it = m_tasks.find(task_id);
     if (it != m_tasks.end()) return it->second;
     return std::nullopt;
+}
+
+bool DownloadController::HasActiveTasks() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& [id, t] : m_tasks) {
+        if (t.state == TaskState::kDownloading ||
+            t.state == TaskState::kProbing ||
+            t.state == TaskState::kMuxing ||
+            t.state == TaskState::kVerifying ||
+            t.state == TaskState::kFinalizing) {
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t DownloadController::GetTaskCount() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_tasks.size();
 }
 
 Result<TaskModel> DownloadController::WaitForTaskCompletion(const std::string& task_id, int timeout_ms) {
@@ -2588,6 +2675,31 @@ Result<int> DownloadController::ImportTasksData(const std::string& data, storage
         if (add_res.ok()) count++;
     }
     return Result<int>::Ok(count);
+}
+
+Result<std::vector<uint8_t>> DownloadController::CreateTorrent(
+    const std::filesystem::path& source_path,
+    const torrent::TorrentCreatorOptions& options) {
+    return torrent::TorrentCreator::CreateTorrent(source_path, options);
+}
+
+Result<void> DownloadController::CreateTorrentFile(
+    const std::filesystem::path& source_path,
+    const std::filesystem::path& output_torrent_path,
+    const torrent::TorrentCreatorOptions& options) {
+    return torrent::TorrentCreator::CreateTorrentFile(source_path, output_torrent_path, options);
+}
+
+Result<void> DownloadController::AddTrackersToTask(const std::string& task_id, const std::vector<std::string>& new_trackers) {
+    return torrent::TorrentEngine::AddTrackersToTask(task_id, new_trackers);
+}
+
+Result<torrent::TorrentSwarmDetails> DownloadController::GetTorrentSwarmDetails(const std::string& task_id) {
+    return torrent::TorrentEngine::GetSwarmDetails(task_id);
+}
+
+Result<void> DownloadController::SetTorrentSequentialMode(const std::string& task_id, bool enable) {
+    return torrent::TorrentEngine::SetSequentialMode(task_id, enable);
 }
 
 } // namespace openidm

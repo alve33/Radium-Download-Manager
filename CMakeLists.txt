@@ -1,11 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.24)
-project(Radium VERSION 1.0.0 LANGUAGES C CXX)
+# Read authoritative VERSION file
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" RADIUM_AUTHORITATIVE_VERSION)
+string(STRIP "${RADIUM_AUTHORITATIVE_VERSION}" RADIUM_AUTHORITATIVE_VERSION)
+if(NOT RADIUM_AUTHORITATIVE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+")
+    message(FATAL_ERROR "Authoritative VERSION file is missing or invalid: '${RADIUM_AUTHORITATIVE_VERSION}'")
+endif()
+
+# Keep generated files synchronized with VERSION
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_FOUND)
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_config.py"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        RESULT_VARIABLE GEN_RESULT
+    )
+    if(NOT GEN_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to synchronize configuration from VERSION file!")
+    endif()
+endif()
+
+project(Radium VERSION ${RADIUM_AUTHORITATIVE_VERSION} LANGUAGES C CXX)
 add_compile_definitions(
-    RADIUM_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
-    RADIUM_VERSION_MINOR=${PROJECT_VERSION_MINOR}
-    RADIUM_VERSION_PATCH=${PROJECT_VERSION_PATCH}
-    RADIUM_VERSION_STRING="${PROJECT_VERSION}"
     RADIUM_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     RADIUM_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     RADIUM_VERSION_PATCH=${PROJECT_VERSION_PATCH}
@@ -23,8 +39,9 @@ set(CMAKE_C_STANDARD 11)
 
 if(MSVC)
     enable_language(RC)
-    add_compile_options(/W4 /WX /permissive- /utf-8 /EHsc /wd4996 /D_CRT_SECURE_NO_WARNINGS /MP)
+    add_compile_options(/W4 /WX /permissive- /utf-8 /EHsc /wd4996 /D_CRT_SECURE_NO_WARNINGS /MP /Gw /Gy)
     add_compile_definitions(UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+    add_link_options("$<$<CONFIG:Release>:/OPT:REF>" "$<$<CONFIG:Release>:/OPT:ICF>")
 else()
     add_compile_options(-Wall -Wextra -Werror -pthread)
 endif()
@@ -52,16 +69,20 @@ set(RADIUM_CORE_SOURCES
     src/security/antivirus_scanner.cpp
     src/crawler/site_grabber.cpp
     src/engine_ftp/ftp_client.cpp
+    src/engine_torrent/torrent_creator.cpp
     src/engine_torrent/torrent_parser.cpp
     src/engine_torrent/torrent_engine.cpp
+    src/core/update_manager.cpp
     src/engine_stream/rtsp_mms_adapter.cpp
     src/brisk_engine/segment_scheduler.cpp
     src/brisk_engine/http_client.cpp
     src/brisk_engine/http_download_engine.cpp
     src/engine_stream/nm3u8dl_re_adapter.cpp
+    src/engine_stream/video_extractor.cpp
     src/core/download_controller.cpp
     src/ipc/ipc_server.cpp
     src/ui/startup_log_dialog.cpp
+    src/ui/localization.cpp
     src/ui/win32_main_window.cpp
 )
 
@@ -102,10 +123,10 @@ add_custom_target(openidm_core_tests DEPENDS radium_core_tests)
 
 if(WIN32)
     set_target_properties(radium PROPERTIES WIN32_EXECUTABLE TRUE)
-    target_link_libraries(radium PRIVATE sqlite3 winhttp comctl32 crypt32 bcrypt shell32 ole32 user32 gdi32 dwmapi ws2_32 msimg32)
+    target_link_libraries(radium PRIVATE sqlite3 winhttp comctl32 crypt32 bcrypt shell32 ole32 oleacc winmm user32 gdi32 dwmapi ws2_32 msimg32 dbghelp)
     target_link_libraries(radium-nmh PRIVATE advapi32)
-    target_link_libraries(radium_unit_tests PRIVATE sqlite3 winhttp comctl32 crypt32 bcrypt shell32 ole32 user32 gdi32 dwmapi ws2_32 msimg32)
-    target_link_libraries(radium_core_tests PRIVATE sqlite3 winhttp comctl32 crypt32 bcrypt shell32 ole32 user32 gdi32 dwmapi ws2_32 msimg32)
+    target_link_libraries(radium_unit_tests PRIVATE sqlite3 winhttp comctl32 crypt32 bcrypt shell32 ole32 oleacc winmm user32 gdi32 dwmapi ws2_32 msimg32 dbghelp)
+    target_link_libraries(radium_core_tests PRIVATE sqlite3 winhttp comctl32 crypt32 bcrypt shell32 ole32 oleacc winmm user32 gdi32 dwmapi ws2_32 msimg32 dbghelp)
     target_link_libraries(N_m3u8DL-RE PRIVATE winhttp bcrypt crypt32)
 else()
     find_package(OpenSSL REQUIRED)
@@ -116,6 +137,18 @@ else()
     target_link_libraries(N_m3u8DL-RE PRIVATE OpenSSL::SSL OpenSSL::Crypto pthread)
 endif()
 
+foreach(target radium radium_unit_tests radium_core_tests)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/translations"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/translations/desktop.json"
+            "$<TARGET_FILE_DIR:${target}>/translations/desktop.json"
+        VERBATIM)
+endforeach()
+
 enable_testing()
 add_test(NAME RadiumCoreUnitTests COMMAND radium_core_tests)
 add_test(NAME RadiumCppUnitTests COMMAND radium_unit_tests)
+if(Python3_FOUND)
+    add_test(NAME RadiumVersionAndConfigValidation COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_config.py" --check)
+endif()

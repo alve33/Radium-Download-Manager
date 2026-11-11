@@ -1,4 +1,4 @@
-# Contributing to OpenIDM
+# Contributing to Radium Download Manager
 
 **Document Status:** Proposed Contribution Policy  
 **Last Reviewed:** 2026-10-16  

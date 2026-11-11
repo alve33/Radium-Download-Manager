@@ -56,12 +56,12 @@ def run_benchmarks(output_path: Path = None, verbose: bool = True) -> dict:
     }
 
     output_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    print(f"[Flux Benchmark] Saved benchmark metrics to: {output_path}")
+    print(f"[Radium Benchmark] Saved benchmark metrics to: {output_path}")
     return metrics
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Flux Download Manager Benchmark Execution and Metrics Persistence")
+    parser = argparse.ArgumentParser(description="Radium Download Manager Benchmark Execution and Metrics Persistence")
     parser.add_argument("--out", type=str, default=None, help="Target JSON output path")
     parser.add_argument("--quiet", action="store_true", help="Quiet output")
     args = parser.parse_args()
@@ -70,10 +70,10 @@ def main():
     metrics = run_benchmarks(out_p, verbose=not args.quiet)
 
     print("\n========================================================")
-    print("             FLUX DOWNLOAD MANAGER BENCHMARK SUMMARY    ")
+    print("             RADIUM DOWNLOAD MANAGER BENCHMARK SUMMARY  ")
     print("========================================================")
     print(f"Platform:               {metrics['host_platform']}")
-    print(f"Product:                {metrics.get('product_name', 'Flux Download Manager')} v{metrics.get('version', '0.3.0')}")
+    print(f"Product:                {metrics.get('product_name', 'Radium Download Manager')} v{metrics.get('version', '0.3.0')}")
     print(f"Combined Core Binaries: {metrics['combined_core_binaries_kb']} KB (Budget: <= 3072 KB)")
     print(f"Cold Startup Latency:   {metrics['cold_startup_list_median_ms']} ms (Budget: <= 150 ms)")
     print(f"Idle Daemon RSS:        {metrics['idle_daemon_rss_mb']} MB (Budget: <= 25 MB)")

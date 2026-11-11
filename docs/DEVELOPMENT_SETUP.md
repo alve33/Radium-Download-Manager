@@ -1,5 +1,9 @@
 # Developer Environment Setup Guide
 
+## Localization resources
+
+The desktop build copies `translations/desktop.json` to the executable output directory. Keep this UTF-8 resource available when running `radium.exe` outside the build tree. The portable staging script preserves the catalog and always names the main app `dist\Radium.exe`; close a running copy before staging so the build does not interrupt downloads or create an alternate executable name. Missing catalog files safely fall back to English, though only selected UI strings are currently translated.
+
 **Document Status:** Active Setup Guide (`v1.0.0`)  
 **Last Reviewed:** 2026-11-04  
 **Scope:** Preparing a clean Windows 11 `x64` workstation to build, debug, and test Radium Download Manager.  

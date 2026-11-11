@@ -10,6 +10,7 @@
 
 #include "common/crypto_utils.hpp"
 #include "common/path_sanitizer.hpp"
+#include "common/version.hpp"
 #include "brisk_engine/http_client.hpp"
 
 namespace openidm::torrent {
@@ -119,7 +120,7 @@ Result<TorrentInfo> TorrentParser::ParseTorrentFile(const std::filesystem::path&
         std::string torrent_bytes;
         std::atomic<bool> cancel{false};
         std::map<std::string, std::string> headers = {
-            {"User-Agent", "Radium/1.0.0 (BitTorrent; Win64)"}
+            {"User-Agent", "Radium/" + std::string(RADIUM_VERSION_STRING) + " (BitTorrent; Win64)"}
         };
         auto get_res = brisk::HttpClient::PerformGet(
             path_str,

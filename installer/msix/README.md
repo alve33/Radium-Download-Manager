@@ -68,7 +68,7 @@ Radium Download Manager communicates with browser extensions via `stdio` Native 
    Standard desktop browsers look for native messaging host manifests under `HKCU\Software\[Browser]\NativeMessagingHosts`.
    Radium includes full-trust desktop execution capability (`runFullTrust`), which allows it to access user registry keys if needed. Additionally, `scripts/register-native-messaging.ps1` can be executed to register manifests across Chrome, Brave, and Firefox.
 3. **IPC and Named Pipes:**
-   MSIX containerization with `runFullTrust` does not isolate Win32 named pipes (`\\.\pipe\OpenIDM_IPC_*`) or single-instance mutexes (`Local\Radium_SingleInstance`), ensuring instant communication between `radium-nmh.exe` and `radium.exe`.
+   MSIX containerization with `runFullTrust` does not isolate Win32 named pipes (`\\.\pipe\Radium_IPC_*` and legacy fallback `\\.\pipe\OpenIDM_IPC_*`) or single-instance mutexes (`Local\Radium_SingleInstance`), ensuring instant communication between `radium-nmh.exe` and `radium.exe`.
 4. **Data Persistence:**
    Radium stores user configuration, task state, and SQLite databases in `%LOCALAPPDATA%\Radium Download Manager\state.db` and downloads into `%USERPROFILE%\Downloads\Radium`. These paths remain fully accessible and persist across package updates and clean uninstalls.
 

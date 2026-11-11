@@ -173,15 +173,23 @@ public:
         }
     }
 
+    void Unlock() {
+        if (!m_lock.owns_lock()) return;
+        if (m_enabled) {
+            const auto released = std::chrono::steady_clock::now();
+            const uint64_t hold_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(released - m_acquired).count());
+            m_lock.unlock();
+            EmitRuntimeTrace("{\"event\":\"lock_timing\",\"lock\":\"" + std::string(m_lock_name) +
+                "\",\"operation\":\"" + m_operation + "\",\"request_id\":" + std::to_string(m_request_id) +
+                ",\"worker\":" + std::to_string(m_worker) + ",\"segment\":" + std::to_string(m_segment) +
+                ",\"wait_us\":" + std::to_string(m_wait_us) + ",\"hold_us\":" + std::to_string(hold_us) + "}");
+        } else {
+            m_lock.unlock();
+        }
+    }
+
     ~RuntimeTimedLock() {
-        if (!m_enabled) return;
-        const auto released = std::chrono::steady_clock::now();
-        const uint64_t hold_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(released - m_acquired).count());
-        m_lock.unlock();
-        EmitRuntimeTrace("{\"event\":\"lock_timing\",\"lock\":\"" + std::string(m_lock_name) +
-            "\",\"operation\":\"" + m_operation + "\",\"request_id\":" + std::to_string(m_request_id) +
-            ",\"worker\":" + std::to_string(m_worker) + ",\"segment\":" + std::to_string(m_segment) +
-            ",\"wait_us\":" + std::to_string(m_wait_us) + ",\"hold_us\":" + std::to_string(hold_us) + "}");
+        Unlock();
     }
 
     RuntimeTimedLock(const RuntimeTimedLock&) = delete;
@@ -299,7 +307,45 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     auto transfer_start_tp = std::chrono::steady_clock::now();
     auto last_progress_tp = transfer_start_tp;
     uint64_t last_progress_bytes = 0;
+    std::mutex progress_mu;
+    auto seg_last_progress_tp = transfer_start_tp;
+    uint64_t seg_last_progress_bytes = 0;
+    bool seg_first_progress_emitted = false;
     uint32_t max_conns = std::clamp(task.max_connections > 0 ? task.max_connections : 8u, 1u, 32u);
+
+    auto emit_segmented_progress_if_due = [&](bool force_first) {
+        if (!on_progress || !scheduler) return;
+        std::unique_lock<std::mutex> plk(progress_mu, std::try_to_lock);
+        if (!plk.owns_lock()) return;
+        auto now = std::chrono::steady_clock::now();
+        auto diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - seg_last_progress_tp).count();
+        if (!force_first && seg_first_progress_emitted && diff_ms < 80) {
+            return;
+        }
+        uint64_t dl = scheduler->TotalDownloadedBytes();
+        if (dl == 0) return;
+        seg_first_progress_emitted = true;
+        uint64_t delta_bytes = (dl >= seg_last_progress_bytes) ? (dl - seg_last_progress_bytes) : 0;
+        double dt_sec = std::max<double>(0.02, static_cast<double>(std::max<int64_t>(1, diff_ms)) / 1000.0);
+        uint64_t physical_bps = static_cast<uint64_t>(static_cast<double>(delta_bytes) / dt_sec);
+        seg_last_progress_bytes = dl;
+        seg_last_progress_tp = now;
+
+        EngineProgress ep;
+        ep.task_id = task.task_id;
+        ep.state = TaskState::kDownloading;
+        ep.downloaded_bytes = dl;
+        ep.total_bytes = task.total_bytes;
+        ep.speed_bps = physical_bps;
+        ep.range_supported = true;
+        ep.resolved_filename = task.file_name;
+        ep.etag = task.etag;
+        ep.last_modified = task.last_modified;
+        ep.status_detail = "Downloading (" + std::to_string(std::max<size_t>(1, scheduler->ActiveWorkerCount())) + " active connections)";
+        ep.segments = scheduler->GetSnapshots();
+        plk.unlock();
+        on_progress(ep);
+    };
 
     // Secondary worker function (Workers 1..N-1)
     auto worker_fn = [&](uint32_t worker_idx) {
@@ -543,15 +589,20 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
                         seg->current_offset.fetch_add(to_write);
                         file_bytes_written += static_cast<uint64_t>(to_write);
-                        if (to_write < len || seg->current_offset.load() > seg->end_offset.load()) {
+
+                        const bool should_terminate_chunk = (to_write < len || seg->current_offset.load() > seg->end_offset.load());
+                        if (should_terminate_chunk) {
                             cancel_reason = seg->end_offset.load() < end ? "range_split" : "segment_complete";
                             if (seg->current_offset.load() > seg->end_offset.load()) {
                                 seg->completed.store(true);
                             }
                             req_cancel.store(true);
-                            return false;
                         }
-                        return true;
+
+                        // Unlock segment write lock before metrics/return
+                        write_lk.Unlock();
+                        emit_segmented_progress_if_due(false);
+                        return !should_terminate_chunk;
                     },
                     m_cfg.net_opts);
 
@@ -924,6 +975,23 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     if (seg0) {
                         seg0->active_worker.store(true);
                     }
+                    task.status_detail = "Downloading (" + std::to_string(max_conns) + " connections)";
+                    task.segments = scheduler->GetSnapshots();
+                    if (on_progress) {
+                        EngineProgress ep;
+                        ep.task_id = task.task_id;
+                        ep.state = TaskState::kDownloading;
+                        ep.downloaded_bytes = scheduler->TotalDownloadedBytes();
+                        ep.total_bytes = task.total_bytes;
+                        ep.speed_bps = 0;
+                        ep.range_supported = true;
+                        ep.resolved_filename = task.file_name;
+                        ep.etag = task.etag;
+                        ep.last_modified = task.last_modified;
+                        ep.status_detail = task.status_detail;
+                        ep.segments = task.segments;
+                        on_progress(ep);
+                    }
                     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                         task.task_id, "Worker initialization begins", "Spawning " + std::to_string(max_conns) + " download worker connections");
 
@@ -933,6 +1001,21 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     }
                 } else {
                     is_segmented = false;
+                    task.status_detail = "Downloading (1 connection)";
+                    if (on_progress) {
+                        EngineProgress ep;
+                        ep.task_id = task.task_id;
+                        ep.state = TaskState::kDownloading;
+                        ep.downloaded_bytes = 0;
+                        ep.total_bytes = task.total_bytes;
+                        ep.speed_bps = 0;
+                        ep.range_supported = false;
+                        ep.resolved_filename = task.file_name;
+                        ep.etag = task.etag;
+                        ep.last_modified = task.last_modified;
+                        ep.status_detail = task.status_detail;
+                        on_progress(ep);
+                    }
                 }
 
                 return HeaderAction::kContinue;
@@ -974,19 +1057,27 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         req_cancel.store(true);
                         return false;
                     }
+                    bool is_first_w0 = false;
                     if (!first_write_recorded.exchange(true)) {
+                        is_first_w0 = true;
                         diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                             task.task_id, "First bytes written to disk",
                             "Worker 0 committed " + std::to_string(to_write) + " bytes at offset " + std::to_string(write_pos));
                     }
                     seg0->current_offset.fetch_add(to_write);
-                    if (seg0->current_offset.load() > seg0->end_offset.load()) {
+                    const bool seg0_done = (seg0->current_offset.load() > seg0->end_offset.load());
+                    if (seg0_done) {
                         seg0->completed.store(true);
                         seg0->active_worker.store(false);
                         req_cancel.store(true);
+                    }
+                    write_lk.Unlock();
+                    emit_segmented_progress_if_due(is_first_w0);
+                    if (seg0_done) {
                         return false;
                     }
                 } else {
+                    bool is_first_single = false;
                     if (!part_file.PWrite(data, len, single_stream_written)) {
                         std::lock_guard<std::mutex> lk(err_mu);
                         fatal_error = Error{"ERR_DISK_FULL", "Disk write failed in single stream", false, true};
@@ -995,6 +1086,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         return false;
                     }
                     if (!first_write_recorded.exchange(true)) {
+                        is_first_single = true;
                         diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                             task.task_id, "First bytes written to disk",
                             "Single stream committed " + std::to_string(len) + " bytes at offset " + std::to_string(single_stream_written));
@@ -1004,14 +1096,11 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
                     auto now = std::chrono::steady_clock::now();
                     auto diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_progress_tp).count();
-                    if (diff_ms >= 100 && on_progress) {
-                        uint64_t interval_bytes = single_stream_written - last_progress_bytes;
-                        uint64_t inst_speed = (interval_bytes * 1000ULL) / std::max<int64_t>(1, diff_ms);
-                        if (single_stream_speed == 0) {
-                            single_stream_speed = inst_speed;
-                        } else {
-                            single_stream_speed = static_cast<uint64_t>(0.25 * static_cast<double>(inst_speed) + 0.75 * static_cast<double>(single_stream_speed));
-                        }
+                    if ((is_first_single || diff_ms >= 80) && on_progress) {
+                        uint64_t delta_bytes = (single_stream_written >= last_progress_bytes) ? (single_stream_written - last_progress_bytes) : 0;
+                        double dt_sec = std::max<double>(0.02, static_cast<double>(std::max<int64_t>(1, diff_ms)) / 1000.0);
+                        uint64_t physical_bps = static_cast<uint64_t>(static_cast<double>(delta_bytes) / dt_sec);
+                        single_stream_speed = physical_bps;
                         last_progress_bytes = single_stream_written;
                         last_progress_tp = now;
 
@@ -1086,12 +1175,9 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 task.segments = scheduler->GetSnapshots();
                 task.status_detail = "Downloading (" + std::to_string(scheduler->ActiveWorkerCount()) + " active connections)";
                 uint64_t delta_bytes = (dl >= last_sp_bytes) ? (dl - last_sp_bytes) : 0;
-                uint64_t inst_speed = (delta_bytes * 1000ULL) / std::max<int64_t>(1, diff_ms);
-                if (current_speed == 0) {
-                    current_speed = inst_speed;
-                } else {
-                    current_speed = static_cast<uint64_t>(0.25 * static_cast<double>(inst_speed) + 0.75 * static_cast<double>(current_speed));
-                }
+                double dt_sec = std::max<double>(0.05, static_cast<double>(diff_ms) / 1000.0);
+                uint64_t physical_bps = static_cast<uint64_t>(static_cast<double>(delta_bytes) / dt_sec);
+                current_speed = physical_bps;
                 last_sp_bytes = dl;
                 last_sp_tp = now;
 
@@ -1106,6 +1192,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     ep.resolved_filename = task.file_name;
                     ep.etag = task.etag;
                     ep.last_modified = task.last_modified;
+                    ep.status_detail = task.status_detail;
                     ep.segments = task.segments;
                     on_progress(ep);
                 }
@@ -1183,6 +1270,26 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
             task.state = TaskState::kFailed;
             task.error_code = "ERR_STORAGE_PART_CORRUPTED";
             task.error_message = "SHA-256 mismatch: expected " + expected_lower + ", got " + actual_sha;
+            task.status_detail = task.error_message;
+            return Result<std::filesystem::path>::Err("ERR_STORAGE_PART_CORRUPTED", task.error_message, false, true);
+        }
+    }
+    if (!task.expected_md5.empty()) {
+        auto md5_res = CryptoUtils::ComputeFileMd5Hex(part_path);
+        if (!md5_res.ok()) {
+            task.state = TaskState::kFailed;
+            task.error_code = md5_res.error->code;
+            task.error_message = md5_res.error->message;
+            task.status_detail = task.error_message;
+            return Result<std::filesystem::path>::Err(md5_res.error->code, md5_res.error->message);
+        }
+        std::string actual_md5 = *md5_res.value;
+        std::string expected_md5_lower = task.expected_md5;
+        for (char& c : expected_md5_lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (actual_md5 != expected_md5_lower) {
+            task.state = TaskState::kFailed;
+            task.error_code = "ERR_STORAGE_PART_CORRUPTED";
+            task.error_message = "MD5 mismatch: expected " + expected_md5_lower + ", got " + actual_md5;
             task.status_detail = task.error_message;
             return Result<std::filesystem::path>::Err("ERR_STORAGE_PART_CORRUPTED", task.error_message, false, true);
         }

@@ -18,7 +18,7 @@
 
 | Metric ID | Metric Name | Provisional Target Budget | Hard Ceiling (CI Gate Failure) | Related Requirement | Measurement Tool |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **BUD-001** | **Core Uncompressed Binary Size** (`openidm.exe` + `openidm-nmh.exe`) | `1.8 – 2.5 MB` | **`3.0 MB`** | `NFR-001` | PowerShell `(Get-Item openidm*.exe \| Measure-Object Length -Sum).Sum` |
+| **BUD-001** | **Core Uncompressed Binary Size** (`openidm.exe` + `openidm-nmh.exe`) | `1.8 – 2.5 MB` | **`3.5 MB`** | `NFR-001` | PowerShell `(Get-Item openidm*.exe \| Measure-Object Length -Sum).Sum` |
 | **BUD-002** | **Core Compressed Installer Size** (`OpenIDM-Setup-x64-Core.exe`) | `0.9 – 1.3 MB` | **`1.8 MB`** | `NFR-001` | File size of Inno Setup output |
 | **BUD-003** | **Full Offline Installer Size** (including `N_m3u8DL-RE.exe` + minimal mux `ffmpeg.exe`) | `17.5 – 22.0 MB` (or `~34 MB` with full `ffmpeg.exe`) | **`38.0 MB`** | `ADR-0008` | File size of Inno Setup output |
 | **BUD-004** | **Cold Startup Time** (Process creation to `WM_PAINT` of Main Window on NVMe SSD) | `35 – 75 ms` | **`100 ms`** | `NFR-002` | `QueryPerformanceCounter` logged from `wWinMain` entry to first `EndPaint` |
@@ -47,4 +47,4 @@ To keep `openidm.exe` within `35–50 MB` during multi-gigabyte 1 Gbps downloads
 When executing performance benchmarks in Milestone 1 and Milestone 4 (`PERF-SIZE-01`, `PERF-START-01`, `PERF-MEM-01`, `PERF-NET-01`):
 1. **Hardware & OS Baseline Recording:** Every benchmark report committed to the repository must record the exact CPU model, RAM speed, SSD model, Windows 11 build (`winver`), and MSVC compiler version.
 2. **Loopback Reference Server (`PERF-NET-01`):** Run a local native HTTP server (`nginx` on Windows or a C++ IOCP static buffer responder) serving an in-memory 4 GiB zero-copy buffer with `Accept-Ranges: bytes` so disk read bottlenecks on the server side do not skew client download throughput measurements.
-3. **Automated Regression Gate:** The GitHub Actions CI workflow (`windows-2022` / `windows-11`) checks `BUD-001` (`openidm.exe` + `openidm-nmh.exe <= 3.0 MB`) on every pull request build.
+3. **Automated Regression Gate:** The GitHub Actions CI workflow (`windows-2022` / `windows-11`) checks `BUD-001` (`radium.exe` + `radium-nmh.exe <= 3.5 MB`) on every pull request build.

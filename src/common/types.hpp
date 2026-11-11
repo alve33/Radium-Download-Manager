@@ -147,7 +147,7 @@ struct StreamSelectionOptions {
     std::string audio_filter{"best"};     // -sa argument (default to best to avoid multi-language audio bloat)
     std::string subtitle_filter{"all"};   // -ss argument
     std::string output_format{"mp4"};     // "mp4" or "mkv"
-    uint32_t thread_count{8};
+    uint32_t thread_count{32};
     bool concurrent_download{true};       // -mt
     std::string custom_hls_key_hex;       // Optional user-supplied AES-128 key
     std::string cached_manifest_body;     // Optional cached manifest from Cat Catch Deep Search
@@ -218,6 +218,7 @@ struct TaskModel {
     size_t current_url_index{0};                      // Current mirror index attempted
     StreamSelectionOptions stream_options;
     std::string expected_sha256;
+    std::string expected_md5;
     std::string error_code;
     std::string error_message;
     int64_t created_at_ms{0};
@@ -226,6 +227,9 @@ struct TaskModel {
     std::vector<Segment> segments;
     std::vector<std::string> torrent_file_paths;
     std::vector<uint8_t> torrent_file_selection;
+    std::string torrent_fastresume_bitfield;
+    int64_t torrent_fastresume_mtime{0};
+    uint64_t torrent_fastresume_filesize{0};
 };
 
 struct QueueConfig {
@@ -240,7 +244,8 @@ struct QueueConfig {
 };
 
 struct AppSettings {
-    std::string theme{"coral_dark"}; // Radium Coral Charcoal identity ("coral_dark")
+    std::string theme{"system"}; // Follow the current Windows app theme until explicitly overridden.
+    std::string language{"en"};  // Application interface language; English is the new-install default.
     uint32_t max_concurrent_tasks{3};
     uint64_t speed_limit_bps{0};
     uint32_t default_connections_per_task{8};
@@ -256,6 +261,7 @@ struct AppSettings {
     bool close_to_tray{true};
     bool start_minimized{false};
     bool reduced_motion{false};
+    bool sound_cues_enabled{true};
     bool show_completion_notification{true};
     bool av_strict_mode{false};                       // Fail task on scanner error/timeout rather than marking completed
 
@@ -280,6 +286,7 @@ struct AppSettings {
 
     bool operator==(const AppSettings& other) const {
         return theme == other.theme &&
+               language == other.language &&
                max_concurrent_tasks == other.max_concurrent_tasks &&
                speed_limit_bps == other.speed_limit_bps &&
                default_connections_per_task == other.default_connections_per_task &&

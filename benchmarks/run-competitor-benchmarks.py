@@ -25,7 +25,12 @@ SCRIPTS_DIR = ROOT / "scripts"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Radium Download Manager v1.0.0 Competitor Benchmark Harness")
+    app_version = "1.0.0"
+    version_file = ROOT / "VERSION"
+    if version_file.exists():
+        app_version = version_file.read_text(encoding="utf-8").strip()
+
+    parser = argparse.ArgumentParser(description=f"Radium Download Manager v{app_version} Competitor Benchmark Harness")
     parser.add_argument("--out-dir", type=str, default=None, help="Output directory for reports (default: benchmarks/)")
     parser.add_argument("--extended", action="store_true", help="Run 5 trials instead of 3")
     parser.add_argument("--radium-bin", dest="radium_bin", type=str, default=None, help="Path to radium.exe")
@@ -46,7 +51,7 @@ def main():
     if args.radium_bin:
         cmd.extend(["--radium-bin", args.radium_bin])
 
-    print("[Radium Benchmark] Launching Radium Download Manager v1.0.0 Competitor Benchmark Harness...")
+    print(f"[Radium Benchmark] Launching Radium Download Manager v{app_version} Competitor Benchmark Harness...")
     res = subprocess.run(cmd, cwd=str(ROOT))
     sys.exit(res.returncode)
 

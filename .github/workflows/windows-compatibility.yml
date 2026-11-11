@@ -46,10 +46,12 @@ jobs:
         id: version
         shell: powershell
         run: |
+          $versionFile = "VERSION"
           $ver = "1.0.0"
-          $cmakePath = "CMakeLists.txt"
-          if (Test-Path $cmakePath) {
-            $cmakeContent = Get-Content $cmakePath -Raw
+          if (Test-Path $versionFile) {
+            $ver = (Get-Content $versionFile -Raw).Trim()
+          } elseif (Test-Path "CMakeLists.txt") {
+            $cmakeContent = Get-Content "CMakeLists.txt" -Raw
             if ($cmakeContent -match 'project\s*\(\s*Radium\s+VERSION\s+(\d+\.\d+\.\d+)') {
               $ver = $Matches[1]
             }

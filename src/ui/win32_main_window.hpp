@@ -53,7 +53,7 @@ enum class ToolbarActionId {
     kOpenFolder,
     kSettings,
     kStartAll,
-    kPauseAll
+    kPauseAll,
 };
 
 enum class SettingsCategory {
@@ -86,6 +86,7 @@ enum class HitTargetType {
     kTaskRowActionButton,
     kSettingsCategoryTab,
     kSettingsItemControl,
+    kThemeToggleButton,
     kSettingsApplyButton,
     kSettingsCancelButton,
     kSettingsRestoreDefaultsButton,
@@ -100,6 +101,7 @@ enum class HitTargetType {
     kRowCheckbox,
     kRowInlineAction,
     kDetailsActionButton,
+    kSidebarLanguageButton,
     kSidebarSettingsButton
 };
 
@@ -170,6 +172,7 @@ struct WindowLayoutGeometry {
     RectI sort_dropdown_rect;
     RectI filter_dropdown_rect;
     RectI add_download_button_rect;
+    RectI theme_button_rect;
     RectI settings_button_rect;
     RectI search_sliders_rect;
     RectI status_toggle_off_rect;
@@ -178,6 +181,7 @@ struct WindowLayoutGeometry {
     std::vector<TableColumnLayout> table_columns;
     std::vector<TaskRowLayout> task_rows;
     int task_row_height{0};
+    RectI sidebar_language_rect;
     RectI sidebar_settings_rect;
     std::vector<DetailsActionButtonLayout> details_action_buttons;
 };
@@ -545,6 +549,8 @@ public:
     void ActionSetBrowserCapture(bool enabled);
     Result<void> ActionSaveSettings(const AppSettings& settings);
     Result<AppSettings> ActionRestoreDefaultSettings();
+    Result<void> ToggleTheme();
+    void RefreshSystemTheme(bool os_prefers_light);
 
     Result<void> ActionSetTaskSpeedLimit(const std::string& task_id, uint64_t bps);
     Result<void> ActionAddAlternateUrl(const std::string& task_id, const std::string& alt_url);
@@ -625,7 +631,7 @@ private:
 #ifdef _WIN32
 void ShowDeleteConfirmationDialogWin32(HWND hwnd_parent, DesktopView& view, DownloadController& controller);
 bool ShowSimpleInputDialogWin32(HWND hwnd_parent, const std::wstring& title, const std::wstring& prompt, const std::wstring& initial_value, std::wstring& out_value);
-void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller);
+void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller, const ThemePalette& palette);
 void CopyTextToClipboardWin32(HWND hwnd, const std::string& text);
 #endif
 

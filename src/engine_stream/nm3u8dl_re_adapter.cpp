@@ -1,6 +1,7 @@
 #include "engine_stream/youtube_stream_prewarmer.hpp"
 // SPDX-License-Identifier: Apache-2.0
 #include "engine_stream/nm3u8dl_re_adapter.hpp"
+#include "engine_stream/video_extractor.hpp"
 
 #include "brisk_engine/http_client.hpp"
 #include "common/json_mini.hpp"
@@ -9,12 +10,16 @@
 #include "common/startup_diagnostic.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <mutex>
+#include <optional>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -57,6 +62,27 @@ std::string StripGooglevideoRangeParams(const std::string& url) {
     if (qpos == std::string::npos) return url;
     std::string base = url.substr(0, qpos);
     std::string query = url.substr(qpos + 1);
+
+    // Parse signed parameter keys from sparams and lsparams so we never strip signed fields
+    std::set<std::string> signed_params;
+    auto extract_signed = [&](const std::string& key_name) {
+        auto p = query.find(key_name + "=");
+        if (p != std::string::npos) {
+            auto val_start = p + key_name.size() + 1;
+            auto val_end = query.find('&', val_start);
+            std::string raw_val = (val_end == std::string::npos)
+                ? query.substr(val_start)
+                : query.substr(val_start, val_end - val_start);
+            std::istringstream vss(raw_val);
+            std::string item;
+            while (std::getline(vss, item, ',')) {
+                if (!item.empty()) signed_params.insert(item);
+            }
+        }
+    };
+    extract_signed("sparams");
+    extract_signed("lsparams");
+
     std::ostringstream kept;
     bool first = true;
     std::istringstream qss(query);
@@ -65,8 +91,11 @@ std::string StripGooglevideoRangeParams(const std::string& url) {
         if (pair.empty()) continue;
         auto eq = pair.find('=');
         std::string key = (eq == std::string::npos) ? pair : pair.substr(0, eq);
-        if (key == "range" || key == "rn" || key == "rbuf" || key == "ump" || key == "srfvp" || key == "alr" || key == "cpn") {
-            continue;
+        // Strip chunk/range/buffer/alr/ump parameters unless explicitly covered by the signature
+        if (key == "range" || key == "rn" || key == "rbuf" || key == "ump" || key == "srfvp" || key == "alr") {
+            if (signed_params.find(key) == signed_params.end()) {
+                continue;
+            }
         }
         if (!first) kept << "&";
         kept << pair;
@@ -74,6 +103,12 @@ std::string StripGooglevideoRangeParams(const std::string& url) {
     }
     std::string qs = kept.str();
     return qs.empty() ? base : (base + "?" + qs);
+}
+
+bool IsUmpChunkUrl(const std::string& u) {
+    return u.find("sabr=1") != std::string::npos ||
+           u.find("ump=1") != std::string::npos ||
+           u.find("srfvp=") != std::string::npos;
 }
 
 std::string ExtractBalancedJsonObject(const std::string& s, size_t start_pos) {
@@ -989,6 +1024,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::WriteNetscapeCookieFile(
     }
 
     std::string primary_domain = ".youtube.com";
+    std::string root_domain;
     if (!domain_hint.empty()) {
         std::string d = domain_hint;
         auto ppos = d.find("://");
@@ -998,7 +1034,13 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::WriteNetscapeCookieFile(
         if (d.find("youtube.com") != std::string::npos || d.find("youtu.be") != std::string::npos) {
             primary_domain = ".youtube.com";
         } else if (!d.empty()) {
-            primary_domain = (d.front() == '.') ? d : ("." + d);
+            std::string reg = engine_stream::VideoExtractionManager::ExtractRegistrableDomain(d);
+            if (!reg.empty()) {
+                root_domain = "." + reg;
+                primary_domain = root_domain;
+            } else {
+                primary_domain = (d.front() == '.') ? d : ("." + d);
+            }
         }
     }
 
@@ -1456,7 +1498,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
     rsp_lines.push_back("--tmp-dir \"" + EscapeRspArg(task_tmp_dir.string()) + "\"");
     rsp_lines.push_back("--save-dir \"" + EscapeRspArg(task.save_dir) + "\"");
     rsp_lines.push_back("--save-name \"" + EscapeRspArg(temp_save_name) + "\"");
-    rsp_lines.push_back("--thread-count " + std::to_string(std::clamp(task.stream_options.thread_count, 1u, 32u)));
+    rsp_lines.push_back("--thread-count " + std::to_string(std::clamp(task.stream_options.thread_count, 1u, 64u)));
     rsp_lines.push_back("--download-retry-count 3");
     rsp_lines.push_back("--http-request-timeout 15");
     if (task.stream_options.concurrent_download) {
@@ -1563,6 +1605,11 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
                 sp.status_line = task.status_detail;
                 on_progress(sp);
             }
+        }
+        if (line.find("Done: ") != std::string::npos ||
+            line.find("Muxing") != std::string::npos ||
+            line.find("Merging") != std::string::npos) {
+            last_error_line.clear();
         }
         if (line.find("Muxing") != std::string::npos || line.find("Merging") != std::string::npos) {
             task.state = TaskState::kMuxing;
@@ -1833,19 +1880,49 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
 
     std::filesystem::path muxed_output = std::filesystem::path(task.save_dir) / (temp_save_name + "." + fmt);
 
-    if (exit_code != 0 || !std::filesystem::exists(muxed_output, ec) ||
-        std::filesystem::file_size(muxed_output, ec) == 0 ||
-        !VerifyContainerMagicBytes(muxed_output, fmt)) {
+    // Fallback: If exact path doesn't exist, search task.save_dir for matching *.radium_mux.* output produced by the worker
+    if (!std::filesystem::exists(muxed_output, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(task.save_dir, ec)) {
+            if (entry.is_regular_file()) {
+                std::string fname = entry.path().filename().string();
+                if (fname.find(".radium_mux.") != std::string::npos &&
+                    entry.path().extension().string() == ("." + fmt) &&
+                    std::filesystem::file_size(entry.path(), ec) > 0) {
+                    muxed_output = entry.path();
+                    break;
+                }
+            }
+        }
+    }
+
+    bool output_valid = std::filesystem::exists(muxed_output, ec) &&
+                        std::filesystem::file_size(muxed_output, ec) > 0 &&
+                        VerifyContainerMagicBytes(muxed_output, fmt);
+
+    if (!output_valid) {
+        // Also check alternative containers in case FFmpeg muxed to mkv, webm, mp4, or ts
+        for (const auto& alt : {"mp4", "mkv", "webm", "m4a", "mov", "ts"}) {
+            if (std::filesystem::exists(muxed_output, ec) &&
+                std::filesystem::file_size(muxed_output, ec) > 0 &&
+                VerifyContainerMagicBytes(muxed_output, alt)) {
+                output_valid = true;
+                fmt = alt;
+                break;
+            }
+        }
+    }
+
+    if (!output_valid) {
         std::filesystem::remove(muxed_output, ec);
         task.state = TaskState::kFailed;
         if (last_error_line.find("DRM") != std::string::npos) {
             std::filesystem::remove_all(task_tmp_dir, ec);
             task.error_code = "ERR_STREAM_DRM_PROTECTED";
             task.error_message = last_error_line;
-        } else if (last_error_line.find("403") != std::string::npos ||
-                   last_error_line.find("Forbidden") != std::string::npos ||
-                   last_error_line.find("401") != std::string::npos ||
-                   last_error_line.find("Unauthorized") != std::string::npos) {
+        } else if (exit_code != 0 && (last_error_line.find("403") != std::string::npos ||
+                                      last_error_line.find("Forbidden") != std::string::npos ||
+                                      last_error_line.find("401") != std::string::npos ||
+                                      last_error_line.find("Unauthorized") != std::string::npos)) {
             task.error_code = "ERR_STREAM_URL_EXPIRED";
             task.error_message = "Stream manifest URL expired (HTTP 403 Forbidden). Please refresh the URL in Radium to resume.";
         } else {
@@ -1854,6 +1931,12 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
         }
         task.status_detail = task.error_message;
         return Result<std::filesystem::path>::Err(task.error_code, task.error_message, false, true);
+    }
+
+    if (exit_code != 0) {
+        OPENIDM_LOG_INFO("Nm3u8dlAdapter", "Worker exited with code " + std::to_string(exit_code) +
+                         " but output container was successfully produced and verified: " +
+                         muxed_output.string());
     }
 
     task.state = TaskState::kVerifying;
@@ -2087,6 +2170,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
     int selected_width = 0;
     int selected_height = 0;
     std::string selected_resolution;
+    bool used_cached_quality_fallback = false;
 
     if (!task.stream_options.cached_manifest_body.empty() &&
         (task.stream_options.cached_manifest_body.front() == '{' || task.stream_options.cached_manifest_body.front() == '[')) {
@@ -2128,6 +2212,68 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                                 requires_cipher = true;
                             }
                             break;
+                        }
+                    }
+                }
+
+                // The extension can have a usable direct URL for a different
+                // quality even when the requested entry still needs signature
+                // deciphering. Prefer that cached URL over a cold yt-dlp run;
+                // keep the requested format whenever it was directly usable.
+                if ((video_url.empty() || requires_cipher) && root["qualities"].is_array()) {
+                    const json::Value* fallback_quality = nullptr;
+                    int fallback_height = 0;
+                    bool fallback_is_over_target = false;
+                    for (const auto& q : root["qualities"].as_array()) {
+                        const bool audio_only = q["isAudioOnly"].as_bool(false);
+                        if (wants_audio_only != audio_only) continue;
+                        if (q["requiresCipherExtraction"].as_bool(false)) continue;
+
+                        std::string q_video = StripGooglevideoRangeParams(q["videoUrl"].as_string());
+                        std::string q_audio = StripGooglevideoRangeParams(q["pairedAudioUrl"].as_string());
+                        if (q_video.find("googlevideo.com") == std::string::npos ||
+                            q_video.find("/videoplayback") == std::string::npos) continue;
+                        if (q["requiresAudioMux"].as_bool(false) &&
+                            (q_audio.find("googlevideo.com") == std::string::npos ||
+                             q_audio.find("/videoplayback") == std::string::npos)) continue;
+
+                        int q_height = static_cast<int>(q["height"].as_int64(0));
+                        if (q_height <= 0) {
+                            std::smatch q_height_match;
+                            const std::string q_resolution = q["resolution"].as_string();
+                            static const std::regex kQualityHeightRe(R"((\d{3,4})p?)");
+                            if (std::regex_search(q_resolution, q_height_match, kQualityHeightRe)) {
+                                q_height = std::stoi(q_height_match[1].str());
+                            }
+                        }
+                        if (!wants_audio_only && q_height <= 0) continue;
+
+                        const bool is_over_target = target_height > 0 && q_height > target_height;
+                        const bool is_better = !fallback_quality ||
+                            (target_height <= 0 && q_height > fallback_height) ||
+                            (target_height > 0 && fallback_is_over_target && !is_over_target) ||
+                            (target_height > 0 && fallback_is_over_target == is_over_target &&
+                                (is_over_target ? q_height < fallback_height : q_height > fallback_height));
+                        if (is_better) {
+                            fallback_quality = &q;
+                            fallback_height = q_height;
+                            fallback_is_over_target = is_over_target;
+                        }
+                    }
+
+                    if (fallback_quality) {
+                        video_url = StripGooglevideoRangeParams((*fallback_quality)["videoUrl"].as_string());
+                        audio_url = StripGooglevideoRangeParams((*fallback_quality)["pairedAudioUrl"].as_string());
+                        selected_itag = static_cast<int>((*fallback_quality)["itag"].as_int64(0));
+                        selected_width = static_cast<int>((*fallback_quality)["width"].as_int64(0));
+                        selected_height = fallback_height;
+                        selected_resolution = (*fallback_quality)["resolution"].as_string();
+                        requires_audio_mux = (*fallback_quality)["requiresAudioMux"].as_bool(!audio_url.empty());
+                        requires_cipher = false;
+                        used_cached_quality_fallback = true;
+                        if (target_height > 0 && fallback_height != target_height) {
+                            OPENIDM_LOG_WARN("Nm3u8dlAdapter", "Requested YouTube height " + std::to_string(target_height) +
+                                "p is unavailable as a direct URL; using cached " + selected_resolution + " quality instead of yt-dlp extraction");
                         }
                     }
                 }
@@ -2188,7 +2334,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     }
                 }
                 if (root["requiresCipherExtraction"].as_bool(false) && video_url.empty()) requires_cipher = true;
-                if (root["requiresAudioMux"].as_bool(false) && !wants_audio_only) requires_audio_mux = true;
+                if (!used_cached_quality_fallback && root["requiresAudioMux"].as_bool(false) && !wants_audio_only) requires_audio_mux = true;
             }
         } catch (...) {}
     }
@@ -2197,8 +2343,11 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
         video_url = StripGooglevideoRangeParams(task.url);
     }
 
-    // 2. Priority 1: Check non-blocking prewarmer cache lookup via GetDirectUrls (<0.1 ms)
-    if (video_url.empty() || requires_cipher) {
+    // 2. Use an already-resolved browser URL when present. The browser sees
+    // the active playback request, while the native prewarm cache may contain
+    // an older signed URL. Consult prewarm only when direct browser URLs are
+    // unavailable or still require cipher extraction or are UMP chunks (sabr=1).
+    if (video_url.empty() || requires_cipher || IsUmpChunkUrl(video_url)) {
         std::string pre_v, pre_a, pre_res, pre_cookies;
         std::string vid_to_lookup;
         std::smatch vid_m;
@@ -2211,13 +2360,25 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             vid_to_lookup = vid_m[1].str();
         }
         std::map<std::string, std::string> pre_v_headers, pre_a_headers;
-        if (!vid_to_lookup.empty() && YouTubeStreamPrewarmer::Instance().GetDirectUrls(vid_to_lookup, req_filter, pre_v, pre_a, pre_res, &pre_cookies, &pre_v_headers, &pre_a_headers)) {
+        if (!vid_to_lookup.empty() && YouTubeStreamPrewarmer::Instance().ResolveSync(
+                vid_to_lookup, watch_url, req_filter, pre_v, pre_a, pre_res,
+                &pre_cookies, &pre_v_headers, &pre_a_headers,
+                std::chrono::milliseconds(8000))) {
+            const bool replaced_page_url = !video_url.empty() && video_url != pre_v;
             video_url = pre_v;
             audio_url = pre_a;
             video_track_headers = pre_v_headers;
             audio_track_headers = pre_a_headers;
             requires_cipher = false;
             requires_audio_mux = !audio_url.empty();
+            if (!pre_res.empty()) {
+                selected_resolution = pre_res;
+                std::smatch pre_height_match;
+                static const std::regex kPrewarmHeightRe(R"((\d{3,4})p?)");
+                if (std::regex_search(pre_res, pre_height_match, kPrewarmHeightRe)) {
+                    selected_height = std::stoi(pre_height_match[1].str());
+                }
+            }
             if (combined_headers.find("Cookie") == combined_headers.end() && !pre_cookies.empty()) {
                 combined_headers["Cookie"] = pre_cookies;
             }
@@ -2228,7 +2389,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                 desired_final_name = base_stem + "." + fmt;
             }
             OPENIDM_LOG_INFO("Nm3u8dlAdapter", "Reused background pre-warmed direct URLs for vid=" + vid_to_lookup +
-                             " (res=" + pre_res + ") - bypassing page scraping & yt-dlp on click!");
+                             " (res=" + pre_res + (replaced_page_url ? ", replaced possibly expired page URL" : "") +
+                             ") - bypassing page scraping & yt-dlp on click!");
         }
     }
 
@@ -2269,12 +2431,10 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
     for (const auto& [k, v] : task.auth_headers) {
         combined_headers[k] = v;
     }
-    if (combined_headers.find("User-Agent") == combined_headers.end()) {
-        combined_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-    }
-    if (combined_headers.find("Referer") == combined_headers.end()) {
-        combined_headers["Referer"] = (!watch_url.empty() && watch_url.find("youtube.com") != std::string::npos) ? watch_url : "https://www.youtube.com/";
-    }
+    combined_headers = engine_stream::VideoExtractionManager::BuildSiteHeaders(
+        !watch_url.empty() ? watch_url : task.url,
+        task.page_url,
+        combined_headers);
 
     // 2. If watch_url is a webpage or player endpoint and video_url is not yet resolved, inspect page/player JSON
     auto extract_from_player_json = [&](const json::Value& root) -> Result<void> {
@@ -2424,7 +2584,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             combined_headers,
             std::nullopt,
             std::nullopt,
-            6000,
+            8000,
             m_cfg.allow_loopback_manifests,
             cancel_requested,
             [](const brisk::HttpResponseMeta&) { return true; },
@@ -2435,7 +2595,58 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             });
         if (get_res.ok() && !page_body.empty()) {
             std::string trimmed_page = TrimView(page_body);
-            if (!trimmed_page.empty() && trimmed_page.front() == '{') {
+            std::string platform = engine_stream::VideoExtractionManager::IdentifyPlatform(watch_url);
+            Result<engine_stream::ExtractionMetadata> native_meta = Result<engine_stream::ExtractionMetadata>::Err("ERR_NONE", "");
+            if (platform == "bilibili") {
+                native_meta = engine_stream::VideoExtractionManager::ParseBilibiliPlayInfoJson(page_body, watch_url);
+            } else if (platform == "facebook") {
+                native_meta = engine_stream::VideoExtractionManager::ParseFacebookVideoHtml(page_body, watch_url);
+            }
+            bool parsed_yt = false;
+            auto initial_yt_pos = page_body.find("ytInitialPlayerResponse");
+            if (initial_yt_pos != std::string::npos) {
+                std::string json_str = ExtractBalancedJsonObject(page_body, initial_yt_pos);
+                if (!json_str.empty()) {
+                    try {
+                        auto parsed_j = json::Parse(json_str);
+                        auto ex_res = extract_from_player_json(parsed_j);
+                        if (ex_res.ok()) {
+                            parsed_yt = true;
+                        }
+                    } catch (...) {}
+                }
+            }
+
+            if (!parsed_yt && !native_meta.ok()) {
+                native_meta = engine_stream::VideoExtractionManager::ParseHtml5PlayerPage(page_body, watch_url);
+            }
+
+            if (!parsed_yt && native_meta.ok() && native_meta.value && !native_meta.value->formats.empty()) {
+                auto best_fmt = engine_stream::VideoExtractionManager::Instance().SelectBestFormat(
+                    *native_meta.value, req_filter);
+                if (best_fmt.ok() && best_fmt.value) {
+                    const auto& bf = *best_fmt.value;
+                    if (bf.protocol == "m3u8_native" || bf.video_url.find(".m3u8") != std::string::npos) {
+                        hls_manifest_url = bf.video_url;
+                    } else if (bf.protocol == "http_dash_segments" || bf.video_url.find(".mpd") != std::string::npos) {
+                        dash_manifest_url = bf.video_url;
+                    } else {
+                        video_url = bf.video_url;
+                        audio_url = bf.audio_url;
+                        requires_audio_mux = bf.requires_merge && !audio_url.empty();
+                    }
+                    for (const auto& [hk, hv] : bf.required_headers) {
+                        combined_headers[hk] = hv;
+                    }
+                    if (!native_meta.value->title.empty() &&
+                        (task.file_name.empty() || task.file_name == "video.mp4" || task.file_name == "youtube_video.mp4" ||
+                         task.file_name == "watch.mp4" || task.file_name == "stream_output.mp4")) {
+                        base_stem = PathSanitizer::SanitizeFileName(native_meta.value->title);
+                        desired_final_name = base_stem + "." + fmt;
+                        task.file_name = desired_final_name;
+                    }
+                }
+            } else if (!parsed_yt && !trimmed_page.empty() && trimmed_page.front() == '{') {
                 try {
                     auto parsed_j = json::Parse(trimmed_page);
                     auto ex_res = extract_from_player_json(parsed_j);
@@ -2448,25 +2659,6 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                         return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
                     }
                 } catch (...) {}
-            } else {
-                auto yt_pos = page_body.find("ytInitialPlayerResponse");
-                if (yt_pos != std::string::npos) {
-                    std::string json_str = ExtractBalancedJsonObject(page_body, yt_pos);
-                    if (!json_str.empty()) {
-                        try {
-                            auto parsed_j = json::Parse(json_str);
-                            auto ex_res = extract_from_player_json(parsed_j);
-                            if (!ex_res.ok()) {
-                                std::filesystem::remove_all(task_tmp_dir, ec);
-                                task.state = TaskState::kFailed;
-                                task.error_code = ex_res.error->code;
-                                task.error_message = ex_res.error->message;
-                                task.status_detail = task.error_message;
-                                return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
-                            }
-                        } catch (...) {}
-                    }
-                }
             }
         }
     }
@@ -2542,11 +2734,25 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
         }
 
         // 6. Download video track (and paired audio track if adaptive) and mux via FFmpeg
-        std::filesystem::path video_tmp = task_tmp_dir / "yt_video.mp4";
-        std::filesystem::path audio_tmp = task_tmp_dir / "yt_audio.m4a";
         bool has_separate_audio = (!audio_url.empty() && audio_url != video_url);
+
+        // If the stream is single-track progressive (already has audio and video interleaved),
+        // we can commit it directly without invoking FFmpeg muxing, avoiding format errors and latency.
+        std::string v_ext = (fmt == "webm" ? ".webm" : ".mp4");
+        std::string a_ext = (fmt == "webm" ? ".webm" : ".m4a");
+        std::filesystem::path video_tmp = has_separate_audio ? (task_tmp_dir / ("yt_video" + v_ext)) : muxed_output;
+        std::filesystem::path audio_tmp = task_tmp_dir / ("yt_audio" + a_ext);
         uint32_t total_tracks = has_separate_audio ? 2u : 1u;
-        uint64_t cumulative_bytes = 0;
+        // Adaptive YouTube video and audio are independent URLs. Download them
+        // concurrently, while serializing task/progress updates from both HTTP
+        // callbacks so aggregate byte and speed telemetry remains consistent.
+        std::mutex progress_mutex;
+        std::mutex progress_callback_mutex;
+        std::array<uint64_t, 2> received_by_track{};
+        std::array<uint64_t, 2> total_by_track{};
+        std::array<bool, 2> completed_by_track{};
+        std::atomic<bool> track_failed{false};
+        const auto direct_transfer_started = std::chrono::steady_clock::now();
 
         auto download_track = [&](const std::string& track_url, const std::filesystem::path& dest_path, uint32_t track_idx, const std::string& label, const std::map<std::string, std::string>& track_headers = {}) -> Result<void> {
             std::ofstream ofs(dest_path, std::ios::binary | std::ios::trunc);
@@ -2557,7 +2763,23 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             for (const auto& [hk, hv] : track_headers) {
                 eff_headers[hk] = hv;
             }
-            auto track_start = std::chrono::steady_clock::now();
+            auto has_header = [&](std::string_view wanted) {
+                std::string wanted_lower(wanted);
+                std::transform(wanted_lower.begin(), wanted_lower.end(), wanted_lower.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return std::any_of(eff_headers.begin(), eff_headers.end(), [&](const auto& item) {
+                    std::string key_lower = item.first;
+                    std::transform(key_lower.begin(), key_lower.end(), key_lower.begin(),
+                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    return key_lower == wanted_lower && !item.second.empty();
+                });
+            };
+            diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+                task.task_id, "Direct HTTP request context",
+                "track=" + label + "; cookie=" + (has_header("cookie") ? "yes" : "no") +
+                "; referer=" + (has_header("referer") ? "yes" : "no") +
+                "; origin=" + (has_header("origin") ? "yes" : "no") +
+                "; user-agent=" + (has_header("user-agent") ? "yes" : "no"));
             uint64_t track_total = 0;
             uint64_t track_dl = 0;
             bool recorded_track_first_byte = false;
@@ -2570,22 +2792,23 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     track_total = std::stoull(clen_match[1].str());
                 } catch (...) {}
             }
-
-            task.status_detail = "Connecting to YouTube " + label + "...";
-            if (on_progress) {
-                StreamProgress sp;
-                sp.task_id = task.task_id;
-                sp.phase = TaskState::kProbing;
-                sp.percent = 0.0;
-                sp.downloaded_bytes = cumulative_bytes;
-                sp.total_bytes = task.total_bytes;
-                sp.status_line = task.status_detail;
-                on_progress(sp);
+            const size_t track_slot = static_cast<size_t>(track_idx - 1);
+            {
+                std::lock_guard<std::mutex> lock(progress_mutex);
+                total_by_track[track_slot] = track_total;
             }
 
             // Stream the resolved media URL in one request. Probing its size with a
             // separate Range request and then opening dozens of serial 2 MiB ranges
             // added a full connection setup per chunk and caused long fallback delays.
+            int rejected_status = 0;
+            std::string rejected_body_prefix;
+            brisk::HttpNetworkOptions timing_net_opts;
+            timing_net_opts.on_timing = [task_id = task.task_id](std::string_view stage, int64_t elapsed_ms) {
+                diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+                    task_id, "Direct HTTP: " + std::string(stage),
+                    "Stage duration " + std::to_string(elapsed_ms) + " ms");
+            };
             auto res = brisk::HttpClient::PerformGet(
                 track_url,
                 eff_headers,
@@ -2596,6 +2819,10 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                 cancel_requested,
                 [&](const brisk::HttpResponseMeta& meta) -> brisk::HeaderAction {
                     if (meta.status_code != 200 && meta.status_code != 206) {
+                        rejected_status = meta.status_code;
+                        // Read only a bounded prefix of YouTube's 403 XML so we
+                        // can report its error code without logging the body.
+                        if (meta.status_code == 403) return brisk::HeaderAction::kContinue;
                         return brisk::HeaderAction::kAbort;
                     }
                     if (meta.range_total > 0) {
@@ -2603,13 +2830,20 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     } else if (meta.content_length > 0) {
                         track_total = meta.content_length;
                     }
-                    if (track_total > 0) {
-                        task.total_bytes = std::max(task.total_bytes, cumulative_bytes + track_total);
-                    }
+                    std::lock_guard<std::mutex> lock(progress_mutex);
+                    total_by_track[track_slot] = track_total;
+                    const uint64_t known_total = total_by_track[0] + total_by_track[1];
+                    if (known_total > 0) task.total_bytes = std::max(task.total_bytes, known_total);
                     return brisk::HeaderAction::kContinue;
                 },
                 [&](const uint8_t* data, size_t len) -> bool {
-                        if (pause_requested.load() || cancel_requested.load()) return false;
+                        if (rejected_status == 403) {
+                            constexpr size_t kMaxErrorPrefix = 4096;
+                            const size_t take = std::min(len, kMaxErrorPrefix - rejected_body_prefix.size());
+                            rejected_body_prefix.append(reinterpret_cast<const char*>(data), take);
+                            return rejected_body_prefix.size() < kMaxErrorPrefix;
+                        }
+                        if (pause_requested.load() || cancel_requested.load() || track_failed.load()) return false;
                         if (!recorded_track_first_byte && len > 0) {
                             recorded_track_first_byte = true;
                             diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
@@ -2619,27 +2853,27 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                         ofs.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(len));
                         if (!ofs.good()) return false;
                         track_dl += len;
-                        cumulative_bytes += len;
-
-                        auto now = std::chrono::steady_clock::now();
-                        auto elapsed_ms = std::max<int64_t>(1, std::chrono::duration_cast<std::chrono::milliseconds>(now - track_start).count());
-                        task.speed_bps = (track_dl * 1000ULL) / static_cast<uint64_t>(elapsed_ms);
-
-                        double track_pct = (track_total > 0) ? ((static_cast<double>(track_dl) * 100.0) / static_cast<double>(track_total)) : 0.0;
-                        double overall_pct = ((static_cast<double>(track_idx - 1) * 100.0) + track_pct) / static_cast<double>(total_tracks);
-
-                        task.state = TaskState::kDownloading;
-                        task.downloaded_bytes = cumulative_bytes;
-                        if (track_total > 0) {
-                            task.total_bytes = std::max(task.total_bytes, cumulative_bytes);
-                        }
-                        task.stream_percent = std::clamp(overall_pct, 0.0, 98.0);
-                        task.completed_segments = track_idx - 1;
-                        task.total_segments = total_tracks;
-                        task.status_detail = "Downloading YouTube " + label + " (" + std::to_string(track_idx) + "/" + std::to_string(total_tracks) + ")";
-
-                        if (on_progress) {
-                            StreamProgress sp;
+                        std::unique_lock<std::mutex> callback_lock(progress_callback_mutex, std::defer_lock);
+                        if (on_progress) callback_lock.lock();
+                        StreamProgress sp;
+                        {
+                            std::lock_guard<std::mutex> lock(progress_mutex);
+                            received_by_track[track_slot] = track_dl;
+                            const uint64_t received_total = received_by_track[0] + received_by_track[1];
+                            const uint64_t known_total = total_by_track[0] + total_by_track[1];
+                            const auto elapsed_ms = std::max<int64_t>(1, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - direct_transfer_started).count());
+                            task.speed_bps = (received_total * 1000ULL) / static_cast<uint64_t>(elapsed_ms);
+                            task.state = TaskState::kDownloading;
+                            task.downloaded_bytes = received_total;
+                            if (known_total > 0) task.total_bytes = std::max(task.total_bytes, known_total);
+                            const double overall_pct = known_total > 0
+                                ? (static_cast<double>(received_total) * 100.0 / static_cast<double>(known_total))
+                                : 0.0;
+                            task.stream_percent = std::clamp(overall_pct, 0.0, 98.0);
+                            task.completed_segments = static_cast<uint32_t>(std::count(completed_by_track.begin(), completed_by_track.end(), true));
+                            task.total_segments = total_tracks;
+                            task.status_detail = "Downloading YouTube " + label + " (" + std::to_string(track_idx) + "/" + std::to_string(total_tracks) + ")";
                             sp.task_id = task.task_id;
                             sp.phase = TaskState::kDownloading;
                             sp.percent = task.stream_percent;
@@ -2649,12 +2883,27 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                             sp.completed_segments = task.completed_segments;
                             sp.total_segments = task.total_segments;
                             sp.status_line = task.status_detail;
+                        }
+                        if (on_progress) {
                             on_progress(sp);
                         }
                         return true;
-                    });
+                    },
+                timing_net_opts);
 
             if (!res.ok()) {
+                if (rejected_status == 403) {
+                    std::string server_code = "unclassified";
+                    static const std::regex kGoogleErrorCodeRe(R"(<Code>\s*([A-Za-z0-9_.-]{1,80})\s*</Code>)", std::regex::icase);
+                    std::smatch code_match;
+                    if (std::regex_search(rejected_body_prefix, code_match, kGoogleErrorCodeRe)) {
+                        server_code = code_match[1].str();
+                    }
+                    OPENIDM_LOG_WARN("Nm3u8dlAdapter", "Direct YouTube HTTP 403 classification: " + server_code);
+                    diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+                        task.task_id, "Direct HTTP rejection",
+                        "HTTP 403; YouTube server error code=" + server_code);
+                }
                 return Result<void>::Err(res.error->code, res.error->message);
             }
 
@@ -2672,118 +2921,158 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             if (track_total > 0 && track_dl != track_total) {
                 return Result<void>::Err("ERR_YOUTUBE_TRUNCATED_TRACK", "Downloaded YouTube " + label + " is truncated");
             }
-            if (std::filesystem::file_size(dest_path, ec) == 0) {
+            std::error_code file_ec;
+            if (std::filesystem::file_size(dest_path, file_ec) == 0 || file_ec) {
                 return Result<void>::Err("ERR_YOUTUBE_EMPTY_TRACK", "Downloaded YouTube " + label + " is empty (0 bytes)");
+            }
+            {
+                std::lock_guard<std::mutex> lock(progress_mutex);
+                completed_by_track[track_slot] = true;
+                task.completed_segments = static_cast<uint32_t>(std::count(completed_by_track.begin(), completed_by_track.end(), true));
             }
             return Result<void>::Ok();
         };
 
-        auto v_res = download_track(video_url, video_tmp, 1, "video track", video_track_headers);
-        if (!v_res.ok()) {
+        std::optional<Result<void>> v_res;
+        std::optional<Result<void>> a_res;
+        std::mutex track_error_mutex;
+        std::optional<Error> first_track_error;
+        auto run_track = [&](std::optional<Result<void>>& result, const std::string& url,
+                             const std::filesystem::path& path, uint32_t index,
+                             const std::string& label, const std::map<std::string, std::string>& headers) {
+            try {
+                result = download_track(url, path, index, label, headers);
+            } catch (const std::exception& ex) {
+                result = Result<void>::Err("ERR_YOUTUBE_TRACK_EXCEPTION", ex.what());
+            } catch (...) {
+                result = Result<void>::Err("ERR_YOUTUBE_TRACK_EXCEPTION", "Unknown exception while downloading a YouTube track");
+            }
+            if (!result->ok()) {
+                {
+                    std::lock_guard<std::mutex> lock(track_error_mutex);
+                    if (!first_track_error) first_track_error = *result->error;
+                }
+                track_failed.store(true);
+            }
+        };
+        if (has_separate_audio) {
+            task.status_detail = "Connecting to YouTube video and audio tracks...";
+            std::jthread video_thread([&]() { run_track(v_res, video_url, video_tmp, 1, "video track", video_track_headers); });
+            std::jthread audio_thread([&]() { run_track(a_res, audio_url, audio_tmp, 2, "audio track", audio_track_headers); });
+            video_thread.join();
+            audio_thread.join();
+        } else {
+            run_track(v_res, video_url, video_tmp, 1, "video track", video_track_headers);
+        }
+
+        if (!v_res || !v_res->ok() || (has_separate_audio && (!a_res || !a_res->ok()))) {
+            Error error = first_track_error.value_or(
+                !v_res ? Error{"ERR_YOUTUBE_VIDEO_TRACK", "Video track download did not return a result", false} :
+                Error{"ERR_YOUTUBE_AUDIO_TRACK", "Audio track download did not return a result", false});
             if (cancel_requested.load()) {
                 std::filesystem::remove_all(task_tmp_dir, ec);
             }
             task.state = cancel_requested.load() ? TaskState::kCanceled : (pause_requested.load() ? TaskState::kPaused : TaskState::kFailed);
-            task.error_code = v_res.error->code;
-            task.error_message = v_res.error->message;
+            task.error_code = error.code;
+            task.error_message = error.message;
             task.status_detail = task.error_message;
             return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
         }
 
+        /*
+         * Adaptive video and audio track downloads above run in parallel. The
+         * mux step starts only after both files have been validated.
+         */
+
+        // 7. Mux via FFmpeg into clean output container (only if separate audio track exists)
         if (has_separate_audio) {
-            auto a_res = download_track(audio_url, audio_tmp, 2, "audio track", audio_track_headers);
-            if (!a_res.ok()) {
-                if (cancel_requested.load()) {
-                    std::filesystem::remove_all(task_tmp_dir, ec);
-                }
-                task.state = cancel_requested.load() ? TaskState::kCanceled : (pause_requested.load() ? TaskState::kPaused : TaskState::kFailed);
-                task.error_code = a_res.error->code;
-                task.error_message = a_res.error->message;
-                task.status_detail = task.error_message;
-                return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
+            task.state = TaskState::kMuxing;
+            task.completed_segments = total_tracks;
+            task.total_segments = total_tracks;
+            task.status_detail = "Merging YouTube audio/video tracks (FFmpeg)...";
+            if (on_progress) {
+                StreamProgress sp;
+                sp.task_id = task.task_id;
+                sp.phase = TaskState::kMuxing;
+                sp.percent = 99.0;
+                sp.downloaded_bytes = task.downloaded_bytes;
+                sp.total_bytes = task.downloaded_bytes;
+                sp.completed_segments = total_tracks;
+                sp.total_segments = total_tracks;
+                sp.status_line = task.status_detail;
+                on_progress(sp);
             }
-        }
 
-        // 7. Mux via FFmpeg into clean output container
-        task.state = TaskState::kMuxing;
-        task.completed_segments = total_tracks;
-        task.total_segments = total_tracks;
-        task.status_detail = "Merging YouTube audio/video tracks (FFmpeg)...";
-        if (on_progress) {
-            StreamProgress sp;
-            sp.task_id = task.task_id;
-            sp.phase = TaskState::kMuxing;
-            sp.percent = 99.0;
-            sp.downloaded_bytes = task.downloaded_bytes;
-            sp.total_bytes = task.downloaded_bytes;
-            sp.completed_segments = total_tracks;
-            sp.total_segments = total_tracks;
-            sp.status_line = task.status_detail;
-            on_progress(sp);
-        }
-
-        std::vector<std::string> ff_args = {"-y", "-loglevel", "error", "-i", video_tmp.string()};
-        if (has_separate_audio) {
+            std::vector<std::string> ff_args = {"-y", "-loglevel", "error", "-i", video_tmp.string()};
             ff_args.push_back("-i");
             ff_args.push_back(audio_tmp.string());
             ff_args.insert(ff_args.end(), {"-map", "0:v:0", "-map", "1:a:0"});
-        }
-        if (fmt == "mp4") {
-            ff_args.insert(ff_args.end(), {"-c:v", "copy", "-c:a", "copy", "-strict", "-2", "-movflags", "+faststart", muxed_output.string()});
-        } else {
-            ff_args.insert(ff_args.end(), {"-c:v", "copy", "-c:a", "copy", muxed_output.string()});
-        }
 
-        int mux_rc = RunExternalFfmpegMux(m_cfg.ffmpeg_binary_path, ff_args);
-        if ((mux_rc != 0 || !std::filesystem::exists(muxed_output, ec) || std::filesystem::file_size(muxed_output, ec) == 0) &&
-            has_separate_audio) {
-            std::filesystem::remove(muxed_output, ec);
-            std::vector<std::string> ff_retry_args = {
-                "-y", "-loglevel", "error",
-                "-i", video_tmp.string(),
-                "-i", audio_tmp.string(),
-                "-map", "0:v:0", "-map", "1:a:0",
-                "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "192k",
-                "-strict", "-2"
-            };
             if (fmt == "mp4") {
-                ff_retry_args.push_back("-movflags");
-                ff_retry_args.push_back("+faststart");
+                ff_args.insert(ff_args.end(), {"-c:v", "copy", "-c:a", "copy", "-strict", "-2", "-movflags", "+faststart", muxed_output.string()});
+            } else {
+                ff_args.insert(ff_args.end(), {"-c:v", "copy", "-c:a", "copy", muxed_output.string()});
             }
-            ff_retry_args.push_back(muxed_output.string());
-            mux_rc = RunExternalFfmpegMux(m_cfg.ffmpeg_binary_path, ff_retry_args);
-        }
 
-        if ((mux_rc != 0 || !std::filesystem::exists(muxed_output, ec) || std::filesystem::file_size(muxed_output, ec) == 0) &&
-            fmt == "mp4") {
-            // Unconditional fallback: remux into MKV which supports VP9/AV1/Opus/AAC without re-encoding
-            std::filesystem::remove(muxed_output, ec);
-            fmt = "mkv";
-            muxed_output = task_tmp_dir / ("output_muxed." + fmt);
-            std::vector<std::string> ff_mkv_args = {
-                "-y", "-loglevel", "error",
-                "-i", video_tmp.string()
-            };
-            if (has_separate_audio) {
-                ff_mkv_args.push_back("-i");
-                ff_mkv_args.push_back(audio_tmp.string());
-                ff_mkv_args.insert(ff_mkv_args.end(), {"-map", "0:v:0", "-map", "1:a:0"});
+            int mux_rc = RunExternalFfmpegMux(m_cfg.ffmpeg_binary_path, ff_args);
+            if (mux_rc != 0 || !std::filesystem::exists(muxed_output, ec) || std::filesystem::file_size(muxed_output, ec) == 0) {
+                std::filesystem::remove(muxed_output, ec);
+                std::vector<std::string> ff_retry_args = {
+                    "-y", "-loglevel", "error",
+                    "-i", video_tmp.string(),
+                    "-i", audio_tmp.string(),
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-strict", "-2"
+                };
+                if (fmt == "mp4") {
+                    ff_retry_args.push_back("-movflags");
+                    ff_retry_args.push_back("+faststart");
+                }
+                ff_retry_args.push_back(muxed_output.string());
+                mux_rc = RunExternalFfmpegMux(m_cfg.ffmpeg_binary_path, ff_retry_args);
             }
-            ff_mkv_args.insert(ff_mkv_args.end(), {"-c:v", "copy", "-c:a", "copy", muxed_output.string()});
-            mux_rc = RunExternalFfmpegMux(m_cfg.ffmpeg_binary_path, ff_mkv_args);
-        }
 
-        if (mux_rc != 0 || !std::filesystem::exists(muxed_output, ec) ||
-            std::filesystem::file_size(muxed_output, ec) == 0 ||
-            !VerifyContainerMagicBytes(muxed_output, fmt)) {
-            std::filesystem::remove_all(task_tmp_dir, ec);
-            std::filesystem::remove(muxed_output, ec);
-            task.state = TaskState::kFailed;
-            task.error_code = "ERR_YOUTUBE_MUX_FAILED";
-            task.error_message = "FFmpeg failed to mux YouTube tracks (exit code " + std::to_string(mux_rc) + ")";
-            task.status_detail = task.error_message;
-            return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
+            if ((mux_rc != 0 || !std::filesystem::exists(muxed_output, ec) || std::filesystem::file_size(muxed_output, ec) == 0) &&
+                fmt == "mp4") {
+                // Unconditional fallback: remux into MKV which supports VP9/AV1/Opus/AAC without re-encoding
+                std::filesystem::remove(muxed_output, ec);
+                fmt = "mkv";
+                muxed_output = task_tmp_dir / ("output_muxed." + fmt);
+                std::vector<std::string> ff_mkv_args = {
+                    "-y", "-loglevel", "error",
+                    "-i", video_tmp.string(),
+                    "-i", audio_tmp.string(),
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "copy", "-c:a", "copy", muxed_output.string()
+                };
+                mux_rc = RunExternalFfmpegMux(m_cfg.ffmpeg_binary_path, ff_mkv_args);
+            }
+
+            bool mux_valid = std::filesystem::exists(muxed_output, ec) &&
+                             std::filesystem::file_size(muxed_output, ec) > 0 &&
+                             VerifyContainerMagicBytes(muxed_output, fmt);
+            if (!mux_valid) {
+                std::filesystem::remove(muxed_output, ec);
+                task.state = TaskState::kFailed;
+                task.error_code = "ERR_YOUTUBE_MUX_FAILED";
+                task.error_message = "FFmpeg failed to mux audio/video tracks (exit code " + std::to_string(mux_rc) +
+                                     "). Downloaded tracks preserved in " + task_tmp_dir.string();
+                task.status_detail = task.error_message;
+                return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
+            }
+        } else {
+            // Single-track progressive stream: already written directly to muxed_output
+            if (!std::filesystem::exists(muxed_output, ec) || std::filesystem::file_size(muxed_output, ec) == 0) {
+                std::filesystem::remove_all(task_tmp_dir, ec);
+                std::filesystem::remove(muxed_output, ec);
+                task.state = TaskState::kFailed;
+                task.error_code = "ERR_YOUTUBE_EMPTY_TRACK";
+                task.error_message = "Downloaded single-stream YouTube file is empty";
+                task.status_detail = task.error_message;
+                return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
+            }
         }
 
         task.state = TaskState::kVerifying;
@@ -2943,7 +3232,19 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
     }
 
     // 3.5. Direct stream fast-path (< 10ms latency): if direct unthrottled video & audio URLs are available, download directly!
-    bool has_direct_urls = !video_url.empty() && !requires_cipher && (!requires_audio_mux || !audio_url.empty());
+    // URLs with sabr=1, ump=1, or srfvp are UMP-encapsulated MSE chunk streams that return empty 31-byte sync frames upon direct GET.
+    bool is_ump_stream = IsUmpChunkUrl(video_url) || (!audio_url.empty() && IsUmpChunkUrl(audio_url));
+    bool has_direct_urls = !video_url.empty() && !requires_cipher && !is_ump_stream && (!requires_audio_mux || !audio_url.empty());
+    if (!has_direct_urls && is_youtube_host) {
+        std::string reason;
+        if (video_url.empty()) reason += "video URL missing; ";
+        if (requires_cipher) reason += "signature deciphering required; ";
+        if (is_ump_stream) reason += "browser stream is UMP-encapsulated (sabr=1); ";
+        if (requires_audio_mux && audio_url.empty()) reason += "paired audio URL missing; ";
+        if (reason.empty()) reason = "direct stream requirements not satisfied";
+        diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+            task.task_id, "Direct transfer skipped", reason);
+    }
     if (has_direct_urls) {
         OPENIDM_LOG_INFO("Nm3u8dlAdapter", "Attempting direct stream fast-path (<10ms latency) for video_url: " + video_url);
         diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
@@ -2968,6 +3269,80 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
 #endif
             return direct_res;
         }
+
+        // A page-cached Googlevideo URL may expire while the New Download
+        // offer is open. If its GET gets a 403, give an already-running
+        // navigation prewarm a short bounded chance to finish, then retry the
+        // direct transfer with its refreshed URL instead of starting a second
+        // foreground yt-dlp extraction.
+        if (is_youtube_host && direct_res.error &&
+            direct_res.error->code == "ERR_HTTP_403_EXPIRED_OR_AUTH") {
+            std::string refresh_video_id;
+            std::smatch refresh_match;
+            static const std::regex kRefreshVideoIdRe(R"((?:v=|\/shorts\/|\/embed\/|\/live\/|youtu\.be\/)([a-zA-Z0-9_-]{11}))");
+            if (std::regex_search(watch_url, refresh_match, kRefreshVideoIdRe)) {
+                refresh_video_id = refresh_match[1].str();
+            } else if (std::regex_search(task.page_url, refresh_match, kRefreshVideoIdRe)) {
+                refresh_video_id = refresh_match[1].str();
+            }
+
+            if (!refresh_video_id.empty()) {
+                task.status_detail = "Refreshing YouTube stream URL...";
+                if (on_progress) {
+                    StreamProgress sp;
+                    sp.task_id = task.task_id;
+                    sp.phase = TaskState::kProbing;
+                    sp.percent = 0.0;
+                    sp.downloaded_bytes = 0;
+                    sp.total_bytes = 0;
+                    sp.status_line = task.status_detail;
+                    on_progress(sp);
+                }
+                diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+                    task.task_id, "Expired YouTube URL refresh",
+                    "Waiting up to 1500 ms for the existing background prewarm");
+
+                std::string refreshed_video_url, refreshed_audio_url, refreshed_resolution, refreshed_cookies;
+                std::map<std::string, std::string> refreshed_video_headers, refreshed_audio_headers;
+                const bool refreshed = YouTubeStreamPrewarmer::Instance().ResolveSync(
+                    refresh_video_id, watch_url, req_filter,
+                    refreshed_video_url, refreshed_audio_url, refreshed_resolution,
+                    &refreshed_cookies, &refreshed_video_headers, &refreshed_audio_headers,
+                    std::chrono::milliseconds(1500));
+                auto cookie_it = combined_headers.find("Cookie");
+                const bool refreshed_cookie = !refreshed_cookies.empty() &&
+                    (cookie_it == combined_headers.end() || cookie_it->second != refreshed_cookies);
+                const bool refreshed_stream = refreshed && !refreshed_video_url.empty() &&
+                    (refreshed_video_url != video_url || refreshed_audio_url != audio_url || refreshed_cookie);
+                if (refreshed_stream) {
+                    std::filesystem::remove(muxed_output, ec);
+                    std::filesystem::remove(task_tmp_dir / "yt_video.mp4", ec);
+                    std::filesystem::remove(task_tmp_dir / "yt_audio.m4a", ec);
+                    video_url = std::move(refreshed_video_url);
+                    audio_url = std::move(refreshed_audio_url);
+                    video_track_headers = std::move(refreshed_video_headers);
+                    audio_track_headers = std::move(refreshed_audio_headers);
+                    selected_resolution = std::move(refreshed_resolution);
+                    requires_cipher = false;
+                    requires_audio_mux = !audio_url.empty();
+                    if (!refreshed_cookies.empty()) combined_headers["Cookie"] = std::move(refreshed_cookies);
+                    task.downloaded_bytes = 0;
+                    task.total_bytes = 0;
+                    task.stream_percent = 0.0;
+                    diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+                        task.task_id, "YouTube direct URL refreshed",
+                        "Retrying the direct transfer with the prewarmed URL and headers");
+                    direct_res = execute_direct_download();
+                    if (direct_res.ok() || cancel_requested.load() || pause_requested.load()) {
+                        return direct_res;
+                    }
+                    if (direct_res.error && direct_res.error->code == "ERR_FILE_EXISTS") {
+                        return direct_res;
+                    }
+                }
+            }
+        }
+
         OPENIDM_LOG_WARN("Nm3u8dlAdapter", "task=" + task.task_id + " direct path failed code=" + direct_res.error->code +
                          " message=" + direct_res.error->message + "; falling back to yt-dlp worker");
         diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
@@ -3073,16 +3448,28 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             yt_args.push_back("--cookies");
             yt_args.push_back(yt_cookies_file.string());
         }
+        for (const auto& [hk, hv] : combined_headers) {
+            if (hv.empty()) continue;
+            std::string lhk = ToLowerStr(hk);
+            if (lhk == "cookie" || lhk == "authorization") continue;
+            if (lhk == "user-agent") {
+                yt_args.push_back("--user-agent");
+                yt_args.push_back(hv);
+            } else if (lhk == "referer") {
+                yt_args.push_back("--referer");
+                yt_args.push_back(hv);
+            } else if (lhk == "origin" || lhk == "accept-language") {
+                yt_args.push_back("--add-header");
+                yt_args.push_back(hk + ":" + hv);
+            }
+        }
         std::filesystem::path node_bin = PathSanitizer::FindWorkerBinary("node", PathSanitizer::GetExecutableDir());
         if (std::filesystem::exists(node_bin, ec)) {
             yt_args.push_back("--js-runtimes");
             yt_args.push_back("node:" + node_bin.string());
         }
-        if (is_youtube_host) {
-            yt_args.push_back("--extractor-args");
-            yt_args.push_back("youtube:player_client=android,web");
-        }
-        yt_args.push_back(watch_url);
+
+        yt_args.push_back(!watch_url.empty() ? watch_url : task.url);
 
         // Immediate responsive status notification before process launch
         task.status_detail = "Extracting YouTube stream...";
@@ -3538,13 +3925,20 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
         has_output = std::filesystem::exists(actual_output, ec) && std::filesystem::file_size(actual_output, ec) > 0;
         bool valid_container = false;
         if (has_output) {
-            valid_container = VerifyContainerMagicBytes(actual_output, detected_fmt);
-            if (!valid_container) {
-                for (const auto& alt_fmt : {"mp4", "mkv", "webm", "m4a"}) {
-                    if (VerifyContainerMagicBytes(actual_output, alt_fmt)) {
-                        detected_fmt = alt_fmt;
-                        valid_container = true;
-                        break;
+            std::string ext_lower = actual_output.extension().string();
+            std::transform(ext_lower.begin(), ext_lower.end(), ext_lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext_lower == ".srt" || ext_lower == ".vtt" || ext_lower == ".ass") {
+                detected_fmt = ext_lower.substr(1);
+                valid_container = true;
+            } else {
+                valid_container = VerifyContainerMagicBytes(actual_output, detected_fmt);
+                if (!valid_container) {
+                    for (const auto& alt_fmt : {"mp4", "mkv", "webm", "m4a"}) {
+                        if (VerifyContainerMagicBytes(actual_output, alt_fmt)) {
+                            detected_fmt = alt_fmt;
+                            valid_container = true;
+                            break;
+                        }
                     }
                 }
             }

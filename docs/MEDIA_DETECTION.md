@@ -105,17 +105,18 @@ Radium Download Manager documentation and UI never promise that every `blob:` UR
 
 ---
 
-## 7. Webpage Watch URL Guard & Intent Classification (`BUG-034`)
+## 7. Webpage Watch URL Guard & Multi-Site Intent Classification (`BUG-034`)
 
-Websites like YouTube (`youtube.com/watch?v=...`, `youtube.com/shorts/...`), Vimeo (`vimeo.com/...`), and Twitch (`twitch.tv/...`) present HTML watch pages rather than direct media files or static manifests.
+Websites like YouTube (`youtube.com/watch?v=...`, `youtube.com/shorts/...`), Bilibili (`bilibili.com/video/BV...`, `b23.tv/...`), Facebook (`facebook.com/watch/...`, `facebook.com/reel/...`, `fb.watch/...`), adult video streaming platforms (Pornhub, XVideos, XNXX, xHamster, SpankBang, RedTube, YouPorn, Eporner, etc.), Vimeo (`vimeo.com/...`), Dailymotion, Twitch, X/Twitter, Instagram, TikTok, and Reddit present HTML watch pages rather than direct media files or static manifests.
 
 1. **The Watch Page Failure Mode:**
-   - If a user passes an HTML watch page URL directly to an ordinary segmented HTTP engine, the engine issues concurrent byte-range requests (`Range: bytes=0-1048575`) against an HTML web page. Streaming platforms detect this anomalous non-browser traffic and immediately return **HTTP 429 Too Many Requests** or generic HTML blocks.
-2. **Intent Classification & Rejection Guard:**
-   - `extension/js/function.js` (`isWebpageWatchUrl`) and `src/common/path_sanitizer.cpp` (`PathSanitizer::IsWebpageWatchUrl`) intercept watch URLs before network requests are dispatched.
-   - The desktop controller and IPC layer reject watch URLs with error code `ERR_URL_IS_WEBPAGE`, informing the user that the URL is a streaming webpage and directing them to open the page in their browser and play the video so Radium's extension can capture the stream manifests.
-3. **Capture via In-Page Playback Hooks:**
-   - When the user plays the video in the browser, `catch-script/catch.js` (hooking `window.fetch` and `XMLHttpRequest` in the `MAIN` world) and the background network monitor capture the actual stream manifests (`.m3u8`, `.mpd`) and progressive segments, routing them cleanly through `N_m3u8DL-RE` or the segmented engine.
+   - If a user passes an HTML watch page URL directly to an ordinary segmented HTTP engine (`TaskType::kHttpFile`), the engine issues concurrent byte-range requests (`Range: bytes=0-1048575`) against an HTML web page. Streaming platforms detect this anomalous non-browser traffic and immediately return **HTTP 429 Too Many Requests**, **HTTP 403 Forbidden**, or an HTML document disguised as `.mp4`.
+2. **Intent Classification, Routing & Rejection Guard:**
+   - `extension/js/function.js` (`isSupportedVideoSiteWatchUrl`, `isWebpageWatchUrl`) and `src/common/path_sanitizer.cpp` (`PathSanitizer::IsWebpageWatchUrl`) classify watch URLs across all supported video platforms while ensuring direct media/manifest URLs (`.mp4`, `.webm`, `.m3u8`, `.mpd`) on those domains are never mistaken for webpages.
+   - Low-level `TaskType::kHttpFile` tasks continue to reject raw webpage URLs with `ERR_URL_IS_WEBPAGE`, while the Win32 Add Download dialog and IPC `download.offer` / `stream.add` endpoints automatically route supported video watch URLs to the stream/site extraction pipeline (`VideoExtractionManager` + `Nm3u8dlReAdapter`).
+3. **In-Page & Network Stream Normalization:**
+   - `catch-script/catch.js` inspects YouTube player responses and Bilibili `window.__playinfo__` DASH streams directly in the page `MAIN` world.
+   - `normalizeMediaUrl` strips `bytestart` and `byteend` range-trap query parameters from Facebook CDN (`fbcdn.net`) URLs and suppresses Bilibili `.m4s` DASH segment spam so only full playable streams or manifests are offered.
 
 
 ### Page-scoped candidate lifecycle

@@ -55,7 +55,7 @@ struct WorkerOptions {
     std::filesystem::path tmp_dir{"./tmp"};
     std::filesystem::path save_dir{"."};
     std::string save_name{"output"};
-    uint32_t thread_count{8};
+    uint32_t thread_count{32};
     uint32_t download_retry_count{5};
     uint32_t http_request_timeout_ms{30000};
     uint64_t max_speed_kbps{0};
@@ -145,6 +145,27 @@ std::string StripGooglevideoRangeParams(const std::string& url) {
     if (qpos == std::string::npos) return url;
     std::string base = url.substr(0, qpos);
     std::string query = url.substr(qpos + 1);
+
+    // Parse signed parameter keys from sparams and lsparams so we never strip signed fields
+    std::set<std::string> signed_params;
+    auto extract_signed = [&](const std::string& key_name) {
+        auto p = query.find(key_name + "=");
+        if (p != std::string::npos) {
+            auto val_start = p + key_name.size() + 1;
+            auto val_end = query.find('&', val_start);
+            std::string raw_val = (val_end == std::string::npos)
+                ? query.substr(val_start)
+                : query.substr(val_start, val_end - val_start);
+            std::istringstream vss(raw_val);
+            std::string item;
+            while (std::getline(vss, item, ',')) {
+                if (!item.empty()) signed_params.insert(item);
+            }
+        }
+    };
+    extract_signed("sparams");
+    extract_signed("lsparams");
+
     std::ostringstream kept;
     bool first = true;
     std::istringstream qss(query);
@@ -153,8 +174,11 @@ std::string StripGooglevideoRangeParams(const std::string& url) {
         if (pair.empty()) continue;
         auto eq = pair.find('=');
         std::string key = (eq == std::string::npos) ? pair : pair.substr(0, eq);
-        if (key == "range" || key == "rn" || key == "rbuf" || key == "ump" || key == "srfvp" || key == "alr" || key == "cpn") {
-            continue;
+        // Strip chunk/range/buffer/alr/ump parameters unless explicitly covered by the signature
+        if (key == "range" || key == "rn" || key == "rbuf" || key == "ump" || key == "srfvp" || key == "alr") {
+            if (signed_params.find(key) == signed_params.end()) {
+                continue;
+            }
         }
         if (!first) kept << "&";
         kept << pair;
@@ -2050,7 +2074,11 @@ int RunFfmpegMux(const std::string& ffmpeg_bin, const std::vector<std::string>& 
         cmd << " \"" << a << "\"";
     }
     std::string cmd_s = cmd.str();
-    std::wstring wcmd(cmd_s.begin(), cmd_s.end());
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, cmd_s.data(), static_cast<int>(cmd_s.size()), nullptr, 0);
+    std::wstring wcmd(wlen, 0);
+    if (wlen > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, cmd_s.data(), static_cast<int>(cmd_s.size()), wcmd.data(), wlen);
+    }
     STARTUPINFOW si{sizeof(STARTUPINFOW)};
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {

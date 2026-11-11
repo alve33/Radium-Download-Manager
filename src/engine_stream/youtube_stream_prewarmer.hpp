@@ -131,7 +131,8 @@ public:
                      std::string& out_video_url, std::string& out_audio_url, std::string& out_resolution,
                      std::string* out_cookies = nullptr,
                      std::map<std::string, std::string>* out_v_headers = nullptr,
-                     std::map<std::string, std::string>* out_a_headers = nullptr) {
+                     std::map<std::string, std::string>* out_a_headers = nullptr,
+                     std::chrono::milliseconds wait_for_inflight = std::chrono::milliseconds(0)) {
         std::string vid = video_id_in;
         std::string url = watch_url_in;
         if (vid.empty() && !url.empty()) vid = ExtractVideoId(url);
@@ -143,20 +144,30 @@ public:
             return true;
         }
 
-        // 2. Never block the caller worker thread on yt-dlp execution!
-        // If fetching, check if ready or return false immediately so the engine can proceed.
-        bool was_fetching = false;
+        // Optionally let a navigation-started prewarm finish when the caller
+        // has already observed that its cached signed URL is expired. This is
+        // bounded by the caller and is never applied to an ordinary cold path.
+        bool prewarm_was_in_flight = false;
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            std::unique_lock<std::mutex> lock(m_mutex);
             auto it = m_cache.find(vid);
-            if (it != m_cache.end()) {
-                was_fetching = it->second.is_fetching;
+            prewarm_was_in_flight = (it != m_cache.end() && it->second.is_fetching);
+            if (prewarm_was_in_flight && wait_for_inflight > std::chrono::milliseconds::zero()) {
+                m_cv.wait_for(lock, wait_for_inflight, [&]() {
+                    auto current = m_cache.find(vid);
+                    return current == m_cache.end() || !current->second.is_fetching;
+                });
             }
+        }
+
+        if (GetDirectUrls(vid, resolution_or_filter, out_video_url, out_audio_url, out_resolution,
+                          out_cookies, out_v_headers, out_a_headers)) {
+            return true;
         }
 
         // 3. If prewarming was not in flight, trigger async preparation in background.
         // Return false immediately so caller can proceed without freezing the worker thread.
-        if (!was_fetching) {
+        if (!prewarm_was_in_flight) {
             PrewarmAsync(vid, url, (out_cookies && !out_cookies->empty()) ? *out_cookies : "");
         }
         return false;
@@ -305,14 +316,17 @@ private:
         }
 
 #ifdef _WIN32
-        auto run_ytdlp_json = [&](const std::string& ck_str, std::string& out_json, std::string& out_err, DWORD& out_exit) -> bool {
+        auto run_ytdlp_json = [&](const std::string& ck_str, std::string& out_json,
+                                  std::string& out_err, DWORD& out_exit) -> bool {
             out_json.clear();
             out_err.clear();
             out_exit = 1;
 
+            std::filesystem::path cache_dir = PathSanitizer::GetDefaultAppDataDir() / "cache" / "yt-dlp";
+            std::filesystem::create_directories(cache_dir, ec);
             std::wstring wcmd = L"\"" + ytdlp.wstring() +
-                L"\" -J --skip-download --no-warnings --no-playlist --socket-timeout 10"
-                L" --extractor-args \"youtube:player_client=android,web\"";
+                L"\" -J --skip-download --no-warnings --no-playlist --socket-timeout 10 --cache-dir \"" +
+                cache_dir.wstring() + L"\"";
             std::filesystem::path node_bin = PathSanitizer::FindWorkerBinary("node", PathSanitizer::GetExecutableDir());
             if (std::filesystem::exists(node_bin, ec)) {
                 wcmd += L" --js-runtimes \"node:" + node_bin.wstring() + L"\"";

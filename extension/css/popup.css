@@ -2,30 +2,32 @@
 /* Radium Browser Extension — Coral Charcoal Pro UI Stylesheet */
 /* Shares exact design tokens with src/ui/design_system.hpp */
 
+@import url("tokens.css");
+
 :root {
   color-scheme: dark;
   --bg-void: #070B14;
   --bg-main: #242528;
-  --bg-panel: #2D2E32;
-  --bg-control: #37383D;
-  --bg-surface: #2D2E32;
-  --bg-elevated: #37383D;
-  --bg-hover: #414248;
-  --bg-selected: rgba(255, 79, 87, 0.18);
-  --border-subtle: #414248;
-  --border-focus: #FF4F57;
-  --text-primary: #F2F2F3;
-  --text-secondary: #A4A5AC;
-  --text-muted: #73757D;
-  --accent-coral: #FF4F57;
-  --accent-coral-hover: #FF666D;
-  --accent-blue: #FF4F57;
-  --accent-blue-hover: #FF666D;
-  --accent-cyan: #38BDF8;
-  --badge-stream: #FF4F57;
-  --status-ok: #22C55E;
-  --status-warn: #F59E0B;
-  --status-err: #EF4444;
+  --bg-panel: var(--surface-primary, #1E293B);
+  --bg-control: var(--surface-elevated, #334155);
+  --bg-surface: var(--surface-primary, #1E293B);
+  --bg-elevated: var(--surface-elevated, #334155);
+  --bg-hover: var(--surface-hover, #475569);
+  --bg-selected: rgba(255, 71, 87, 0.18);
+  --border-subtle: var(--border-subtle, #334155);
+  --border-focus: var(--border-focus, #FF4757);
+  --text-primary: var(--text-primary, #F8FAFC);
+  --text-secondary: var(--text-secondary, #94A3B8);
+  --text-muted: var(--text-muted, #64748B);
+  --accent-coral: var(--accent-primary, #FF4757);
+  --accent-coral-hover: var(--accent-hover, #FF5F6A);
+  --accent-blue: var(--accent-primary, #FF4757);
+  --accent-blue-hover: var(--accent-hover, #FF5F6A);
+  --accent-cyan: var(--accent-cyan, #06B6D4);
+  --badge-stream: var(--badge-stream, #8B5CF6);
+  --status-ok: var(--status-success, #A9B4C2);
+  --status-warn: var(--status-warning, #F2B84B);
+  --status-err: var(--status-danger, #FF9F43);
   --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: "Cascadia Code", "Consolas", ui-monospace, monospace;
 }
@@ -604,5 +606,50 @@ body {
   *, *::before, *::after {
     transition: none !important;
     animation: none !important;
+  }
+}
+
+
+/* High Contrast / Forced Colors Accessibility Support */
+@media (forced-colors: active) {
+  :root {
+    --bg-base: Canvas;
+    --bg-panel: Canvas;
+    --bg-card: Canvas;
+    --text-primary: CanvasText;
+    --text-secondary: CanvasText;
+    --text-muted: CanvasText;
+    --border-subtle: ButtonBorder;
+    --border-card: ButtonBorder;
+    --border-focus: Highlight;
+    --accent-coral: Highlight;
+    --accent-glow: Highlight;
+    --badge-stream: Highlight;
+    --badge-file: Highlight;
+  }
+
+  .header,
+  .toolbar,
+  .media-item,
+  .toggle-track,
+  .tab-btn,
+  .search-wrapper,
+  .dl-btn,
+  .quality-select {
+    border: 1px solid ButtonBorder !important;
+  }
+
+  .tab-btn.active {
+    border: 2px solid Highlight !important;
+    background: Highlight !important;
+    color: HighlightText !important;
+  }
+
+  .dl-btn:focus-visible,
+  .tab-btn:focus-visible,
+  .quality-select:focus-visible,
+  .search-input:focus-visible {
+    outline: 3px solid Highlight !important;
+    outline-offset: 2px !important;
   }
 }

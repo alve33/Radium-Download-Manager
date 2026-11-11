@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "brisk_engine/http_client.hpp"
+#include "common/path_sanitizer.hpp"
 #include "common/types.hpp"
 
 namespace openidm::core {
@@ -26,7 +27,8 @@ enum class DuplicateKind {
     kNone = 0,
     kSameUrl = 1,
     kSameNameAndSize = 2,
-    kSameEtag = 3
+    kSameEtag = 3,
+    kSameDestination = 4
 };
 
 inline const char* DuplicateKindToString(DuplicateKind kind) {
@@ -34,6 +36,7 @@ inline const char* DuplicateKindToString(DuplicateKind kind) {
         case DuplicateKind::kSameUrl: return "SAME_URL";
         case DuplicateKind::kSameNameAndSize: return "SAME_NAME_AND_SIZE";
         case DuplicateKind::kSameEtag: return "SAME_ETAG";
+        case DuplicateKind::kSameDestination: return "SAME_DESTINATION";
         default: return "NONE";
     }
 }
@@ -258,6 +261,54 @@ public:
         }
 
         return DuplicateMatch{DuplicateKind::kNone, {}};
+    }
+
+    // Evaluates destination file conflict against existing tasks
+    static DuplicateMatch FindDestinationConflict(
+        const std::vector<TaskModel>& tasks,
+        const std::string& save_dir,
+        const std::string& file_name,
+        const std::string& exclude_task_id = "") {
+
+        std::string clean_name = Trim(file_name);
+        std::string clean_dir = Trim(save_dir);
+        if (clean_name.empty() || clean_dir.empty()) {
+            return DuplicateMatch{DuplicateKind::kNone, {}};
+        }
+
+        std::filesystem::path target_p = PathSanitizer::Utf8ToPath(clean_dir) / PathSanitizer::Utf8ToPath(clean_name);
+        const TaskModel* best_match = nullptr;
+
+        for (const auto& t : tasks) {
+            if (!exclude_task_id.empty() && t.task_id == exclude_task_id) continue;
+            if (t.file_name.empty() || t.save_dir.empty()) continue;
+
+            std::filesystem::path existing_p = PathSanitizer::Utf8ToPath(t.save_dir) / PathSanitizer::Utf8ToPath(t.file_name);
+            if (PathSanitizer::PathsEquivalent(target_p, existing_p)) {
+                if (!best_match || t.created_at_ms > best_match->created_at_ms) {
+                    best_match = &t;
+                }
+            }
+        }
+
+        if (best_match) {
+            return DuplicateMatch{DuplicateKind::kSameDestination, *best_match};
+        }
+        return DuplicateMatch{DuplicateKind::kNone, {}};
+    }
+
+    static DuplicateMatch FindDestinationConflict(
+        const std::map<std::string, TaskModel>& tasks_map,
+        const std::string& save_dir,
+        const std::string& file_name,
+        const std::string& exclude_task_id = "") {
+
+        std::vector<TaskModel> task_list;
+        task_list.reserve(tasks_map.size());
+        for (const auto& [id, t] : tasks_map) {
+            task_list.push_back(t);
+        }
+        return FindDestinationConflict(task_list, save_dir, file_name, exclude_task_id);
     }
 
     static DuplicateMatch FindDuplicate(

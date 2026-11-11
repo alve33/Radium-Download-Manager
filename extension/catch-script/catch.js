@@ -62,8 +62,15 @@
     function normalizeGooglevideoUrl(rawUrl) {
       try {
         const u = new URL(rawUrl, win.location ? win.location.href : "https://www.youtube.com");
-        for (const p of ["range", "rn", "rbuf", "ump", "srfvp", "alr", "cpn"]) {
-          u.searchParams.delete(p);
+        const signedParams = new Set([
+          ...(u.searchParams.get("sparams") || "").split(","),
+          ...(u.searchParams.get("lsparams") || "").split(",")
+        ].filter(Boolean));
+        const stripParams = ["range", "rn", "rbuf", "ump", "srfvp", "alr"];
+        for (const p of stripParams) {
+          if (!signedParams.has(p)) {
+            u.searchParams.delete(p);
+          }
         }
         return u.toString();
       } catch (_) {
@@ -181,8 +188,10 @@
       const rawAudioBytes = bestAudio ? parseInt(bestAudio.contentLength || "0", 10) : 0;
       const audioBw = bestAudio ? Number(bestAudio.bitrate || bestAudio.averageBitrate || 128000) : 128000;
       const audioByteLen = rawAudioBytes > 0 ? rawAudioBytes : (durSec > 0 ? Math.round((audioBw / 8) * durSec) : 0);
-      let cleanBestAudioUrl = (bestAudio && bestAudio.url) ? normalizeGooglevideoUrl(bestAudio.url) : "";
-      if (!cleanBestAudioUrl && trackedAudioUrl) cleanBestAudioUrl = trackedAudioUrl;
+      // Prefer the current URL observed on the browser's playback request over
+      // the URL embedded in an earlier player response. YouTube rotates signed
+      // URLs while playback continues.
+      let cleanBestAudioUrl = trackedAudioUrl || ((bestAudio && bestAudio.url) ? normalizeGooglevideoUrl(bestAudio.url) : "");
       const qualityMap = new Map();
 
       const addVideoFormatToQualities = (f, isAdaptiveFmt) => {
@@ -200,16 +209,20 @@
         const fpsKey = fpsSuffix ? `${fpsSuffix}fps_` : "";
         const key = `${resLabel.toLowerCase()}_${fpsKey}${codecKey}`;
         const displayRes = `${resLabel}${fpsSuffix ? fpsSuffix : ""}`;
-        const displayLabel = `${displayRes} (${isMp4 ? "MP4" : "WebM"})`;
+        const displayLabel = `${displayRes} (MP4)`;
         const vFilter = height > 0 ? (fps > 30 ? `${height}p${fps}` : `${height}p`) : resLabel;
 
         const itagStr = String(f.itag || "");
-        const resolvedDirectUrl = f.url || trackedYtMediaUrls.get(itagStr) || (isAdaptiveFmt ? trackedYtMediaUrls.get("video") : "") || "";
+        const resolvedDirectUrl = trackedYtMediaUrls.get(itagStr) || f.url || (isAdaptiveFmt ? trackedYtMediaUrls.get("video") : "") || "";
         const hasDirectUrl = Boolean(resolvedDirectUrl);
         const cleanVUrl = hasDirectUrl ? normalizeGooglevideoUrl(resolvedDirectUrl) : "";
         const needsMux = Boolean(isAdaptiveFmt);
+        const fallbackProgressiveUrl = (!cleanBestAudioUrl && bestProgressive && bestProgressive.url)
+          ? normalizeGooglevideoUrl(bestProgressive.url)
+          : "";
+        const effectiveFormatUrl = cleanVUrl || fallbackProgressiveUrl;
         const unpairedAdaptive = Boolean(isAdaptiveFmt && hasDirectUrl && !cleanBestAudioUrl);
-        const requiresCipher = Boolean(!hasDirectUrl || unpairedAdaptive);
+        const requiresCipher = Boolean(!effectiveFormatUrl || (unpairedAdaptive && !fallbackProgressiveUrl));
 
         const vSize = parseInt(f.contentLength || "0", 10);
         const estVBytes = (vSize === 0 && bw > 0 && durSec > 0) ? Math.round((bw / 8) * durSec) : 0;
@@ -230,9 +243,9 @@
           bandwidth: bw,
           size: totalSize,
           sizeEstimated: isSizeEstimated,
-          ext: isMp4 ? "mp4" : "webm",
+          ext: "mp4",
           mime: mime.split(";")[0] || (isMp4 ? "video/mp4" : "video/webm"),
-          videoUrl: unpairedAdaptive ? "" : cleanVUrl,
+          videoUrl: effectiveFormatUrl,
           pairedAudioUrl: needsMux ? cleanBestAudioUrl : "",
           requiresAudioMux: needsMux,
           requiresCipherExtraction: requiresCipher,
@@ -293,16 +306,26 @@
       // Adaptive video tracks on YouTube have no audio; only use adaptive bestVideo if bestAudio is also available,
       // otherwise prefer bestProgressive or mark requiresCipherExtraction so yt-dlp extracts & merges both tracks.
       const trackedVideoUrl = trackedYtMediaUrls.get("video") || "";
-      const effectiveBestVideoUrl = (bestVideo && bestVideo.url) ? bestVideo.url : trackedVideoUrl;
+      const bestVideoItag = bestVideo && bestVideo.itag ? String(bestVideo.itag) : "";
+      const effectiveBestVideoUrl = (bestVideoItag && trackedYtMediaUrls.get(bestVideoItag)) ||
+        trackedVideoUrl || ((bestVideo && bestVideo.url) ? bestVideo.url : "");
       const effectiveBestAudioUrl = cleanBestAudioUrl;
       const canMuxAdaptive = Boolean(effectiveBestVideoUrl && effectiveBestAudioUrl);
       const chosenVideo = canMuxAdaptive ? (bestVideo || { url: effectiveBestVideoUrl }) : (bestProgressive || bestVideo);
 
-      const effectiveChosenUrl = (chosenVideo && chosenVideo.url) || effectiveBestVideoUrl;
+      const chosenVideoItag = chosenVideo && chosenVideo.itag ? String(chosenVideo.itag) : "";
+      const effectiveChosenUrl = (chosenVideoItag && trackedYtMediaUrls.get(chosenVideoItag)) ||
+        (chosenVideo && chosenVideo.url) || effectiveBestVideoUrl;
       if (effectiveChosenUrl) {
         const cleanVideoUrl = normalizeGooglevideoUrl(effectiveChosenUrl);
         const cleanAudioUrl = canMuxAdaptive ? effectiveBestAudioUrl : "";
         const isUnpairedAdaptiveVideo = Boolean(chosenVideo === bestVideo && !cleanAudioUrl);
+        const effectiveFallbackProgressiveUrl = (!canMuxAdaptive && bestProgressive && bestProgressive.url)
+          ? normalizeGooglevideoUrl(bestProgressive.url)
+          : "";
+        const deliveryVideoUrl = canMuxAdaptive
+          ? cleanVideoUrl
+          : (effectiveFallbackProgressiveUrl || cleanVideoUrl);
         // Do NOT downgrade candidate resolution to 360p progressive! Always advertise the highest detected video resolution!
         const resolution = primaryRes;
         const sizeBytes = primarySize ||
@@ -316,10 +339,10 @@
           title: cleanTitle,
           watchUrl: canonicalWatchUrl,
           resolution: primaryRes,
-          videoUrl: isUnpairedAdaptiveVideo ? "" : (canMuxAdaptive ? cleanVideoUrl : ""),
+          videoUrl: deliveryVideoUrl,
           audioUrl: cleanAudioUrl,
           requiresAudioMux: canMuxAdaptive,
-          requiresCipherExtraction: isUnpairedAdaptiveVideo || !canMuxAdaptive,
+          requiresCipherExtraction: isUnpairedAdaptiveVideo && !effectiveFallbackProgressiveUrl,
           videoMime: String(chosenVideo.mimeType || "video/mp4").split(";")[0],
           audioMime: (canMuxAdaptive && bestAudio) ? String(bestAudio.mimeType || "audio/mp4").split(";")[0] : "",
           hlsManifestUrl: streamingData.hlsManifestUrl || "",
@@ -338,10 +361,10 @@
           pageTitle: cleanTitle,
           resolution: primaryRes,
           size: sizeBytes > 0 ? sizeBytes : 0,
-          videoUrl: isUnpairedAdaptiveVideo ? "" : (canMuxAdaptive ? cleanVideoUrl : ""),
+          videoUrl: deliveryVideoUrl,
           pairedAudioUrl: cleanAudioUrl,
           requiresAudioMux: canMuxAdaptive,
-          requiresCipherExtraction: isUnpairedAdaptiveVideo || !canMuxAdaptive,
+          requiresCipherExtraction: isUnpairedAdaptiveVideo && !effectiveFallbackProgressiveUrl,
           qualities,
           referer: canonicalWatchUrl,
           extractorJson: JSON.stringify(descriptor),
@@ -391,7 +414,7 @@
       try {
         if (!win.location || !win.location.hostname) return false;
         const host = win.location.hostname.toLowerCase();
-        if (!host.includes("youtube.com") && host !== "youtu.be") return false;
+        if (!host.includes("youtube.com") && host !== "youtu.be" && !host.includes("bilibili.com") && host !== "b23.tv") return false;
 
         // 1. Check #movie_player API (most up-to-date during SPA navigation)
         if (win.document && typeof win.document.getElementById === "function") {
@@ -503,6 +526,128 @@
             cachedManifestBody: JSON.stringify(descriptor)
           });
           return true;
+        }
+
+        // 4. Bilibili window.__playinfo__ or window.__INITIAL_STATE__ inspection
+        if (host.includes("bilibili.com")) {
+          let playinfo = (win.__playinfo__ && typeof win.__playinfo__ === "object") ? win.__playinfo__ : null;
+          if (!playinfo && win.__INITIAL_STATE__ && win.__INITIAL_STATE__.videoData) {
+            // Check nested state
+          }
+          const rawTitle = (win.document && win.document.title ? win.document.title : "bilibili_video")
+            .replace(/_哔哩哔哩_bilibili$/i, "")
+            .replace(/\s*-\s*bilibili$/i, "")
+            .trim() || "bilibili_video";
+          const href = win.location.href;
+
+          if (playinfo) {
+            const data = playinfo.data || playinfo.result || playinfo;
+            const dash = data && data.dash;
+            const durl = data && Array.isArray(data.durl) ? data.durl : null;
+            if (dash && Array.isArray(dash.video) && dash.video.length > 0) {
+              const durSec = Number(dash.duration || 0);
+              let bestAudio = null;
+              if (Array.isArray(dash.audio)) {
+                for (const a of dash.audio) {
+                  if (a && (a.baseUrl || a.base_url)) {
+                    if (!bestAudio || Number(a.bandwidth || 0) > Number(bestAudio.bandwidth || 0)) {
+                      bestAudio = a;
+                    }
+                  }
+                }
+              }
+              const audioUrl = bestAudio ? (bestAudio.baseUrl || bestAudio.base_url || "") : "";
+              const audioBw = bestAudio ? Number(bestAudio.bandwidth || 128000) : 0;
+              const seenHeights = new Map();
+              for (const v of dash.video) {
+                const vUrl = v && (v.baseUrl || v.base_url || "");
+                if (!vUrl) continue;
+                const h = Number(v.height || 0);
+                const w = Number(v.width || 0);
+                const bw = Number(v.bandwidth || 0);
+                const resLabel = h > 0 ? `${h}p` : `qn${v.id || 0}`;
+                const key = resLabel.toLowerCase();
+                const estBytes = durSec > 0 ? Math.round(((bw + audioBw) / 8) * durSec) : 0;
+                const entry = {
+                  id: key,
+                  label: `${resLabel} (MP4)`,
+                  resolution: resLabel,
+                  width: w,
+                  height: h,
+                  bandwidth: bw,
+                  size: estBytes,
+                  sizeEstimated: true,
+                  ext: "mp4",
+                  videoUrl: vUrl,
+                  pairedAudioUrl: audioUrl,
+                  requiresAudioMux: Boolean(audioUrl),
+                  requiresCipherExtraction: false,
+                  videoFilter: resLabel
+                };
+                const prev = seenHeights.get(key);
+                if (!prev || bw > prev.bandwidth) {
+                  seenHeights.set(key, entry);
+                }
+              }
+              const qualities = Array.from(seenHeights.values()).sort((a, b) => (b.height || 0) - (a.height || 0));
+              if (qualities.length > 0) {
+                const topQ = qualities[0];
+                const desc = {
+                  radiumType: "YOUTUBE_STREAM",
+                  sourceType: "YOUTUBE_EXTRACTION",
+                  title: rawTitle,
+                  watchUrl: href,
+                  resolution: topQ.resolution,
+                  videoUrl: topQ.videoUrl,
+                  audioUrl: topQ.pairedAudioUrl,
+                  requiresAudioMux: topQ.requiresAudioMux,
+                  qualities
+                };
+                sendMedia({
+                  streamType: "YOUTUBE",
+                  sourceType: "YOUTUBE_EXTRACTION",
+                  ext: "mp4",
+                  url: href,
+                  pageTitle: rawTitle,
+                  resolution: topQ.resolution,
+                  size: topQ.size || 0,
+                  videoUrl: topQ.videoUrl,
+                  pairedAudioUrl: topQ.pairedAudioUrl,
+                  requiresAudioMux: topQ.requiresAudioMux,
+                  qualities,
+                  referer: "https://www.bilibili.com/",
+                  extractorJson: JSON.stringify(desc)
+                });
+                return true;
+              }
+            } else if (durl && durl.length > 0 && durl[0].url) {
+              sendMedia({
+                streamType: "HTTP_FILE",
+                sourceType: "DIRECT_PROGRESSIVE",
+                ext: "mp4",
+                url: durl[0].url,
+                size: Number(durl[0].size || 0),
+                pageTitle: rawTitle,
+                referer: "https://www.bilibili.com/"
+              });
+              return true;
+            }
+          }
+
+          // If __playinfo__ not yet present, register video watch fallback so badge & overlay are active
+          if (href.includes("/video/") || href.includes("/bangumi/play/") || href.includes("/medialist/play/") || /BV[0-9A-Za-z]{10}/i.test(href) || /av\d+/i.test(href) || host === "b23.tv") {
+            sendMedia({
+              streamType: "SITE_EXTRACTION",
+              sourceType: "YOUTUBE_EXTRACTION",
+              ext: "mp4",
+              url: href,
+              pageTitle: rawTitle,
+              resolution: "1080p",
+              requiresCipherExtraction: false,
+              referer: "https://www.bilibili.com/"
+            });
+            return true;
+          }
         }
       } catch (_) {}
       return false;
@@ -675,7 +820,7 @@
           const mime = (u.searchParams.get("mime") || "video/mp4").toLowerCase();
           const clen = parseInt(u.searchParams.get("clen") || "0", 10);
           const itag = u.searchParams.get("itag") || "";
-          const hasUmp = rawU.searchParams.get("ump") === "1" || rawU.searchParams.has("srfvp");
+          const hasUmp = rawU.searchParams.get("ump") === "1" || rawU.searchParams.has("srfvp") || rawU.searchParams.get("sabr") === "1";
           const hadRange = rawU.searchParams.has("range") || rawU.searchParams.has("rbuf");
           const isAudio = mime.startsWith("audio/");
           const isProgressive = PROGRESSIVE_YOUTUBE_ITAGS.has(itag) && !isAudio && !hasUmp && !hadRange;

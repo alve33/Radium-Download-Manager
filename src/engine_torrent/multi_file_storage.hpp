@@ -8,7 +8,9 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "common/logger.hpp"
@@ -21,7 +23,29 @@ namespace openidm::torrent {
 class MultiFileStorage {
 public:
     MultiFileStorage() = default;
-    ~MultiFileStorage() = default;
+    ~MultiFileStorage() {
+        CloseHandles();
+    }
+
+    void CloseHandles() {
+        std::lock_guard<std::mutex> lock(m_stream_mutex);
+        for (auto& [path_str, fs_ptr] : m_stream_cache) {
+            if (fs_ptr && fs_ptr->is_open()) {
+                fs_ptr->flush();
+                fs_ptr->close();
+            }
+        }
+        m_stream_cache.clear();
+    }
+
+    void FlushHandles() {
+        std::lock_guard<std::mutex> lock(m_stream_mutex);
+        for (auto& [path_str, fs_ptr] : m_stream_cache) {
+            if (fs_ptr && fs_ptr->is_open()) {
+                fs_ptr->flush();
+            }
+        }
+    }
 
     Result<void> Initialize(
         const std::filesystem::path& base_dir,
@@ -114,22 +138,15 @@ public:
                     std::filesystem::create_directories(parent, ec);
                 }
 
-                // Open with read/write in binary mode without truncation
-                std::fstream fs(fm.full_path, std::ios::in | std::ios::out | std::ios::binary);
-                if (!fs) {
-                    fs.clear();
-                    fs.open(fm.full_path, std::ios::out | std::ios::binary);
-                    fs.close();
-                    fs.open(fm.full_path, std::ios::in | std::ios::out | std::ios::binary);
-                }
-                if (!fs) {
+                auto fs_ptr = GetOrCreateStream(fm.full_path);
+                if (!fs_ptr || !fs_ptr->is_open()) {
                     return Result<void>::Err("ERR_STORAGE_WRITE", "Cannot open for write: " + fm.full_path.string());
                 }
 
-                fs.seekp(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
-                fs.write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(to_write));
-                fs.flush();
-                if (!fs.good()) {
+                std::lock_guard<std::mutex> lock(m_stream_mutex);
+                fs_ptr->seekp(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
+                fs_ptr->write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(to_write));
+                if (!fs_ptr->good()) {
                     return Result<void>::Err("ERR_STORAGE_WRITE", "Write failed on: " + fm.full_path.string());
                 }
             }
@@ -172,14 +189,15 @@ public:
             size_t to_read = static_cast<size_t>(std::min<uint64_t>(rem, avail_in_file));
 
             if (fm.entry.selected && std::filesystem::exists(fm.full_path)) {
-                std::ifstream ifs(fm.full_path, std::ios::binary);
-                if (!ifs) {
+                auto fs_ptr = GetOrCreateStream(fm.full_path);
+                if (!fs_ptr || !fs_ptr->is_open()) {
                     return Result<void>::Err("ERR_STORAGE_READ", "Cannot open for read: " + fm.full_path.string());
                 }
 
-                ifs.seekg(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
-                ifs.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(to_read));
-                if (!ifs.good() && !ifs.eof()) {
+                std::lock_guard<std::mutex> lock(m_stream_mutex);
+                fs_ptr->seekg(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
+                fs_ptr->read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(to_read));
+                if (!fs_ptr->good() && !fs_ptr->eof()) {
                     return Result<void>::Err("ERR_STORAGE_READ", "Read failed on: " + fm.full_path.string());
                 }
             } else {
@@ -211,6 +229,31 @@ private:
     std::vector<FileMapping> m_files;
     std::filesystem::path m_base_dir;
     uint64_t m_total_length{0};
+
+    std::mutex m_stream_mutex;
+    std::unordered_map<std::string, std::shared_ptr<std::fstream>> m_stream_cache;
+
+    std::shared_ptr<std::fstream> GetOrCreateStream(const std::filesystem::path& p) {
+        std::string key = p.string();
+        std::lock_guard<std::mutex> lock(m_stream_mutex);
+        auto it = m_stream_cache.find(key);
+        if (it != m_stream_cache.end() && it->second && it->second->is_open()) {
+            return it->second;
+        }
+
+        auto fs = std::make_shared<std::fstream>(p, std::ios::in | std::ios::out | std::ios::binary);
+        if (!fs->is_open()) {
+            fs->clear();
+            fs->open(p, std::ios::out | std::ios::binary);
+            fs->close();
+            fs->open(p, std::ios::in | std::ios::out | std::ios::binary);
+        }
+        if (fs->is_open()) {
+            m_stream_cache[key] = fs;
+            return fs;
+        }
+        return nullptr;
+    }
 
     // Direct adoption of aria2 findFirstDiskWriterEntry / binary search
     size_t FindFileIndex(uint64_t offset) const {

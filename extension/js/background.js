@@ -1925,9 +1925,59 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
 var submitMediaCandidateToFlux = submitMediaCandidateToRadium;
 var submitMediaCandidateToOpenIDM = submitMediaCandidateToFlux;
 
+function isSupportedVideoSiteUrlDirect(url) {
+  if (!url || typeof url !== "string") return false;
+  if (/bilibili\.com|b23\.tv|facebook\.com|fb\.watch|fbcdn\.net|pornhub\.com|phncdn\.com|youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|tiktok\.com|instagram\.com|twitter\.com|x\.com|twitch\.tv|streamable\.com/i.test(url)) {
+    if (/\.(m3u8|mpd|m4s|ts)(\?|$)/i.test(url)) return false;
+    return true;
+  }
+  const cleanUrl = url.replace(/^blob:/i, "");
+  if (isYouTubeWatchOrShortsUrl(cleanUrl)) return true;
+  try {
+    const u = new URL(cleanUrl);
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.toLowerCase();
+    if (/\.(mp4|webm|mkv|m3u8|mpd|ts|m4s|m4a|mp3|flv|mov)$/i.test(path)) return false;
+    if (host.includes("bilibili.com") || host === "b23.tv") return true;
+    if (host.includes("facebook.com") || host.includes("fb.watch") || host.includes("fbcdn.net")) return true;
+    if (host.includes("vimeo.com") || host.includes("dailymotion.com") || host.includes("dai.ly") ||
+        host.includes("twitch.tv") || host.includes("streamable.com") || host.includes("tiktok.com") ||
+        host.includes("instagram.com") || host.includes("reddit.com") || host.includes("twitter.com") ||
+        host.includes("x.com")) return true;
+
+    // Generic video page path and query parameter heuristics
+    if (path.startsWith("/watch") ||
+        path.includes("/video/") ||
+        path.includes("/videos/") ||
+        path.startsWith("/video-") ||
+        path.startsWith("/hd-") ||
+        path.startsWith("/v/") ||
+        path.startsWith("/reel/") ||
+        path.startsWith("/reels/") ||
+        path.startsWith("/shorts/") ||
+        path.startsWith("/clip/") ||
+        path.startsWith("/clips/") ||
+        path.startsWith("/embed/") ||
+        path.startsWith("/play/") ||
+        path.startsWith("/player/") ||
+        path.includes("/status/") ||
+        path.includes("/comments/") ||
+        u.searchParams.has("viewkey") ||
+        path.includes("view_video") ||
+        u.searchParams.has("v") ||
+        /^\/video[0-9a-z._-]+/i.test(path) ||
+        (/^\/\d+/.test(path) && path.split("/").filter(Boolean).length === 1)) {
+      return true;
+    }
+  } catch (_) {
+    if (/youtube\.com|youtu\.be/i.test(url)) return true;
+  }
+  return false;
+}
+
 function resolveCandidateForDownloadRequest(tabId, msg, sender) {
   let tabList = G.cacheData.get(tabId) || [];
-  const effectiveTabUrl = msg.tabUrl || (sender && sender.tab && sender.tab.url) || G.tabUrlMap.get(tabId) || "";
+  const effectiveTabUrl = msg.tabUrl || (sender && sender.tab && sender.tab.url) || G.tabUrlMap.get(tabId) || msg.frameUrl || "";
   const effectiveTitle = (msg.pageTitle || (sender && sender.tab && sender.tab.title) || "video").replace(/\s*-\s*YouTube$/i, "").trim();
 
   // 1. Explicit candidateId match (e.g. from Popup UI or resolved video overlay)
@@ -1941,7 +1991,43 @@ function resolveCandidateForDownloadRequest(tabId, msg, sender) {
         }
       }
     }
-    if (byId) return { candidate: byId };
+    // Reject subtitle candidate as sole media stream
+    if (byId && !byId.url?.toLowerCase().includes(".srt") && !byId.url?.toLowerCase().includes(".vtt")) {
+      return { candidate: byId };
+    }
+  }
+
+  // 1b. Supported video site watch URL priority check (Bilibili, Facebook, YouTube, adult sites, etc.)
+  // Never fail with "No supported download source found for this blob" if the page URL is a supported video site!
+  let targetPageUrl = effectiveTabUrl || msg.frameUrl || msg.tabUrl || (sender && sender.tab && sender.tab.url) || G.tabUrlMap.get(tabId) || msg.url || "";
+  if (targetPageUrl.startsWith("blob:")) {
+    const rawNoBlob = targetPageUrl.replace(/^blob:/i, "");
+    targetPageUrl = (effectiveTabUrl && !effectiveTabUrl.startsWith("blob:")) ? effectiveTabUrl : rawNoBlob;
+  }
+  const isSupportedSite = isYouTubeWatchOrShortsUrl(targetPageUrl) ||
+                          isSupportedVideoSiteUrlDirect(targetPageUrl) ||
+                          isSupportedVideoSiteUrlDirect(effectiveTabUrl) ||
+                          isSupportedVideoSiteUrlDirect(msg.url) ||
+                          isSupportedVideoSiteUrlDirect(msg.blobUrl) ||
+                          (typeof isSupportedVideoSiteWatchUrl === "function" && isSupportedVideoSiteWatchUrl(targetPageUrl));
+
+  // If on a supported site and the video element is MSE blob without a pre-extracted URL, immediately return site extraction candidate
+  if (isSupportedSite && (msg.isMseBlob || !msg.url || msg.url.startsWith("blob:"))) {
+    const videoId = extractYouTubeVideoId(targetPageUrl);
+    const siteCand = {
+      url: targetPageUrl,
+      ext: "mp4",
+      streamType: isYouTubeWatchOrShortsUrl(targetPageUrl) ? "YOUTUBE" : "SITE_EXTRACTION",
+      sourceType: SourceType.YOUTUBE_EXTRACTION,
+      videoId,
+      requiresCipherExtraction: true,
+      pageTitle: effectiveTitle || "video",
+      tabUrl: targetPageUrl,
+      headers: { Referer: targetPageUrl }
+    };
+    addOrDeduplicateMediaCandidate(tabId, siteCand);
+    updateTabBadge(tabId);
+    return { candidate: siteCand };
   }
 
   // 2. Direct non-blob URL match
@@ -1994,16 +2080,19 @@ function resolveCandidateForDownloadRequest(tabId, msg, sender) {
     }
   }
 
-  // 4. Highest-confidence detected candidate on this tab (prioritizing video / streams over stray audio)
+  // 4. Highest-confidence detected candidate on this tab (prioritizing video / streams over stray audio/subtitles)
   if (tabList.length > 0) {
-    const nonAudio = tabList.filter(c => !c.isAudioOnly);
-    const pool = nonAudio.length > 0 ? nonAudio : tabList;
+    const validMedia = tabList.filter(c => !c.url?.toLowerCase().includes(".srt") && !c.url?.toLowerCase().includes(".vtt"));
+    const nonAudio = validMedia.filter(c => !c.isAudioOnly);
+    const pool = nonAudio.length > 0 ? nonAudio : (validMedia.length > 0 ? validMedia : tabList);
     const streams = pool.filter(c => c.sourceType === SourceType.YOUTUBE_EXTRACTION || c.streamType === "YOUTUBE" || c.streamType === "HLS" || c.streamType === "DASH");
     const best = (streams.length > 0 ? streams[0] : pool[0]);
-    if (effectiveTitle && (!best.pageTitle || best.pageTitle === "video")) {
-      best.pageTitle = effectiveTitle;
+    if (best && !best.url?.toLowerCase().includes(".srt") && !best.url?.toLowerCase().includes(".vtt")) {
+      if (effectiveTitle && (!best.pageTitle || best.pageTitle === "video")) {
+        best.pageTitle = effectiveTitle;
+      }
+      return { candidate: best };
     }
-    return { candidate: best };
   }
 
   // 5. Check if the page reported a specific player error (e.g. YouTube unplayable / private / DRM video)
@@ -2011,18 +2100,17 @@ function resolveCandidateForDownloadRequest(tabId, msg, sender) {
     return { error: G.playerErrors.get(tabId) };
   }
 
-  // 6. If on a valid YouTube watch/shorts/embed URL, route via YOUTUBE_EXTRACTION worker
-  const targetPageUrl = effectiveTabUrl || msg.frameUrl || msg.url || "";
-  if (isYouTubeWatchOrShortsUrl(targetPageUrl)) {
+  // 6. If on a valid YouTube or supported video site watch/shorts/embed URL, route via YOUTUBE_EXTRACTION worker
+  if (isSupportedSite) {
     const videoId = extractYouTubeVideoId(targetPageUrl);
     const ytCand = {
       url: targetPageUrl,
       ext: "mp4",
-      streamType: "YOUTUBE",
+      streamType: isYouTubeWatchOrShortsUrl(targetPageUrl) ? "YOUTUBE" : "SITE_EXTRACTION",
       sourceType: SourceType.YOUTUBE_EXTRACTION,
       videoId,
       requiresCipherExtraction: true,
-      pageTitle: effectiveTitle || "youtube_video",
+      pageTitle: effectiveTitle || "video",
       tabUrl: targetPageUrl,
       headers: { Referer: targetPageUrl }
     };
@@ -2033,6 +2121,23 @@ function resolveCandidateForDownloadRequest(tabId, msg, sender) {
 
   // 7. Unresolved blob: video with no manifest or network stream
   if (msg.isMseBlob || (msg.blobUrl && msg.blobUrl.startsWith("blob:"))) {
+    const fallbackTabUrl = (sender && sender.tab && sender.tab.url) || G.tabUrlMap.get(tabId) || targetPageUrl || "";
+    if (isSupportedVideoSiteUrlDirect(fallbackTabUrl)) {
+      const siteCand = {
+        url: fallbackTabUrl.replace(/^blob:/i, ""),
+        ext: "mp4",
+        streamType: isYouTubeWatchOrShortsUrl(fallbackTabUrl) ? "YOUTUBE" : "SITE_EXTRACTION",
+        sourceType: SourceType.YOUTUBE_EXTRACTION,
+        videoId: extractYouTubeVideoId(fallbackTabUrl),
+        requiresCipherExtraction: true,
+        pageTitle: effectiveTitle || "video",
+        tabUrl: fallbackTabUrl.replace(/^blob:/i, ""),
+        headers: { Referer: fallbackTabUrl.replace(/^blob:/i, "") }
+      };
+      addOrDeduplicateMediaCandidate(tabId, siteCand);
+      updateTabBadge(tabId);
+      return { candidate: siteCand };
+    }
     return {
       error: "No supported download source found for this blob: video player."
     };

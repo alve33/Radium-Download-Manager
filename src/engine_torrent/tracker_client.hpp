@@ -4,11 +4,13 @@
 
 #include <chrono>
 #include <cstdint>
+#include <future>
 #include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
+#include "common/version.hpp"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -163,7 +165,7 @@ public:
         std::string response_body;
         std::atomic<bool> cancel_flag{false};
         std::map<std::string, std::string> req_headers;
-        req_headers["User-Agent"] = "Radium/1.0.0 (BitTorrent; Win64)";
+        req_headers["User-Agent"] = "Radium/" + std::string(RADIUM_VERSION_STRING) + " (BitTorrent; Win64)";
         req_headers["Accept"] = "*/*";
 
         brisk::HttpClient::HttpNetworkOptions net_opts;
@@ -411,44 +413,100 @@ public:
         std::string last_error = "All announce trackers failed";
         size_t success_trackers = 0;
 
+        // Parallel Tracker Announces: Dispatch announces across trackers concurrently
+        // instead of sequentially blocking per dead tracker.
+        uint32_t per_tracker_timeout = std::min<uint32_t>(timeout_ms, 2500);
+
+        struct AnnounceJob {
+            std::string url;
+            std::future<Result<TrackerAnnounceResponse>> fut;
+        };
+
+        std::vector<AnnounceJob> jobs;
+        jobs.reserve(announce_urls.size());
+
         for (const auto& url : announce_urls) {
-            Result<TrackerAnnounceResponse> res = Result<TrackerAnnounceResponse>::Err("ERR_TORRENT_TRACKER_UNSUPPORTED", "Unsupported protocol");
-            if (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0) {
-                OPENIDM_LOG_INFO("TrackerClient", "Attempting announce to HTTP tracker: " + url);
-                res = AnnounceHttp(url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event, timeout_ms);
-            } else if (url.rfind("udp://", 0) == 0) {
-                OPENIDM_LOG_INFO("TrackerClient", "Attempting announce to UDP tracker: " + url);
-                res = AnnounceUdp(url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event, timeout_ms);
-            }
+            jobs.push_back({
+                url,
+                std::async(std::launch::async, [url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event_str = std::string(event), per_tracker_timeout]() {
+                    if (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0) {
+                        OPENIDM_LOG_INFO("TrackerClient", "Attempting parallel announce to HTTP tracker: " + url);
+                        return AnnounceHttp(url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event_str, per_tracker_timeout);
+                    } else if (url.rfind("udp://", 0) == 0) {
+                        OPENIDM_LOG_INFO("TrackerClient", "Attempting parallel announce to UDP tracker: " + url);
+                        return AnnounceUdp(url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event_str, per_tracker_timeout);
+                    }
+                    return Result<TrackerAnnounceResponse>::Err("ERR_TORRENT_TRACKER_UNSUPPORTED", "Unsupported protocol");
+                })
+            });
+        }
 
-            if (res.ok()) {
-                success_trackers++;
-                merged_tr.ok = true;
-                if (res.value->interval > 0) merged_tr.interval = res.value->interval;
-                merged_tr.complete = std::max(merged_tr.complete, res.value->complete);
-                merged_tr.incomplete = std::max(merged_tr.incomplete, res.value->incomplete);
+        // Aggregate results with an aggregate deadline
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max<uint32_t>(timeout_ms, 2500));
+        std::vector<bool> job_collected(jobs.size(), false);
+        size_t completed_jobs = 0;
 
-                size_t new_peers = 0;
-                for (auto& p : res.value->peers) {
-                    std::string key = p.ip + ":" + std::to_string(p.port);
-                    if (seen_peers.insert(key).second) {
-                        merged_tr.peers.push_back(std::move(p));
-                        new_peers++;
+        while (completed_jobs < jobs.size() && std::chrono::steady_clock::now() < deadline) {
+            bool any_resolved = false;
+            for (size_t i = 0; i < jobs.size(); ++i) {
+                if (job_collected[i]) continue;
+                if (jobs[i].fut.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready) {
+                    job_collected[i] = true;
+                    completed_jobs++;
+                    any_resolved = true;
+                    auto res = jobs[i].fut.get();
+                    if (res.ok()) {
+                        success_trackers++;
+                        merged_tr.ok = true;
+                        if (res.value->interval > 0) merged_tr.interval = res.value->interval;
+                        merged_tr.complete = std::max(merged_tr.complete, res.value->complete);
+                        merged_tr.incomplete = std::max(merged_tr.incomplete, res.value->incomplete);
+
+                        size_t new_peers = 0;
+                        for (auto& p : res.value->peers) {
+                            std::string key = p.ip + ":" + std::to_string(p.port);
+                            if (seen_peers.insert(key).second) {
+                                merged_tr.peers.push_back(std::move(p));
+                                new_peers++;
+                            }
+                        }
+                        OPENIDM_LOG_INFO("TrackerClient", "Tracker " + jobs[i].url + " succeeded: returned " +
+                                                           std::to_string(res.value->peers.size()) + " peers (" +
+                                                           std::to_string(new_peers) + " new, total pool: " +
+                                                           std::to_string(merged_tr.peers.size()) + ")");
+                    } else {
+                        last_error = res.error->message;
+                        OPENIDM_LOG_WARN("TrackerClient", "Tracker announce failed for " + jobs[i].url + ": " + last_error);
                     }
                 }
-                OPENIDM_LOG_INFO("TrackerClient", "Tracker " + url + " succeeded: returned " +
-                                                   std::to_string(res.value->peers.size()) + " peers (" +
-                                                   std::to_string(new_peers) + " new, total pool: " +
-                                                   std::to_string(merged_tr.peers.size()) + ")");
+            }
+            if (merged_tr.peers.size() >= 50) {
+                OPENIDM_LOG_INFO("TrackerClient", "Sufficient peers collected (" + std::to_string(merged_tr.peers.size()) + "); stopping tracker wait");
+                break;
+            }
+            if (!any_resolved) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            }
+        }
 
-                // If we have collected at least 50 peers, we can stop querying remaining trackers to save bandwidth
-                if (merged_tr.peers.size() >= 50) {
-                    OPENIDM_LOG_INFO("TrackerClient", "Sufficient peers collected (" + std::to_string(merged_tr.peers.size()) + "); stopping tracker queries");
-                    break;
+        // For any remaining ready futures, collect their results
+        for (size_t i = 0; i < jobs.size(); ++i) {
+            if (!job_collected[i] && jobs[i].fut.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+                job_collected[i] = true;
+                auto res = jobs[i].fut.get();
+                if (res.ok()) {
+                    success_trackers++;
+                    merged_tr.ok = true;
+                    if (res.value->interval > 0) merged_tr.interval = res.value->interval;
+                    merged_tr.complete = std::max(merged_tr.complete, res.value->complete);
+                    merged_tr.incomplete = std::max(merged_tr.incomplete, res.value->incomplete);
+                    for (auto& p : res.value->peers) {
+                        std::string key = p.ip + ":" + std::to_string(p.port);
+                        if (seen_peers.insert(key).second) {
+                            merged_tr.peers.push_back(std::move(p));
+                        }
+                    }
                 }
-            } else {
-                last_error = res.error->message;
-                OPENIDM_LOG_WARN("TrackerClient", "Tracker announce failed for " + url + ": " + last_error);
             }
         }
 

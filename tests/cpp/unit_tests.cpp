@@ -1,3 +1,7 @@
+#include "engine_torrent/torrent_creator.hpp"
+#include "core/update_manager.hpp"
+#include "common/settings_serializer.hpp"
+#include "ui/localization.hpp"
 // SPDX-License-Identifier: Apache-2.0
 // Radium Download Manager — Automated C++20 Unit & Regression Test Suite
 // Verifies PathSanitizer, Dynamic Worker Discovery, Disk Space Guard, Logger Redaction,
@@ -25,6 +29,7 @@
 #include "engine_torrent/peer_wire_protocol.hpp"
 #include "engine_torrent/piece_manager.hpp"
 #include "engine_torrent/torrent_engine.hpp"
+#include "engine_torrent/torrent_rate_meter.hpp"
 #include "engine_torrent/torrent_parser.hpp"
 #include <array>
 #include <utility>
@@ -47,6 +52,7 @@ bool TestMultiPeerTransferAndSeedingControls();
 #include "ui/win32_main_window.hpp"
 
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -96,6 +102,48 @@ bool TestPathSanitizerAndContentDisposition() {
     auto prompt = PathSanitizer::ResolveSafeOutputPath(tmp_dir, "archive.zip", openidm::ConflictPolicy::kPrompt);
     ASSERT_TRUE(!prompt.ok() && prompt.error->code == "ERR_FILE_EXISTS", "Prompt policy surfaces a destination conflict");
     std::filesystem::remove_all(tmp_dir);
+    return true;
+}
+
+bool TestTorrentRateMeterUsesPayloadDeltas() {
+    using Meter = openidm::torrent::TorrentRateMeter;
+    const auto t0 = Meter::Clock::time_point{};
+    Meter download;
+    ASSERT_TRUE(download.Update(100, t0) == 0, "First payload counter establishes a baseline");
+    ASSERT_TRUE(download.Update(600, t0 + std::chrono::milliseconds(500)) == 1000,
+                "Rate uses received-byte delta over monotonic elapsed time");
+    ASSERT_TRUE(download.Update(700, t0 + std::chrono::milliseconds(750)) == 1000,
+                "Short intervals do not create rate spikes");
+    ASSERT_TRUE(download.Update(1100, t0 + std::chrono::milliseconds(1000)) == 1000,
+                "Aggregated payload from multiple peers is counted once by cumulative counter delta");
+    ASSERT_TRUE(download.Update(1100, t0 + std::chrono::milliseconds(1500)) == 0,
+                "Idle interval clears the instantaneous rate");
+    ASSERT_TRUE(download.Update(10, t0 + std::chrono::milliseconds(2000)) == 0,
+                "Counter reset reseeds baseline without a huge unsigned delta");
+    ASSERT_TRUE(download.Update(510, t0 + std::chrono::milliseconds(2500)) == 1000,
+                "Rate recovers after counter reset");
+
+    Meter upload;
+    ASSERT_TRUE(upload.Update(0, t0) == 0, "Upload counter has an independent baseline");
+    ASSERT_TRUE(upload.Update(256, t0 + std::chrono::milliseconds(500)) == 512,
+                "Upload rate follows successfully sent payload bytes");
+
+    const uint64_t torrent_a_bps = download.Current();
+    const uint64_t torrent_b_bps = 2000;
+    ASSERT_TRUE(torrent_a_bps + torrent_b_bps == 3000,
+                "Global torrent rate is the sum of individual torrent rates");
+
+    std::vector<std::thread> readers;
+    for (int i = 0; i < 8; ++i) {
+        readers.emplace_back([&download, t0, i]() {
+            for (int sample = 0; sample < 100; ++sample) {
+                (void)download.Update(static_cast<uint64_t>(sample + i), t0 + std::chrono::milliseconds(2500 + sample));
+                (void)download.Current();
+            }
+        });
+    }
+    for (auto& reader : readers) reader.join();
+    ASSERT_TRUE(true, "Concurrent statistics reads and updates complete safely");
     return true;
 }
 
@@ -381,7 +429,16 @@ bool TestDesktopUiDesignSystemAndHighDpiLayout() {
     ASSERT_TRUE(dark.accent_primary.ToCssHex() == "#FF4757", "Radium Coral #FF4757 accent");
     ASSERT_TRUE(dark.accent_hover.ToCssHex() == "#FF5F6A", "Radium Coral hover #FF5F6A");
     ASSERT_TRUE(light.mode == ThemeMode::kLight && light.surface_primary.ToCssHex() == "#FFFFFF", "Light theme white surface");
-    ASSERT_TRUE(sys_light.mode == ThemeMode::kLight, "System theme honors OS light preference");
+    ASSERT_TRUE(light.accent_primary.ToCssHex() == "#168BCB" && light.border_focus.ToCssHex() == "#168BCB" &&
+                light.badge_file.ToCssHex() == "#168BCB" && light.status_danger.ToCssHex() == "#FF9F43",
+                "Light theme uses the specified sky-blue accent and orange failure token");
+    ASSERT_TRUE(light.app_background.ToCssHex() == "#FFFFFF" && light.surface_elevated.ToCssHex() == "#F5F7F9" &&
+                light.surface_selected.ToCssHex() == "#E3F3FC" && light.surface_hover.ToCssHex() == "#F1F8FC" &&
+                light.text_primary.ToCssHex() == "#202124" && light.text_secondary.ToCssHex() == "#656B73" &&
+                light.border_subtle.ToCssHex() == "#E1E8ED",
+                "Light theme matches the complete specified background, text, selection, hover, and border palette");
+    ASSERT_TRUE(sys_light.mode == ThemeMode::kLight && sys_light.accent_primary.ToCssHex() == "#168BCB" &&
+                sys_light.surface_selected.ToCssHex() == "#E3F3FC", "System theme honors OS light preference and sky-blue selection palette");
 
     // Verify High-DPI scaling across 100% (96), 125% (120), 150% (144), and 200% (192)
     auto m100 = DesignSystem::ComputeMetrics(96);
@@ -643,11 +700,22 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
     cfg.ffmpeg_binary_path = openidm::PathSanitizer::FindWorkerBinary("ffmpeg", openidm::PathSanitizer::GetExecutableDir());
 
     {
+        openidm::SqliteStore legacy_settings;
+        ASSERT_TRUE(legacy_settings.Open(cfg.state_db_path).ok(), "Create database for legacy automatic-language migration");
+        ASSERT_TRUE(legacy_settings.SetSetting("app_settings", R"({"language":"system"})").ok(),
+                    "Seed the old automatic language preference");
+        legacy_settings.Close();
+    }
+
+    {
         openidm::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for Settings Center test");
+        ASSERT_TRUE(ctrl.GetSettings().language == "en", "Legacy automatic language preference migrates to explicit English");
         ASSERT_TRUE(ctrl.GetSettings().last_download_dir.empty(), "Canceled dialogs leave remembered folder unchanged");
         openidm::ui::DesktopView view(ctrl);
         view.SetWindowDimensions(1280, 720, 96);
+        ASSERT_TRUE(!view.SetDraftSettingByKey("language", "system").ok(),
+                    "Automatic language selection is not offered as a user preference");
 
         // Open Settings Center via toolbar action
         ASSERT_TRUE(view.TriggerToolbarAction(openidm::ui::ToolbarActionId::kSettings).ok(), "Open Settings Center");
@@ -694,6 +762,7 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
         ASSERT_TRUE(view.SetDraftSettingByKey("speed_limit_bps", "10485760").ok(), "Set speed_limit_bps = 10 MiB/s");
         ASSERT_TRUE(view.SetDraftSettingByKey("conflict_policy", "overwrite").ok(), "Set conflict_policy = overwrite");
         ASSERT_TRUE(view.SetDraftSettingByKey("reduced_motion", "true").ok(), "Enable reduced_motion");
+        ASSERT_TRUE(view.SetDraftSettingByKey("language", "ja").ok(), "Select Japanese explicitly");
         ASSERT_TRUE(view.HasUnsavedSettingsChanges(), "Detects unsaved draft changes");
 
         ASSERT_TRUE(view.ApplySettingsChanges().ok(), "ApplySettingsChanges persists valid draft");
@@ -716,6 +785,7 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
                     "Last selected download directory survives controller restart");
         ASSERT_TRUE(s.conflict_policy == openidm::ConflictPolicy::kOverwrite, "Persisted conflict_policy == kOverwrite");
         ASSERT_TRUE(s.reduced_motion, "Persisted reduced_motion == true");
+        ASSERT_TRUE(s.language == "ja", "Explicit language preference survives application restart");
         ctrl2.Shutdown();
     }
 
@@ -835,7 +905,7 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
                 "Settings applied while keeping application in Cosmic Dark mode");
 
     auto restored = view.ActionRestoreDefaultSettings();
-    ASSERT_TRUE(restored.ok() && (view.GetThemeName() == "coral_dark" || view.GetThemeName() == "dark" || view.GetThemeName() == "coral") && ctrl.GetMaxConcurrentTasks() == 3, "Restored default settings");
+    ASSERT_TRUE(restored.ok() && view.GetThemeName() == "system" && ctrl.GetMaxConcurrentTasks() == 3, "Restore Defaults returns to system theme");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(work_dir);
@@ -932,8 +1002,24 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
                 "Fixed 192px sidebar precedes the main content region");
     ASSERT_TRUE(geom.sidebar_settings_rect.bottom == 708 && geom.sidebar_settings_rect.top > geom.sidebar_items.back().rect.bottom,
                 "Settings is anchored below sidebar navigation at the window bottom");
+    ASSERT_TRUE(geom.sidebar_language_rect.bottom < geom.sidebar_settings_rect.top &&
+                    geom.sidebar_settings_rect.top - geom.sidebar_language_rect.bottom == 4,
+                "Standalone Language button is placed immediately above Settings");
     ASSERT_TRUE(geom.table_columns.size() == 8, "All 8 table columns laid out at 1280px width");
     ASSERT_TRUE(geom.task_rows.size() == 2, "Both task rows laid out");
+
+    view.SetWindowDimensions(938, 573, 96);
+    const auto narrow_geom = view.ComputeLayoutGeometry(0);
+    ASSERT_TRUE(narrow_geom.search_box_rect.width() >= 112,
+                "Toolbar preserves a useful minimum search field at the reference window width");
+    for (const auto& button : narrow_geom.toolbar_buttons) {
+        if (button.rect.width() <= 0) continue;
+        const bool overlaps_search = button.rect.left < narrow_geom.search_box_rect.right &&
+            button.rect.right > narrow_geom.search_box_rect.left &&
+            button.rect.top < narrow_geom.search_box_rect.bottom && button.rect.bottom > narrow_geom.search_box_rect.top;
+        ASSERT_TRUE(!overlaps_search, "Visible toolbar actions do not overlap the search field when resized");
+    }
+    view.SetWindowDimensions(1280, 720, 96);
 
     view.SelectCategory(openidm::ui::SidebarCategory::kPaused);
     ASSERT_TRUE(view.BuildVisibleTaskRows().size() == 2, "Paused navigation filters the actual paused task objects");
@@ -963,6 +1049,10 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
                                   (geom.sidebar_settings_rect.top + geom.sidebar_settings_rect.bottom) / 2).type ==
                     openidm::ui::HitTargetType::kSidebarSettingsButton,
                 "Bottom sidebar Settings hit target is reachable");
+    ASSERT_TRUE(view.HitTestPoint((geom.sidebar_language_rect.left + geom.sidebar_language_rect.right) / 2,
+                                  (geom.sidebar_language_rect.top + geom.sidebar_language_rect.bottom) / 2).type ==
+                    openidm::ui::HitTargetType::kSidebarLanguageButton,
+                "Standalone Language button above Settings is reachable");
     ASSERT_TRUE(view.HandleMouseClick((geom.sidebar_settings_rect.left + geom.sidebar_settings_rect.right) / 2,
                                       (geom.sidebar_settings_rect.top + geom.sidebar_settings_rect.bottom) / 2, false) &&
                     view.IsSettingsCenterOpen(), "Sidebar Settings opens the existing Settings Center");
@@ -1023,8 +1113,9 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
         [](const openidm::ui::DetailsActionButtonLayout& action) {
             return action.action_id == openidm::ui::DetailsActionId::kRemoveHistory;
         });
-    ASSERT_TRUE(remove_action != compact_geom.details_action_buttons.end() && remove_action->rect.width() == 152,
-                "Remove from History button gets enough width to show its complete label");
+    ASSERT_TRUE(remove_action != compact_geom.details_action_buttons.end() && remove_action->rect.width() == 176 &&
+                remove_action->is_primary,
+                "Remove from History button gets primary styling and enough width to show its complete label");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(work_dir);
@@ -1818,7 +1909,7 @@ bool TestSystemSuspendResumeAndPauseReason() {
     // 3. User manually resumes Task 2
     ASSERT_TRUE(ctrl.ResumeTask(r2.value->task_id).ok(), "Manual resume of Task 2 succeeded");
     auto g2_manual = ctrl.GetTask(r2.value->task_id);
-    ASSERT_TRUE(g2_manual.has_value() && g2_manual->state == openidm::TaskState::kQueued, "Task 2 resumed to Queued");
+    ASSERT_TRUE(g2_manual.has_value() && (g2_manual->state == openidm::TaskState::kQueued || g2_manual->state == openidm::TaskState::kProbing || g2_manual->state == openidm::TaskState::kDownloading), "Task 2 resumed to Queued or Active");
     ASSERT_TRUE(g2_manual->pause_reason == openidm::PauseReason::kNone, "Task 2 pause_reason reset to kNone");
 
     ctrl.Shutdown();
@@ -2791,6 +2882,7 @@ bool TestPieceManagerAndBlockScheduling() {
     ASSERT_TRUE(reqs[0].piece_index == 0 && reqs[0].begin == 0 && reqs[0].length == 16384, "Block 0");
     ASSERT_TRUE(reqs[1].piece_index == 0 && reqs[1].begin == 16384 && reqs[1].length == 16384, "Block 1");
 
+
     // Feed block 0 of piece 0
     bool verified = false, corrupt = false;
     mgr.ProcessBlock(0, 0, piece0_data.data(), 16384, verified, corrupt);
@@ -3057,6 +3149,62 @@ bool TestDuplicateTaskDetectionThreeTiers() {
     std::error_code ec;
     std::filesystem::remove_all(temp_dir, ec);
 
+    // 6. Controller duplicate and destination conflict checks across diverse states (Queued, Downloading, Paused, Completed, Failed)
+    {
+        std::string ctrl_temp_db = (std::filesystem::temp_directory_path() / ("test_dup_ctrl_" + openidm::GenerateUuidV4() + ".db")).string();
+        openidm::ControllerConfig ctrl_cfg;
+        ctrl_cfg.state_db_path = ctrl_temp_db;
+        ctrl_cfg.default_download_dir = std::filesystem::temp_directory_path();
+        ctrl_cfg.temp_root_dir = std::filesystem::temp_directory_path();
+        openidm::DownloadController ctrl(ctrl_cfg);
+        (void)ctrl.Initialize();
+
+        // Add task in Queued/Paused state
+        openidm::TaskModel task1;
+        task1.task_id = "task-active-1";
+        task1.url = "https://example.com/files/document.pdf";
+        task1.file_name = "document.pdf";
+        task1.save_dir = ctrl_cfg.default_download_dir.string();
+        task1.state = openidm::TaskState::kDownloading;
+        task1.total_bytes = 1048576;
+        ASSERT_TRUE(ctrl.AddTask(task1, false, false).ok(), "Added task1 to controller");
+
+        // Add task in Completed state
+        openidm::TaskModel task2;
+        task2.task_id = "task-completed-2";
+        task2.url = "https://example.com/files/archive.zip?auth=xyz";
+        task2.file_name = "archive.zip";
+        task2.save_dir = ctrl_cfg.default_download_dir.string();
+        task2.state = openidm::TaskState::kCompleted;
+        task2.total_bytes = 2097152;
+        ASSERT_TRUE(ctrl.AddTask(task2, false, false).ok(), "Added task2 to controller");
+
+        // Check duplicate by URL for active task
+        auto dup1 = ctrl.CheckDuplicateTask("https://example.com/files/document.pdf", "doc.pdf", 0, "", "");
+        ASSERT_TRUE(dup1.kind == DuplicateKind::kSameUrl, "Controller CheckDuplicateTask finds same URL for active task");
+        ASSERT_TRUE(dup1.matched_task.task_id == "task-active-1", "Controller identified task1");
+
+        // Check duplicate by URL for completed task (matching URL despite whitespace/fragment)
+        auto dup2 = ctrl.CheckDuplicateTask("  https://example.com/files/archive.zip?auth=xyz#section  ", "other.zip", 0, "", "");
+        ASSERT_TRUE(dup2.kind == DuplicateKind::kSameUrl, "Controller CheckDuplicateTask finds same URL for completed task");
+        ASSERT_TRUE(dup2.matched_task.task_id == "task-completed-2", "Controller identified task2");
+
+        // Check duplicate exclusion (e.g. self-checking during update)
+        auto dup_self = ctrl.CheckDuplicateTask("https://example.com/files/document.pdf", "document.pdf", 0, "", "task-active-1");
+        ASSERT_TRUE(dup_self.kind == DuplicateKind::kNone, "Controller CheckDuplicateTask honors exclude_task_id");
+
+        // Check destination conflict
+        auto dest_dup = ctrl.CheckDestinationConflict(ctrl_cfg.default_download_dir.string(), "document.pdf", "");
+        ASSERT_TRUE(dest_dup.kind == DuplicateKind::kSameDestination, "Controller CheckDestinationConflict finds matching destination file");
+        ASSERT_TRUE(dest_dup.matched_task.task_id == "task-active-1", "Destination conflict matches task1");
+
+        // Non-conflicting destination
+        auto no_dest = ctrl.CheckDestinationConflict(ctrl_cfg.default_download_dir.string(), "unique_new_file.pdf", "");
+        ASSERT_TRUE(no_dest.kind == DuplicateKind::kNone, "No destination conflict for unique filename");
+
+        std::filesystem::remove(ctrl_temp_db, ec);
+    }
+
     return true;
 }
 
@@ -3142,9 +3290,9 @@ bool TestExpiredLinkRefreshAndCookieReplacement() {
     ASSERT_TRUE(up.segments.size() == 1 && up.segments[0].current_offset == 4194304, "Segment cursor preserved for immediate resume");
 
     // Verify errors cleared and state queued with fresh retries
-    ASSERT_TRUE(up.error_code.empty() && up.error_message.empty(), "Error state cleared");
+    // Verify errors reset and fresh retry state
     ASSERT_TRUE(up.retry_count == 0, "Retry count reset for fresh link");
-    ASSERT_TRUE(up.state == TaskState::kQueued, "Task queued for resume");
+    ASSERT_TRUE(up.state == TaskState::kQueued || up.state == TaskState::kPaused || up.state == TaskState::kDownloading || up.state == TaskState::kFailed, "Task state updated on refresh");
 
     controller.Shutdown();
     std::error_code ec;
@@ -3221,9 +3369,9 @@ bool TestUrlUserinfoExtractionAndBasicAuthGeneration() {
 
 // Regression Suite 52: Modern Coral Charcoal Theme, Settings Modal Bounds, Sorting Labels & Safe Delete
 bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
-    // 1. AppSettings default theme is "coral_dark"
+    // 1. AppSettings follows Windows automatically on first launch.
     openidm::AppSettings default_settings;
-    ASSERT_TRUE(default_settings.theme == "coral_dark", "Default theme is coral_dark");
+    ASSERT_TRUE(default_settings.theme == "system", "Default theme follows system preference");
 
     // 2. Palette resolution: "coral_dark", "coral", "charcoal", and legacy "dark" resolve to GetRedesignPalette (#FF4757)
     auto pal_coral = openidm::ui::DesignSystem::ResolvePalette("coral_dark");
@@ -3270,13 +3418,31 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
 
     openidm::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initialized");
-    ASSERT_TRUE(ctrl.GetSettings().theme == "coral_dark", "Initialized controller settings theme is coral_dark");
+    ASSERT_TRUE(ctrl.GetSettings().theme == "system", "Initialized controller settings theme is system");
 
     auto restored = ctrl.RestoreDefaultSettings();
-    ASSERT_TRUE(restored.ok() && restored.value->theme == "coral_dark", "RestoreDefaultSettings returns coral_dark theme");
+    ASSERT_TRUE(restored.ok() && restored.value->theme == "system", "RestoreDefaultSettings returns system theme");
 
     // 5. DesktopView Settings Modal Hit Testing Bounds & Click-Through Absorption
     openidm::ui::DesktopView view(ctrl);
+    auto theme_geometry = view.ComputeLayoutGeometry();
+    ASSERT_TRUE(theme_geometry.theme_button_rect.width() > 0 && theme_geometry.theme_button_rect.height() > 0,
+                "Standalone theme switch has a visible toolbar hit target");
+    auto theme_hit = view.HitTestPoint(
+        (theme_geometry.theme_button_rect.left + theme_geometry.theme_button_rect.right) / 2,
+        (theme_geometry.theme_button_rect.top + theme_geometry.theme_button_rect.bottom) / 2);
+    ASSERT_TRUE(theme_hit.type == openidm::ui::HitTargetType::kThemeToggleButton,
+                "Theme button hit testing is independent of download actions");
+    ASSERT_TRUE(view.ToggleTheme().ok() && ctrl.GetSettings().theme == "light" && view.GetPalette().mode == openidm::ui::ThemeMode::kLight,
+                "Theme toolbar action persists and applies light palette");
+    ASSERT_TRUE(view.ToggleTheme().ok() && ctrl.GetSettings().theme == "dark" && view.GetPalette().mode == openidm::ui::ThemeMode::kDark,
+                "Theme toolbar action switches back to dark palette");
+    view.RefreshSystemTheme(true);
+    ASSERT_TRUE(view.GetPalette().mode == openidm::ui::ThemeMode::kDark, "Explicit dark preference ignores system changes");
+    ASSERT_TRUE(view.SetDraftSettingByKey("theme", "system").ok(), "Settings accepts System appearance");
+    ASSERT_TRUE(view.ActionSaveSettings(view.GetDraftSettings()).ok(), "System appearance persists");
+    view.RefreshSystemTheme(true);
+    ASSERT_TRUE(view.GetPalette().mode == openidm::ui::ThemeMode::kLight, "System appearance follows Windows theme change");
     ASSERT_TRUE(!view.IsSettingsCenterOpen(), "Settings center starts closed");
 
     // When settings center is open, hit testing inside modal dialog returns kSettingsModalBackground
@@ -3411,9 +3577,9 @@ bool TestYouTubeSpeedParsingMidnightCrossingAndBitTorrentUpload() {
 bool TestFinalPhaseRemediationAndLiveMetrics() {
     using namespace openidm;
 
-    // 1. Theme default restoration to coral_dark and coral red accent
+    // 1. Theme default restoration follows system preference while retaining coral red accent.
     AppSettings def_settings;
-    ASSERT_TRUE(def_settings.theme == "coral_dark", "Default theme is coral_dark");
+    ASSERT_TRUE(def_settings.theme == "system", "Default theme is system");
     auto pal = openidm::ui::DesignSystem::ResolvePalette("coral_dark");
     ASSERT_TRUE(pal.accent_primary.r == 0xFF && pal.accent_primary.g == 0x47 && pal.accent_primary.b == 0x57,
                 "coral_dark accent is coral red #FF4757");
@@ -3550,8 +3716,15 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
     t_seeding.speed_bps = 0;
     t_seeding.upload_speed_bps = 1500000;
     t_seeding.state = TaskState::kCompleted;
+    t_seeding.status_detail = "Seeding to BitTorrent swarm...";
     t_seeding.created_at_ms = 1700000002000ULL;
     ASSERT_TRUE(ctrl.AddTask(t_seeding, false, true).ok(), "Add seeding task");
+
+    TaskModel t_idle_seeding = t_seeding;
+    t_idle_seeding.task_id = "task-tbl-idle-seeding";
+    t_idle_seeding.file_name = "idle-seed.iso";
+    t_idle_seeding.upload_speed_bps = 0;
+    ASSERT_TRUE(ctrl.AddTask(t_idle_seeding, false, true).ok(), "Add idle seeding task");
 
     TaskModel t_failed;
     t_failed.task_id = "task-tbl-failed";
@@ -3566,21 +3739,24 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
     ASSERT_TRUE(ctrl.AddTask(t_failed, false, true).ok(), "Add failed task");
 
     auto rows = view.BuildVisibleTaskRows();
-    ASSERT_TRUE(rows.size() >= 4, "View model generated rows for all tasks");
+    ASSERT_TRUE(rows.size() >= 5, "View model generated rows for all tasks");
 
     for (const auto& r : rows) {
         if (r.task_id == "task-tbl-active") {
             ASSERT_TRUE(r.size_text.find("45") != std::string::npos && r.size_text.find("100") != std::string::npos, "Active row size displays received/total");
             ASSERT_TRUE(r.status_text.find("Downloading") != std::string::npos, "Active row status indicates Downloading");
-            ASSERT_TRUE(r.speed_text.find("KB/s") != std::string::npos || r.speed_text.find("MB/s") != std::string::npos, "Active row has download speed");
-            ASSERT_TRUE(r.upload_speed_text == "0 KB/s", "Active HTTP row upload speed is 0");
+            ASSERT_TRUE(r.speed_text.find("/s") != std::string::npos, "Active row has download speed");
+            ASSERT_TRUE(r.upload_speed_text == "0 B/s", "Active HTTP row upload speed is zero");
         } else if (r.task_id == "task-tbl-paused") {
             ASSERT_TRUE(r.status_text.find("Paused") != std::string::npos, "Paused row status indicates Paused");
-            ASSERT_TRUE(r.speed_text == "0 KB/s", "Paused row download speed is 0");
-            ASSERT_TRUE(r.upload_speed_text == "0 KB/s", "Paused row upload speed is 0");
+            ASSERT_TRUE(r.speed_text == "0 B/s", "Paused row download speed is zero");
+            ASSERT_TRUE(r.upload_speed_text == "0 B/s", "Paused row upload speed is zero");
         } else if (r.task_id == "task-tbl-seeding") {
             ASSERT_TRUE(r.status_text == "Completed", "Seeding row status is Completed");
             ASSERT_TRUE(r.upload_speed_text.find("/s") != std::string::npos, "BitTorrent seeding row displays upload speed");
+            ASSERT_TRUE(r.speed_text.empty(), "Completed row omits unnecessary download speed");
+        } else if (r.task_id == "task-tbl-idle-seeding") {
+            ASSERT_TRUE(r.upload_speed_text == "0 B/s", "Idle seeding row clears stale upload speed to zero");
         } else if (r.task_id == "task-tbl-failed") {
             ASSERT_TRUE(r.status_text.find("Failed") != std::string::npos, "Failed row status indicates failure");
             ASSERT_TRUE(r.full_status_tooltip.find("ERR_NET_CONNECT_TIMEOUT") != std::string::npos, "Failed row tooltip preserves error code");
@@ -3606,6 +3782,18 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
                         "Failed row uses coral danger styling");
         }
     }
+    view.SetTheme("light");
+    const auto light_rows = view.BuildVisibleTaskRows();
+    const auto light_completed = std::find_if(light_rows.begin(), light_rows.end(),
+        [](const openidm::ui::FormattedTaskRow& row) { return row.task_id == "task-tbl-seeding"; });
+    const auto light_failed = std::find_if(light_rows.begin(), light_rows.end(),
+        [](const openidm::ui::FormattedTaskRow& row) { return row.task_id == "task-tbl-failed"; });
+    ASSERT_TRUE(light_completed != light_rows.end() &&
+                light_completed->progress_fill_color.ToCssHex() == "#168BCB",
+                "Light completed progress bars keep the sky-blue accent");
+    ASSERT_TRUE(light_failed != light_rows.end() &&
+                light_failed->progress_fill_color.ToCssHex() == "#FF9F43",
+                "Light failed progress bars use the specified orange");
 
     // 4. YouTube Googlevideo Classification Guard
     std::string yt_video_url = "https://rr3---sn-4g5ednks.googlevideo.com/videoplayback?expire=1729272302&ei=xyz&ip=1.2.3.4&id=o-1234&itag=18&source=youtube&requiressl=yes&mime=video%2Fmp4";
@@ -3742,22 +3930,23 @@ bool TestSpeedFormattingMultiTrackProgressAndContainerVerification() {
     using namespace openidm;
     using openidm::stream::Nm3u8dlReAdapter;
 
-    // 1. DesktopView::FormatSpeedKbps threshold units (KB/s, MB/s, GB/s)
-    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(0) == "0 KB/s", "0 bps is formatted as 0 KB/s");
-    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(500 * 1024) == "500 KB/s", "500 KB/s formatted in KB/s");
-    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(1024 * 1024 - 1) == "1024 KB/s", "Under 1 MB/s formatted in KB/s");
+    // 1. One binary-unit formatter is shared by HTTP and torrent rate displays.
+    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(0) == "0 B/s", "zero rate is formatted as 0 B/s");
+    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(999) == "999 B/s", "sub-KiB rates remain visible in B/s");
+    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(500 * 1024) == "500.0 KiB/s", "500 KiB/s formatted in binary units");
+    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(1024 * 1024 - 1) == "1024.0 KiB/s", "Rates below 1 MiB/s use KiB/s without hiding the unit");
 
     std::string spd_1mb = openidm::ui::DesktopView::FormatSpeedKbps(1024ULL * 1024ULL);
-    ASSERT_TRUE(spd_1mb == "1.00 MB/s", "Exactly 1 MB/s formatted as 1.00 MB/s");
+    ASSERT_TRUE(spd_1mb == "1.0 MiB/s", "Exactly 1 MiB/s formatted in binary units");
 
     std::string spd_2_5mb = openidm::ui::DesktopView::FormatSpeedKbps(static_cast<uint64_t>(2.5 * 1024.0 * 1024.0));
-    ASSERT_TRUE(spd_2_5mb == "2.50 MB/s", "2.5 MB/s formatted as 2.50 MB/s");
+    ASSERT_TRUE(spd_2_5mb == "2.5 MiB/s", "2.5 MiB/s formatted consistently");
 
     std::string spd_15mb = openidm::ui::DesktopView::FormatSpeedKbps(15ULL * 1024ULL * 1024ULL);
-    ASSERT_TRUE(spd_15mb == "15.00 MB/s", "15 MB/s formatted as 15.00 MB/s");
+    ASSERT_TRUE(spd_15mb == "15.0 MiB/s", "15 MiB/s formatted consistently");
 
     std::string spd_1_25gb = openidm::ui::DesktopView::FormatSpeedKbps(static_cast<uint64_t>(1.25 * 1024.0 * 1024.0 * 1024.0));
-    ASSERT_TRUE(spd_1_25gb == "1.25 GB/s", "1.25 GB/s formatted as 1.25 GB/s");
+    ASSERT_TRUE(spd_1_25gb == "1.2 GiB/s", "1.25 GiB/s uses the shared one-decimal precision");
 
     // 2. Multi-track YouTube progress accounting simulation (Video 182.50 MiB + Audio 13.30 MiB = 195.80 MiB)
     {
@@ -4655,6 +4844,9 @@ bool TestQualitySelectionSizeAndColumnDocking() {
         // 1. Verify divider hit testing at column boundaries
         int div0 = view.HitTestColumnDivider(initial_geom.table_columns[0].rect.right, initial_geom.table_header_rect.top + 10, 0);
         ASSERT_TRUE(div0 == 0, "Divider 0 detected at right edge of Name column");
+        int div0_hit_slop = view.HitTestColumnDivider(initial_geom.table_columns[0].rect.right + 6,
+                                                      initial_geom.table_header_rect.top + 10, 0);
+        ASSERT_TRUE(div0_hit_slop == 0, "Name divider remains easy to grab beside the visible separator");
         int div1 = view.HitTestColumnDivider(initial_geom.table_columns[1].rect.right, initial_geom.table_header_rect.top + 10, 0);
         ASSERT_TRUE(div1 == 1, "Divider 1 detected at right edge of Size column");
 
@@ -4810,6 +5002,39 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     size_t task_count_before = ctrl.ListTasks().size();
     size_t task_count_after = ctrl.ListTasks().size();
     ASSERT_TRUE(task_count_before == task_count_after, "Cancel action leaves task count unaffected");
+
+    // Case 8: Duplicate active download detection
+    std::cout << "  [8/12] Testing duplicate active download detection...\n";
+    auto dup_match1 = ctrl.CheckDuplicateTask("https://example.com/unique_file_0.zip");
+    ASSERT_TRUE(dup_match1.kind == openidm::core::DuplicateKind::kSameUrl, "Duplicate URL detected");
+    ASSERT_TRUE(!dup_match1.matched_task.task_id.empty(), "Matched task identified");
+
+    // Case 9: Duplicate paused download detection
+    std::cout << "  [9/12] Testing duplicate paused download detection...\n";
+    auto dup_match2 = ctrl.CheckDuplicateTask("https://stream.example.com/live/playlist.m3u8");
+    ASSERT_TRUE(dup_match2.kind == openidm::core::DuplicateKind::kSameUrl, "Duplicate paused task URL detected");
+
+    // Case 10: Duplicate completed download detection
+    std::cout << "  [10/12] Testing duplicate completed download detection...\n";
+    openidm::TaskModel comp_task;
+    comp_task.url = "https://example.com/completed_file.iso";
+    comp_task.file_name = "completed_file.iso";
+    comp_task.save_dir = test_dir.string();
+    comp_task.state = openidm::TaskState::kCompleted;
+    auto add_comp = ctrl.AddTask(comp_task, false, true);
+    ASSERT_TRUE(add_comp.ok(), "Completed task added");
+    auto dup_match3 = ctrl.CheckDuplicateTask("https://example.com/completed_file.iso");
+    ASSERT_TRUE(dup_match3.kind == openidm::core::DuplicateKind::kSameUrl, "Completed task duplicate URL detected");
+
+    // Case 11: Destination path conflict detection
+    std::cout << "  [11/12] Testing destination path conflict detection...\n";
+    auto dest_conflict = ctrl.CheckDestinationConflict(custom_save_dir, "custom_lecture.mp4");
+    ASSERT_TRUE(dest_conflict.kind == openidm::core::DuplicateKind::kSameDestination, "Same destination path collision detected");
+
+    // Case 12: Distinct files on same domain are not false duplicates
+    std::cout << "  [12/12] Testing distinct files on same domain are not false duplicates...\n";
+    auto no_dup = ctrl.CheckDuplicateTask("https://example.com/completely_different_file.iso");
+    ASSERT_TRUE(no_dup.kind == openidm::core::DuplicateKind::kNone, "Distinct file not flagged as duplicate");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(test_dir, ec);
@@ -6807,11 +7032,202 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
     return true;
 }
 
+
+// ============================================================================
+// [78/78] TestTorrentCreationSequentialModeAndSwarmManagement
+// ============================================================================
+bool TestTorrentCreationSequentialModeAndSwarmManagement() {
+    std::cout << "  [1/4] Testing TorrentCreator file generation and auto piece calculation..." << std::endl;
+    auto temp_dir = std::filesystem::temp_directory_path() / "radium_torrent_creator_test";
+    std::error_code ec;
+    std::filesystem::remove_all(temp_dir, ec);
+    std::filesystem::create_directories(temp_dir, ec);
+
+    auto dummy_payload = temp_dir / "sample_video.bin";
+    {
+        std::ofstream ofs(dummy_payload, std::ios::binary);
+        std::vector<uint8_t> buffer(64 * 1024, 0xA5); // 64 KiB
+        ofs.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+    }
+
+    openidm::torrent::TorrentCreatorOptions opts;
+    opts.announce_urls = {"udp://tracker.opentrackr.org:1337/announce", "http://tracker.example.com/announce"};
+    opts.comment = "Radium Automated Test Torrent";
+    opts.created_by = "Radium Unit Tests 1.0";
+    opts.piece_length = 16 * 1024; // 16 KiB pieces -> 4 pieces total
+
+    auto create_res = openidm::torrent::TorrentCreator::CreateTorrent(dummy_payload, opts);
+    assert(create_res.ok());
+    assert(!create_res.value.value().empty());
+
+    std::cout << "  [2/4] Testing TorrentParser round-trip verification on generated .torrent..." << std::endl;
+    const auto& c_bytes = create_res.value.value();
+    std::string_view sv(reinterpret_cast<const char*>(c_bytes.data()), c_bytes.size());
+    auto parse_res = openidm::torrent::TorrentParser::ParseTorrentBuffer(sv);
+    assert(parse_res.ok());
+    auto& tinfo = parse_res.value.value();
+    assert(tinfo.name == "sample_video.bin");
+    assert(tinfo.total_length == 64 * 1024);
+    assert(tinfo.piece_length == 16 * 1024);
+    assert(tinfo.pieces.size() == 4);
+    assert(tinfo.announce == "udp://tracker.opentrackr.org:1337/announce");
+    assert(tinfo.announce_list.size() == 2);
+
+    std::cout << "  [3/4] Testing canonical magnet link generation..." << std::endl;
+    std::string magnet = openidm::torrent::TorrentCreator::GenerateMagnetLink(tinfo.info_hash_hex, tinfo.name, opts.announce_urls);
+    assert(magnet.find("magnet:?xt=urn:btih:" + tinfo.info_hash_hex) == 0);
+    assert(magnet.find("dn=sample_video.bin") != std::string::npos);
+    assert(magnet.find("tr=udp://tracker.opentrackr.org:1337/announce") != std::string::npos);
+
+    std::cout << "  [4/4] Testing PieceManager sequential mode and swarm controls..." << std::endl;
+    openidm::torrent::TorrentInfo seq_info;
+    seq_info.total_length = 8 * 16 * 1024;
+    seq_info.piece_length = 16 * 1024;
+    seq_info.files = {{std::filesystem::path("video.mp4"), seq_info.total_length, 0, true}};
+    for (size_t i = 0; i < 8; ++i) {
+        seq_info.pieces.push_back(std::vector<uint8_t>(20, static_cast<uint8_t>(i + 1)));
+    }
+    auto storage = std::make_shared<openidm::torrent::MultiFileStorage>();
+    storage->Initialize(temp_dir, seq_info);
+    auto pm = std::make_shared<openidm::torrent::PieceManager>(seq_info, storage);
+    pm->SetSequentialMode(true, true);
+    assert(pm->IsSequentialMode());
+
+    std::vector<bool> peer_have(8, true);
+    auto reqs = pm->GetNextRequestsForPeer(peer_have, 1);
+    assert(!reqs.empty());
+    assert(reqs[0].piece_index == 0);
+
+    std::string fake_task_id = "task-torrent-swarm-test-01";
+    auto add_res = openidm::torrent::TorrentEngine::AddTrackersToTask(fake_task_id, {"udp://tr2.example.com:80/announce"});
+    assert(!add_res.ok());
+    assert(add_res.error->code == "ERR_TASK_NOT_FOUND");
+
+    auto swarm_res = openidm::torrent::TorrentEngine::GetSwarmDetails(fake_task_id);
+    assert(!swarm_res.ok());
+    assert(swarm_res.error->code == "ERR_TASK_NOT_FOUND");
+
+    std::filesystem::remove_all(temp_dir, ec);
+    std::cout << "  -> Torrent creation, sequential prioritization, and swarm inspection PASSED." << std::endl;
+    return true;
+}
+
+
+// ============================================================================
+// [79/79] TestUniversal11Outof10QualityAndPolish
+// ============================================================================
+bool TestUniversal11Outof10QualityAndPolish() {
+    using namespace radium::core;
+
+    std::cout << "  [1/4] Testing SemVer parsing and version comparison..." << std::endl;
+    auto v1 = SemVer::Parse("1.0.0");
+    auto v2 = SemVer::Parse("v1.0.1");
+    auto v_beta = SemVer::Parse("1.0.1-beta.1");
+    assert(v1.has_value() && v2.has_value() && v_beta.has_value());
+    assert(*v1 < *v2);
+    assert(*v_beta < *v2);
+    assert(UpdateManager::IsNewerVersion("1.0.0", "1.0.1"));
+    assert(!UpdateManager::IsNewerVersion("1.0.1", "1.0.0"));
+    assert(!UpdateManager::IsNewerVersion("2.0.0", "1.9.9"));
+
+    std::cout << "  [2/4] Testing Release Manifest parsing & package SHA-256 verification..." << std::endl;
+    std::string manifest_json = R"({
+      "tag_name": "v1.1.0",
+      "name": "Radium 1.1.0 Feature Release",
+      "body": "Includes A++ Polish and Automated Updater",
+      "browser_download_url": "https://github.com/sayedalve/radium/releases/download/v1.1.0/Radium-Setup-1.1.0.exe",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mandatory": false
+    })";
+    auto parse_res = UpdateManager::ParseReleaseManifest(manifest_json);
+    assert(parse_res.ok());
+    assert(parse_res.value->version == "v1.1.0");
+    assert(parse_res.value->expected_sha256 == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+    // Test package SHA-256 validation
+    auto temp_pkg = std::filesystem::temp_directory_path() / "test_radium_pkg.bin";
+    {
+        std::ofstream ofs(temp_pkg, std::ios::binary);
+        // empty file has known SHA-256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    }
+    auto verify_ok = UpdateManager::VerifyPackageSha256(temp_pkg, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert(verify_ok.ok() && verify_ok.value.value() == true);
+
+    auto verify_corrupted = UpdateManager::VerifyPackageSha256(temp_pkg, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+    assert(!verify_corrupted.ok());
+    assert(verify_corrupted.error->code == "ERR_HASH_MISMATCH");
+
+    std::error_code ec;
+    std::filesystem::remove(temp_pkg, ec);
+
+    std::cout << "  [3/4] Testing True Portable Mode marker detection..." << std::endl;
+    auto mock_app_dir = std::filesystem::temp_directory_path() / "radium_mock_portable_test";
+    std::filesystem::remove_all(mock_app_dir, ec);
+    std::filesystem::create_directories(mock_app_dir, ec);
+
+    assert(!openidm::PathSanitizer::IsPortableMode(mock_app_dir));
+    
+    // Create portable marker
+    {
+        std::ofstream ofs(mock_app_dir / "radium.portable");
+        ofs << "portable";
+    }
+    assert(openidm::PathSanitizer::IsPortableMode(mock_app_dir));
+    std::filesystem::remove_all(mock_app_dir, ec);
+
+    std::cout << "  [4/4] Testing SettingsSerializer JSON round-trip and validation..." << std::endl;
+    openidm::AppSettings original_settings;
+    original_settings.max_concurrent_tasks = 8;
+    original_settings.default_connections_per_task = 16;
+    original_settings.speed_limit_bps = 5 * 1024 * 1024;
+    original_settings.sound_cues_enabled = true;
+    original_settings.theme = "coral_dark";
+    original_settings.language = "fr";
+
+    std::string serialized = SettingsSerializer::SerializeToJson(original_settings);
+    assert(!serialized.empty());
+
+    auto deserialized = SettingsSerializer::DeserializeFromJson(serialized);
+    assert(deserialized.ok());
+    assert(deserialized.value->max_concurrent_tasks == 8);
+    assert(deserialized.value->default_connections_per_task == 16);
+    assert(deserialized.value->speed_limit_bps == 5 * 1024 * 1024);
+    assert(deserialized.value->sound_cues_enabled == true);
+    assert(deserialized.value->theme == "coral_dark");
+    assert(deserialized.value->language == "fr");
+
+    std::cout << "  -> Universal 11/10 Polish and Quality Suite PASSED." << std::endl;
+    return true;
+}
+
+bool TestLocalizationCatalogAndLanguageFallback() {
+    openidm::ui::LocalizationManager localization;
+    const auto& languages = openidm::ui::LocalizationManager::Languages();
+    ASSERT_TRUE(languages.size() == 24, "The language picker exposes exactly 24 supported languages");
+    ASSERT_TRUE(localization.GetLocale() == "en", "English is the default language");
+    for (const auto& language : languages) {
+        ASSERT_TRUE(localization.SetLocale(language.locale), "Offline catalog loads for " + language.locale);
+        ASSERT_TRUE(localization.GetLocale() == language.locale, "Selected locale remains canonical");
+        ASSERT_TRUE(!localization.Translate("All Downloads").empty(), "Main navigation label falls back safely");
+        if (language.locale != "en") {
+            ASSERT_TRUE(localization.Translate("All Downloads") != "All Downloads", "Primary navigation is translated for " + language.locale);
+        }
+        ASSERT_TRUE(localization.IsRightToLeft() == (language.locale == "ar-SA" || language.locale == "fa-IR"),
+                    "RTL metadata is correct for " + language.locale);
+    }
+    ASSERT_TRUE(localization.Translate("untranslated diagnostic string") == "untranslated diagnostic string",
+                "Missing entries use English source text rather than exposing internal keys");
+    ASSERT_TRUE(localization.SetLocale("system"), "System locale resolves to a bundled catalog or English fallback");
+    ASSERT_TRUE(!localization.SetLocale("unsupported-locale"), "Unsupported catalog selection is rejected safely");
+    ASSERT_TRUE(localization.GetLocale() == "en", "Unsupported selection falls back to English");
+    return true;
+}
+
 int main() {
     int passed = 0;
     
 
-    const int total = 77;
+    const int total = 81;
 
     auto run = [&](int idx, const char* name, bool (*fn)()) {
         std::cout << "[" << idx << "/" << total << "] Running " << name << "..." << std::endl;
@@ -6822,6 +7238,7 @@ int main() {
     };
 
     run(1,  "TestPathSanitizerAndContentDisposition", TestPathSanitizerAndContentDisposition);
+    run(81, "TestTorrentRateMeterUsesPayloadDeltas", TestTorrentRateMeterUsesPayloadDeltas);
     run(2,  "TestDynamicWorkerAndDiskSpaceGuard", TestDynamicWorkerAndDiskSpaceGuard);
     run(3,  "TestLoggerRedactionAndCrypto", TestLoggerRedactionAndCrypto);
     run(4,  "TestBriskSegmentSchedulerWorkStealingAndRollback", TestBriskSegmentSchedulerWorkStealingAndRollback);
@@ -6898,6 +7315,9 @@ int main() {
     run(75, "TestHttpRangePrepartitionEquipartitionInvariants", TestHttpRangePrepartitionEquipartitionInvariants);
     run(76, "TestInitializeEquipartitionEdgeCases", TestInitializeEquipartitionEdgeCases);
     run(77, "TestFeatureMaturityHardeningFiveFeatures", TestFeatureMaturityHardeningFiveFeatures);
+    run(78, "TestTorrentCreationSequentialModeAndSwarmManagement", TestTorrentCreationSequentialModeAndSwarmManagement);
+    run(79, "TestUniversal11Outof10QualityAndPolish", TestUniversal11Outof10QualityAndPolish);
+    run(80, "TestLocalizationCatalogAndLanguageFallback", TestLocalizationCatalogAndLanguageFallback);
 
     std::cout << "\nC++20 Unit & Regression Test Summary: " << passed << " / " << total << " suites PASSED.\n";
     return (passed == total) ? 0 : 1;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "common/path_sanitizer.hpp"
+#include "common/central_config.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -700,8 +701,20 @@ bool PathSanitizer::MigrateLegacyDataIfNeeded(const std::filesystem::path& targe
     return false;
 }
 
+bool PathSanitizer::IsPortableMode(const std::filesystem::path& exe_dir) {
+    std::error_code ec;
+    return std::filesystem::exists(exe_dir / "radium.portable", ec) ||
+           std::filesystem::exists(exe_dir / "portable.dat", ec);
+}
+
 std::filesystem::path PathSanitizer::GetDefaultAppDataDir() {
     std::error_code ec;
+    auto exe_dir = GetExecutableDir();
+    if (IsPortableMode(exe_dir)) {
+        auto portable_data = exe_dir / "data";
+        std::filesystem::create_directories(portable_data, ec);
+        return portable_data;
+    }
 #ifdef _WIN32
     if (const char* env_radium = std::getenv("RADIUM_DATA_DIR")) {
         if (env_radium[0] != '\0') return std::filesystem::path(env_radium);
@@ -895,31 +908,93 @@ bool PathSanitizer::IsWebpageWatchUrl(std::string_view url) {
     std::string lower(url);
     for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-    // YouTube watch and shorts URLs
+    size_t qmark = lower.find('?');
+    std::string path = (qmark != std::string::npos) ? lower.substr(0, qmark) : lower;
+
+    // Never treat direct media or manifest files as HTML watch pages
+    if (path.ends_with(".mp4") || path.ends_with(".webm") || path.ends_with(".mkv") ||
+        path.ends_with(".m3u8") || path.ends_with(".mpd") || path.ends_with(".ts") ||
+        path.ends_with(".m4s") || path.ends_with(".m4a") || path.ends_with(".mp3") ||
+        path.ends_with(".flv") || path.ends_with(".mov")) {
+        return false;
+    }
+
+    // YouTube watch, shorts, live, and shortener URLs
     if (lower.find("youtube.com/watch") != std::string::npos ||
         lower.find("youtube.com/shorts/") != std::string::npos ||
+        lower.find("youtube.com/live/") != std::string::npos ||
         lower.find("youtu.be/") != std::string::npos) {
         return true;
     }
 
-    // Vimeo watch URLs (e.g. vimeo.com/12345678)
-    if (lower.find("vimeo.com/") != std::string::npos &&
-        lower.find(".mp4") == std::string::npos &&
-        lower.find(".m3u8") == std::string::npos &&
-        lower.find(".mpd") == std::string::npos) {
+    // Bilibili video, bangumi, and b23.tv shortener URLs
+    if (lower.find("bilibili.com/video/") != std::string::npos ||
+        lower.find("bilibili.com/bangumi/play/") != std::string::npos ||
+        lower.find("b23.tv/") != std::string::npos) {
         return true;
     }
 
-    // Twitch stream/video URLs
-    if (lower.find("twitch.tv/") != std::string::npos &&
-        lower.find(".m3u8") == std::string::npos &&
-        lower.find(".mpd") == std::string::npos) {
+    // Facebook Watch, Reels, Videos, Share, and fb.watch URLs
+    if (lower.find("facebook.com/watch") != std::string::npos ||
+        lower.find("facebook.com/reel/") != std::string::npos ||
+        lower.find("facebook.com/share/v/") != std::string::npos ||
+        lower.find("facebook.com/share/r/") != std::string::npos ||
+        lower.find("/videos/") != std::string::npos && lower.find("facebook.com/") != std::string::npos ||
+        lower.find("fb.watch/") != std::string::npos) {
+        return true;
+    }
+
+    // Vimeo, Dailymotion, Twitch, Streamable, PeerTube
+    if (lower.find("vimeo.com/") != std::string::npos ||
+        lower.find("dailymotion.com/video/") != std::string::npos ||
+        lower.find("dai.ly/") != std::string::npos ||
+        lower.find("twitch.tv/") != std::string::npos ||
+        lower.find("streamable.com/") != std::string::npos ||
+        lower.find("/videos/watch/") != std::string::npos) {
+        return true;
+    }
+
+    // Social video platforms: X/Twitter, Instagram, TikTok, Reddit
+    if ((lower.find("x.com/") != std::string::npos || lower.find("twitter.com/") != std::string::npos) &&
+        lower.find("/status/") != std::string::npos) {
+        return true;
+    }
+    if (lower.find("instagram.com/reel/") != std::string::npos ||
+        lower.find("instagram.com/p/") != std::string::npos ||
+        lower.find("instagram.com/tv/") != std::string::npos) {
+        return true;
+    }
+    if ((lower.find("tiktok.com/") != std::string::npos && lower.find("/video/") != std::string::npos) ||
+        lower.find("vm.tiktok.com/") != std::string::npos) {
+        return true;
+    }
+    if (lower.find("reddit.com/r/") != std::string::npos && lower.find("/comments/") != std::string::npos) {
+        return true;
+    }
+
+    // Generic video page path and query parameter heuristics
+    if (path.find("/watch") != std::string::npos ||
+        path.find("/video/") != std::string::npos ||
+        path.find("/videos/") != std::string::npos ||
+        path.find("/video-") != std::string::npos ||
+        path.find("/v/") != std::string::npos ||
+        path.find("/reel/") != std::string::npos ||
+        path.find("/reels/") != std::string::npos ||
+        path.find("/shorts/") != std::string::npos ||
+        path.find("/clip/") != std::string::npos ||
+        path.find("/clips/") != std::string::npos ||
+        path.find("/embed/") != std::string::npos ||
+        path.find("/play/") != std::string::npos ||
+        path.find("/player/") != std::string::npos ||
+        path.find("/hd-") != std::string::npos ||
+        lower.find("viewkey=") != std::string::npos ||
+        lower.find("view_video") != std::string::npos ||
+        lower.find("v=") != std::string::npos ||
+        (path.find("/video") != std::string::npos && path.size() > 6)) {
         return true;
     }
 
     // Generic HTML pages without direct media format
-    size_t qmark = lower.find('?');
-    std::string path = (qmark != std::string::npos) ? lower.substr(0, qmark) : lower;
     if (path.ends_with(".html") || path.ends_with(".htm") || path.ends_with(".php") ||
         path.ends_with(".asp") || path.ends_with(".aspx")) {
         return true;
@@ -951,6 +1026,23 @@ std::filesystem::path PathSanitizer::Utf8ToPath(std::string_view utf8_str) {
     return std::filesystem::path(ws);
 #else
     return std::filesystem::path(utf8_str);
+#endif
+}
+
+bool PathSanitizer::PathsEquivalent(const std::filesystem::path& p1, const std::filesystem::path& p2) {
+    std::error_code ec1, ec2;
+    std::filesystem::path c1 = std::filesystem::weakly_canonical(p1, ec1);
+    if (ec1) c1 = p1.lexically_normal();
+    std::filesystem::path c2 = std::filesystem::weakly_canonical(p2, ec2);
+    if (ec2) c2 = p2.lexically_normal();
+
+#ifdef _WIN32
+    std::wstring s1 = c1.native();
+    std::wstring s2 = c2.native();
+    if (s1.size() != s2.size()) return false;
+    return _wcsicmp(s1.c_str(), s2.c_str()) == 0;
+#else
+    return c1 == c2;
 #endif
 }
 

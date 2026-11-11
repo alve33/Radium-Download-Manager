@@ -32,14 +32,19 @@ if (-not $Version) {
     } elseif ($env:FLUX_VERSION) {
         $Version = $env:FLUX_VERSION
     } else {
-        try {
-            $gitTag = (git describe --tags --exact-match 2>$null)
-            if ($gitTag -match '^v?(\d+\.\d+\.\d+.*)$') {
-                $Version = $Matches[1]
+        $versionFile = Join-Path $RepoRoot "VERSION"
+        if (Test-Path $versionFile) {
+            $Version = (Get-Content $versionFile -Raw).Trim()
+        } else {
+            try {
+                $gitTag = (git describe --tags --exact-match 2>$null)
+                if ($gitTag -match '^v?(\d+\.\d+\.\d+.*)$') {
+                    $Version = $Matches[1]
+                }
+            } catch {}
+            if (-not $Version) {
+                $Version = "1.0.0"
             }
-        } catch {}
-        if (-not $Version) {
-            $Version = "1.0.0"
         }
     }
 }

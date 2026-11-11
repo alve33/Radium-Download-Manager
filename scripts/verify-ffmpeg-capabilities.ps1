@@ -245,7 +245,7 @@ Test-CapabilityList "Protocols" $RequiredProtocols "-protocols"
 # -----------------------------------------------------------------------------
 if ($RunSmokeTests) {
     Write-Host "`n==> [4/4] Executing Real Muxing Smoke Tests..." -ForegroundColor Cyan
-    $TmpSmokeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flux_smoke_" + [Guid]::NewGuid().ToString("N"))
+    $TmpSmokeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("radium_smoke_" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $TmpSmokeDir | Out-Null
 
     try {
@@ -253,7 +253,7 @@ if ($RunSmokeTests) {
         $ErrorActionPreference = "SilentlyContinue"
 
         $VttPath = Join-Path $TmpSmokeDir "test.vtt"
-        $vttSample = "WEBVTT`n`n00:00:00.000 --> 00:00:02.000`nHello OpenIDM Subtitles`n"
+        $vttSample = "WEBVTT`n`n00:00:00.000 --> 00:00:02.000`nHello Radium Subtitles`n"
         [System.IO.File]::WriteAllText($VttPath, $vttSample, [System.Text.Encoding]::UTF8)
 
         # Test A: Null muxer probe

@@ -27,12 +27,40 @@ function generateCorrelationId(prefix = "corr") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function redactSensitiveString(str) {
+  if (typeof str !== "string") return str;
+  return str
+    .replace(/((?:Cookie|Set-Cookie|Authorization|Proxy-Authorization|X-Auth-Token|X-Api-Key)\s*:\s*)([^\r\n"]+)/gi, "$1[REDACTED]")
+    .replace(/("(?:cookie|set-cookie|authorization|proxy-authorization)"\s*:\s*")([^"]*)(")/gi, "$1[REDACTED]$3")
+    .replace(/([?&](?:token|access_token|auth|key|sig|signature|hdnea|Policy|Signature|Key-Pair-Id|X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token)=)([^&\s"']+)/gi, "$1[REDACTED]");
+}
+
+function sanitizeLogPayload(obj) {
+  if (!obj || typeof obj !== "object") return redactSensitiveString(obj);
+  if (Array.isArray(obj)) return obj.map(sanitizeLogPayload);
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const lk = k.toLowerCase();
+    if (lk === "cookie" || lk === "authorization" || lk === "token" || lk === "password") {
+      out[k] = "[REDACTED]";
+    } else if (typeof v === "string") {
+      out[k] = redactSensitiveString(v);
+    } else if (typeof v === "object" && v !== null) {
+      out[k] = sanitizeLogPayload(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 function logPipelineStage(correlationId, stage, details = {}) {
+  const sanitizedDetails = sanitizeLogPayload(details);
   const entry = Object.assign({
     correlationId: correlationId || generateCorrelationId("auto"),
     stage,
     timestamp: Date.now()
-  }, details);
+  }, sanitizedDetails);
 
   if (G && Array.isArray(G.diagnosticLogs)) {
     G.diagnosticLogs.push(entry);
@@ -42,7 +70,7 @@ function logPipelineStage(correlationId, stage, details = {}) {
   }
 
   try {
-    console.log(`[Radium Trace] [${stage}] [${entry.correlationId}]`, details);
+    console.log(`[Radium Trace] [${stage}] [${entry.correlationId}]`, sanitizedDetails);
   } catch (_) {}
 
   return entry;
@@ -332,25 +360,77 @@ function extractYouTubeVideoId(url) {
   return "";
 }
 
-function isWebpageWatchUrl(url) {
+function isSupportedVideoSiteWatchUrl(url) {
   if (!url || typeof url !== "string") return false;
+  if (isYouTubeWatchOrShortsUrl(url)) return true;
   try {
     const u = new URL(url);
     const host = u.hostname.toLowerCase();
     const path = u.pathname.toLowerCase();
+    if (/\.(mp4|webm|mkv|m3u8|mpd|ts|m4s|m4a|mp3|flv|mov)$/i.test(path)) return false;
 
-    // YouTube watch pages and shorts
-    if (host.includes("youtube.com") && (path.includes("/watch") || path.includes("/shorts/") || path.includes("/embed/") || path.includes("/live/"))) return true;
-    if (path === "/watch" && u.searchParams.get("v")) return true;
-    if (host === "youtu.be") return true;
+    // Bilibili video, bangumi, and b23.tv shortener URLs
+    if ((host === "bilibili.com" || host.endsWith(".bilibili.com")) &&
+        (path.includes("/video/") || path.startsWith("/bangumi/play/"))) return true;
+    if (host === "b23.tv" && path.length > 1) return true;
 
-    // Vimeo watch pages (e.g. vimeo.com/12345678)
-    if (host.includes("vimeo.com") && /^\/\d+$/.test(path)) return true;
+    // Facebook Watch, Reels, Share, Videos, and fb.watch
+    if ((host === "facebook.com" || host.endsWith(".facebook.com")) &&
+        (path.startsWith("/watch") || path.startsWith("/reel/") ||
+         path.startsWith("/share/v/") || path.startsWith("/share/r/") ||
+         path.includes("/videos/"))) return true;
+    if (host === "fb.watch" && path.length > 1) return true;
 
-    // Twitch stream/video pages
-    if (host.includes("twitch.tv") && (path.includes("/videos/") || path.split("/").filter(Boolean).length === 1)) {
-      if (!path.endsWith(".m3u8") && !path.endsWith(".mpd") && !path.endsWith(".mp4")) return true;
+    // Vimeo, Dailymotion, Twitch, Streamable, PeerTube
+    if (host.includes("vimeo.com") && /^\/\d+/.test(path)) return true;
+    if ((host.includes("dailymotion.com") && path.includes("/video/")) || (host === "dai.ly" && path.length > 1)) return true;
+    if (host.includes("twitch.tv") && (path.includes("/videos/") || path.split("/").filter(Boolean).length === 1)) return true;
+    if (host.includes("streamable.com") && path.length > 1) return true;
+    if (path.startsWith("/videos/watch/") || /^\/w\/[a-zA-Z0-9_-]+/.test(path)) return true;
+
+    // Social video platforms: X/Twitter, Instagram, TikTok, Reddit
+    if ((host === "x.com" || host.endsWith(".x.com") || host === "twitter.com" || host.endsWith(".twitter.com")) &&
+        path.includes("/status/")) return true;
+    if ((host === "instagram.com" || host.endsWith(".instagram.com")) &&
+        (path.startsWith("/reel/") || path.startsWith("/p/") || path.startsWith("/tv/"))) return true;
+    if (((host === "tiktok.com" || host.endsWith(".tiktok.com")) && path.includes("/video/")) ||
+        host === "vm.tiktok.com") return true;
+    if ((host === "reddit.com" || host.endsWith(".reddit.com")) && path.includes("/comments/")) return true;
+
+    // Generic video page path and query parameter heuristics
+    if (path.startsWith("/watch") ||
+        path.includes("/video/") ||
+        path.includes("/videos/") ||
+        path.startsWith("/video-") ||
+        path.startsWith("/hd-") ||
+        path.startsWith("/v/") ||
+        path.startsWith("/reel/") ||
+        path.startsWith("/reels/") ||
+        path.startsWith("/shorts/") ||
+        path.startsWith("/clip/") ||
+        path.startsWith("/clips/") ||
+        path.startsWith("/embed/") ||
+        path.startsWith("/play/") ||
+        path.startsWith("/player/") ||
+        path.includes("/status/") ||
+        path.includes("/comments/") ||
+        u.searchParams.has("viewkey") ||
+        path.includes("view_video") ||
+        u.searchParams.has("v") ||
+        /^\/video[0-9a-z._-]+/i.test(path) ||
+        (/^\/\d+/.test(path) && path.split("/").filter(Boolean).length === 1)) {
+      return true;
     }
+  } catch (_) {}
+  return false;
+}
+
+function isWebpageWatchUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  if (isSupportedVideoSiteWatchUrl(url)) return true;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
 
     // Generic HTML pages (Note: never include server-side endpoints like .php, .asp, .aspx which commonly serve downloads)
     if (path.endsWith(".html") || path.endsWith(".htm")) {
@@ -396,7 +476,7 @@ function classifyMediaSourceType(candidateOrUrl, mime = "", cachedBody = "") {
     if (isValidDashManifestText(body)) return SourceType.DASH_MANIFEST;
     // Arbitrary JSON in cachedManifestBody is NOT a valid HLS or DASH manifest
     if (body.trimStart().startsWith("{")) {
-      if (streamType === "YOUTUBE" || streamType === "SITE_EXTRACTION" || isYouTubeWatchOrShortsUrl(url)) {
+      if (streamType === "YOUTUBE" || streamType === "SITE_EXTRACTION" || isSupportedVideoSiteWatchUrl(url)) {
         return SourceType.YOUTUBE_EXTRACTION;
       }
       return SourceType.UNSUPPORTED;
@@ -496,12 +576,23 @@ function normalizeMediaUrl(url) {
   if (!url || typeof url !== "string") return url;
   try {
     const u = new URL(url);
-    if (u.hostname.toLowerCase().includes("googlevideo.com") || u.pathname.includes("/videoplayback")) {
-      // Strip per-chunk MSE range/buffer parameters so signed googlevideo URLs point to the full representation
-      const stripParams = ["range", "rn", "rbuf", "ump", "srfvp", "alr", "cpn"];
+    const host = u.hostname.toLowerCase();
+    if (host.includes("googlevideo.com") || u.pathname.includes("/videoplayback")) {
+      // Keep any parameter covered by YouTube's sparams/lsparams signature;
+      // deleting a signed range control makes the playback URL return HTTP 403.
+      const signedParams = new Set([
+        ...(u.searchParams.get("sparams") || "").split(","),
+        ...(u.searchParams.get("lsparams") || "").split(",")
+      ].filter(Boolean));
+      const stripParams = ["range", "rn", "rbuf", "ump", "srfvp", "alr"];
       for (const p of stripParams) {
-        u.searchParams.delete(p);
+        if (!signedParams.has(p)) u.searchParams.delete(p);
       }
+      return u.toString();
+    }
+    if (host.includes("fbcdn.net") || (u.searchParams.has("bytestart") && u.searchParams.has("byteend"))) {
+      u.searchParams.delete("bytestart");
+      u.searchParams.delete("byteend");
       return u.toString();
     }
   } catch (_) {}
@@ -512,6 +603,7 @@ function isMediaSegmentRequest(url, ext, responseHeaderMap, tabId) {
   if (G.SegmentExts.has(ext)) return true;
   try {
     const u = new URL(url);
+    const host = u.hostname.toLowerCase();
     if (/\/(seg|segment|chunk|frag)[-_0-9]+/i.test(u.pathname) && ext !== "m3u8" && ext !== "mpd") {
       return true;
     }
@@ -519,13 +611,18 @@ function isMediaSegmentRequest(url, ext, responseHeaderMap, tabId) {
     if (/\/(init|header)[-_0-9]*\.(mp4|m4s|cmfv|cmfa)$/i.test(u.pathname)) {
       return true;
     }
+    // Suppress Bilibili raw DASH .m4s chunks from flooding the popup as individual files
+    if ((host.includes("bilivideo.com") || host.includes("bilivideo.cn") || host.includes("akamaized.net")) &&
+        (u.pathname.endsWith(".m4s") || u.searchParams.has("mcdnid"))) {
+      return true;
+    }
   } catch (_) {}
 
-  // Suppress small (< 4 MiB) 206 byte-range requests if an HLS/DASH manifest already exists on this tab
+  // Suppress small (< 4 MiB) 206 byte-range requests if an HLS/DASH/SITE_EXTRACTION manifest already exists on this tab
   const contentRange = responseHeaderMap["content-range"] || "";
   if (contentRange.startsWith("bytes ")) {
     const tabItems = G.cacheData.get(tabId) || [];
-    const hasManifest = tabItems.some(item => item.streamType === "HLS" || item.streamType === "DASH");
+    const hasManifest = tabItems.some(item => item.streamType === "HLS" || item.streamType === "DASH" || item.streamType === "YOUTUBE" || item.streamType === "SITE_EXTRACTION");
     const len = parseInt(responseHeaderMap["content-length"] || "0", 10);
     if (hasManifest && len > 0 && len < 4 * 1048576) {
       return true;
@@ -578,7 +675,7 @@ function classifyNetworkResource(details) {
     if (parsedU.hostname.toLowerCase().includes("googlevideo.com") || parsedU.pathname.includes("/videoplayback")) {
       const mimeParam = (parsedU.searchParams.get("mime") || contentType || "").toLowerCase();
       const itag = parsedU.searchParams.get("itag") || "";
-      const hasUmp = rawParsedU.searchParams.get("ump") === "1" || rawParsedU.searchParams.has("srfvp") || contentType === "application/vnd.yt-ump";
+      const hasUmp = rawParsedU.searchParams.get("ump") === "1" || rawParsedU.searchParams.has("srfvp") || rawParsedU.searchParams.get("sabr") === "1" || contentType === "application/vnd.yt-ump";
       const hadRangeParam = rawParsedU.searchParams.has("range") || rawParsedU.searchParams.has("rbuf");
       const isProgressiveItag = G.YouTubeProgressiveItags ? G.YouTubeProgressiveItags.has(itag) : (itag === "18" || itag === "22");
 
@@ -593,8 +690,8 @@ function classifyNetworkResource(details) {
           const watchUrl = isYouTubeWatchOrShortsUrl(tabUrl) ? tabUrl : url;
           return {
             url: watchUrl,
-            videoUrl: !isAudioOnly ? url : "",
-            pairedAudioUrl: isAudioOnly ? url : "",
+            videoUrl: (!isAudioOnly && !hasUmp) ? url : "",
+            pairedAudioUrl: (isAudioOnly && !hasUmp) ? url : "",
             ext: "mp4",
             streamType: "YOUTUBE",
             sourceType: SourceType.YOUTUBE_EXTRACTION,
@@ -602,10 +699,10 @@ function classifyNetworkResource(details) {
             size: totalSize,
             itag,
             isAudioOnly,
-            isGoogleVideo: true,
+            isGoogleVideo: !hasUmp,
             isAdaptiveTrack: true,
-            requiresAudioMux: !isAudioOnly,
-            requiresCipherExtraction: false,
+            requiresAudioMux: !isAudioOnly && !hasUmp,
+            requiresCipherExtraction: hasUmp,
             videoId: extractYouTubeVideoId(watchUrl),
             matchedBy: "googlevideo_adaptive"
           };
@@ -973,7 +1070,7 @@ function addOrDeduplicateMediaCandidate(tabId, candidate) {
         videoCand.pairedAudioUrl = audioTargetUrl;
         if (Array.isArray(videoCand.qualities)) {
           for (const q of videoCand.qualities) {
-            if (!q.isAudioOnly && !q.pairedAudioUrl) q.pairedAudioUrl = audioTargetUrl;
+            if (!q.isAudioOnly) q.pairedAudioUrl = audioTargetUrl;
           }
           videoCand.qualities = mergeQualityLists(videoCand.qualities, [{
             id: "audio-only",
@@ -1073,6 +1170,15 @@ function addOrDeduplicateMediaCandidate(tabId, candidate) {
     }
     if (candidate.videoUrl) {
       existing.videoUrl = candidate.videoUrl;
+      if (candidate.isGoogleVideo && !candidate.isAudioOnly && candidate.itag) {
+        const activeItag = String(candidate.itag);
+        for (const quality of existing.qualities || []) {
+          if (!quality.isAudioOnly && String(quality.itag || "") === activeItag) {
+            quality.videoUrl = candidate.videoUrl;
+            quality.requiresCipherExtraction = false;
+          }
+        }
+      }
     }
     if (candidate.pairedAudioUrl) {
       existing.pairedAudioUrl = candidate.pairedAudioUrl;
@@ -1459,6 +1565,7 @@ var exportedFns = {
   isAttachmentContentDisposition,
   isYouTubeWatchOrShortsUrl,
   extractYouTubeVideoId,
+  isSupportedVideoSiteWatchUrl,
   isWebpageWatchUrl,
   isValidHlsManifestText,
   isValidDashManifestText,

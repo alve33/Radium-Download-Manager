@@ -31,6 +31,35 @@ struct TorrentProgress {
     std::string status_detail;
 };
 
+struct TrackerEndpointInfo {
+    std::string url;
+    int tier{0};
+    std::string status{"Active"}; // Active, Announcing, Error, Disabled
+    uint32_t seeders{0};
+    uint32_t leechers{0};
+    std::string last_error;
+};
+
+struct PeerDiagnosticsInfo {
+    std::string endpoint; // ip:port
+    std::string client_name;
+    uint64_t download_bps{0};
+    uint64_t upload_bps{0};
+    double progress{0.0}; // 0.0 - 1.0
+    bool is_choked{true};
+    bool is_snubbed{false};
+};
+
+struct TorrentSwarmDetails {
+    std::string task_id;
+    std::vector<TrackerEndpointInfo> trackers;
+    std::vector<PeerDiagnosticsInfo> peers;
+    uint32_t active_peer_count{0};
+    uint32_t total_seeds{0};
+    uint32_t total_leechers{0};
+    bool sequential_mode{false};
+};
+
 using TorrentProgressCallback = std::function<void(const TorrentProgress&)>;
 // Invoked after BEP 9 metadata has been decoded and before storage is allocated.
 // The callback may update TorrentInfo::files[].selected and can reject the task.
@@ -54,7 +83,13 @@ public:
         bool seed_after_completion = false,
         double max_seed_ratio = 1.0,
         uint32_t max_seed_time_sec = 0,
-        TorrentMetadataSelectionCallback on_metadata = nullptr);
+        TorrentMetadataSelectionCallback on_metadata = nullptr,
+        bool sequential_download = false);
+
+    // Swarm inspection and dynamic control
+    static Result<void> AddTrackersToTask(const std::string& task_id, const std::vector<std::string>& new_trackers);
+    static Result<TorrentSwarmDetails> GetSwarmDetails(const std::string& task_id);
+    static Result<void> SetSequentialMode(const std::string& task_id, bool enable);
 };
 
 } // namespace openidm::torrent

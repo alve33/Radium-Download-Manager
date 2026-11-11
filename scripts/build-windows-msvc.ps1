@@ -27,8 +27,14 @@ if ($Clean) {
     }
 }
 
+$Version = "1.0.0"
+$versionFilePath = Join-Path $RepoRoot "VERSION"
+if (Test-Path $versionFilePath) {
+    $Version = (Get-Content $versionFilePath -Raw).Trim()
+}
+
 Write-Host "================================================================="
-Write-Host "   Radium Download Manager v1.0.0 Windows 11 x64 Portable Pipeline "
+Write-Host "   Radium Download Manager v$Version Windows 11 x64 Portable Pipeline "
 Write-Host "================================================================="
 
 # -----------------------------------------------------------------------------
@@ -102,6 +108,15 @@ foreach ($t in $Targets) {
         Copy-Item -Force $srcPath (Join-Path $BuildDir $t)
         Copy-Item -Force $srcPath (Join-Path $RepoRoot "build\$t")
     }
+}
+$DesktopCatalog = Join-Path $RepoRoot "translations\desktop.json"
+if (-not (Test-Path -LiteralPath $DesktopCatalog -PathType Leaf)) {
+    throw "Offline desktop language catalog is missing: $DesktopCatalog"
+}
+foreach ($catalogRoot in @($BuildDir, (Join-Path $RepoRoot "build"))) {
+    $catalogTargetDir = Join-Path $catalogRoot "translations"
+    New-Item -ItemType Directory -Force -Path $catalogTargetDir | Out-Null
+    Copy-Item -LiteralPath $DesktopCatalog -Destination (Join-Path $catalogTargetDir "desktop.json") -Force
 }
 
 # -----------------------------------------------------------------------------
@@ -179,10 +194,15 @@ Verify-PeBinary $YtExe 3 "IMAGE_SUBSYSTEM_WINDOWS_CUI"
 # 6. Stage Portable Distribution at dist/Radium.exe (No Installer / No MSI)
 # -----------------------------------------------------------------------------
 Write-Host "`n==> [6/7] Staging Portable Distribution at dist/Radium.exe..."
-Get-Process | Where-Object {
-    try { $_.Path -and $_.Path.StartsWith($DistDir, [System.StringComparison]::OrdinalIgnoreCase) } catch { $false }
-} | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 200
+$PortableExe = Join-Path $DistDir "Radium.exe"
+$RunningPortable = Get-CimInstance Win32_Process | Where-Object {
+    $_.ExecutablePath -and $_.ExecutablePath.Equals($PortableExe, [System.StringComparison]::OrdinalIgnoreCase)
+}
+if ($RunningPortable) {
+    # Never terminate an active manager (it may have transfers in progress), and
+    # preserve the canonical application name. Ask the user to close it and retry.
+    throw "Close dist\Radium.exe before staging this build. The portable application is always named Radium.exe; no alternate app filename will be created."
+}
 
 # Ensure single standard tools location tools\win-x64 in dist
 $DistToolsWinDir = Join-Path $DistDir "tools\win-x64"
@@ -202,9 +222,16 @@ foreach ($dup in $legacyDupFiles) {
     }
 }
 
-Copy-Item -Force (Join-Path $BuildDir "radium.exe") (Join-Path $DistDir "Radium.exe")
-Copy-Item -Force (Join-Path $BuildDir "radium.exe") (Join-Path $DistDir "radium.exe")
+Copy-Item -Force (Join-Path $BuildDir "radium.exe") $PortableExe
 Copy-Item -Force (Join-Path $BuildDir "radium-nmh.exe") (Join-Path $DistDir "radium-nmh.exe")
+
+$DesktopCatalog = Join-Path $RepoRoot "translations\desktop.json"
+if (-not (Test-Path -LiteralPath $DesktopCatalog -PathType Leaf)) {
+    throw "Offline desktop language catalog is missing: $DesktopCatalog"
+}
+$DistTranslationsDir = Join-Path $DistDir "translations"
+New-Item -ItemType Directory -Force -Path $DistTranslationsDir | Out-Null
+Copy-Item -LiteralPath $DesktopCatalog -Destination (Join-Path $DistTranslationsDir "desktop.json") -Force
 
 # Ensure legacy Flux binaries and packages are removed from dist
 $legacyDistFiles = @(
@@ -281,8 +308,9 @@ Get-ChildItem -Path $extSrc -Recurse | Where-Object {
 }
 
 $CheckFiles = @(
-    (Join-Path $DistDir "Radium.exe"),
+    $PortableExe,
     (Join-Path $DistDir "radium-nmh.exe"),
+    (Join-Path $DistTranslationsDir "desktop.json"),
     (Join-Path $DistDir "tools\win-x64\N_m3u8DL-RE.exe"),
     (Join-Path $DistDir "tools\win-x64\ffmpeg.exe"),
     (Join-Path $DistDir "tools\win-x64\yt-dlp.exe")
@@ -339,7 +367,7 @@ if (-not $SkipTests) {
 
 Write-Host "`n================================================================="
 Write-Host "   Windows 11 x64 Portable Build & Verification Completed        "
-Write-Host "   Portable App : $DistDir\Radium.exe                              "
+Write-Host "   Portable App : $PortableExe"
 Write-Host "   Native Host  : $DistDir\radium-nmh.exe                          "
 Write-Host "   Extension Dir: $RepoRoot\extension                            "
 Write-Host "   Register NMH : .\scripts\register-native-messaging.ps1        "

@@ -101,7 +101,7 @@ function Verify-ExistingBinary([string]$FilePath, [string]$ExpectedSha256, [stri
 }
 
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "   Flux Download Manager -- Upstream Worker Provisioning         " -ForegroundColor Cyan
+Write-Host "   Radium Download Manager -- Upstream Worker Provisioning       " -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "Target Directory: $TargetDir" -ForegroundColor White
 
@@ -233,7 +233,7 @@ try {
     # Run capability auditor if available
     $VerifyScript = Join-Path $ScriptDir "verify-ffmpeg-capabilities.ps1"
     if (Test-Path $VerifyScript) {
-        Write-Host "  Auditing FFmpeg capabilities for Flux stream pipeline..." -ForegroundColor Cyan
+        Write-Host "  Auditing FFmpeg capabilities for Radium stream pipeline..." -ForegroundColor Cyan
         & $VerifyScript -FfmpegPath $FfExe -FailOnMissing:$false
     }
 

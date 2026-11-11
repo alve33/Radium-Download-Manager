@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "ui/win32_main_window.hpp"
+#include "ui/localization.hpp"
 #include "ui/startup_log_dialog.hpp"
 #include "security/admin_check.hpp"
 #include "common/startup_diagnostic.hpp"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <fstream>
@@ -32,6 +34,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <winreg.h>
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -39,6 +42,7 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 #endif
 
@@ -80,6 +84,113 @@ std::string WToUtf8(std::wstring_view wv) {
     WideCharToMultiByte(CP_UTF8, 0, wv.data(), static_cast<int>(wv.size()), out.data(), len, nullptr, nullptr);
     return out;
 }
+
+std::string DestinationFolderForDisplay(std::string_view file_path) {
+    const auto path = PathSanitizer::Utf8ToPath(file_path);
+    const auto folder = path.parent_path();
+    return folder.empty() ? std::string(file_path) : PathSanitizer::PathToUtf8(folder);
+}
+
+bool IsWindowsAppThemeLight() {
+    HKEY key = nullptr;
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    DWORD type = 0;
+    const LONG opened = RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0, KEY_QUERY_VALUE, &key);
+    if (opened != ERROR_SUCCESS) return false;
+    const LONG queried = RegQueryValueExW(key, L"AppsUseLightTheme", nullptr, &type,
+        reinterpret_cast<BYTE*>(&value), &size);
+    RegCloseKey(key);
+    return queried == ERROR_SUCCESS && type == REG_DWORD && value != 0;
+}
+
+HMODULE GetUxThemeModule() {
+    static HMODULE module = LoadLibraryW(L"uxtheme.dll");
+    return module;
+}
+
+using SetPreferredAppModeFn = int(WINAPI*)(int mode);
+using AllowDarkModeForWindowFn = BOOL(WINAPI*)(HWND hwnd, BOOL allow);
+
+SetPreferredAppModeFn GetSetPreferredAppModeFn() {
+    static auto fn = reinterpret_cast<SetPreferredAppModeFn>(
+        GetProcAddress(GetUxThemeModule(), MAKEINTRESOURCEA(135)));
+    return fn;
+}
+
+AllowDarkModeForWindowFn GetAllowDarkModeForWindowFn() {
+    static auto fn = reinterpret_cast<AllowDarkModeForWindowFn>(
+        GetProcAddress(GetUxThemeModule(), MAKEINTRESOURCEA(133)));
+    return fn;
+}
+
+void ApplyNativeEditTheme(HWND hwnd, bool use_dark) {
+    using SetWindowThemeFn = HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR);
+    static auto set_window_theme = reinterpret_cast<SetWindowThemeFn>(
+        GetProcAddress(GetUxThemeModule(), "SetWindowTheme"));
+    if (set_window_theme) {
+        set_window_theme(hwnd, use_dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    }
+    InvalidateRect(hwnd, nullptr, TRUE);
+    UpdateWindow(hwnd);
+}
+
+void SetWindowRightToLeft(HWND hwnd, bool right_to_left) {
+    if (!hwnd || !IsWindow(hwnd)) return;
+    LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    ex_style &= ~(static_cast<LONG_PTR>(WS_EX_LAYOUTRTL) | static_cast<LONG_PTR>(WS_EX_RTLREADING));
+    if (right_to_left) ex_style |= WS_EX_LAYOUTRTL | WS_EX_RTLREADING;
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+BOOL CALLBACK ApplyChildRightToLeft(HWND child, LPARAM rtl_param) {
+    SetWindowRightToLeft(child, rtl_param != FALSE);
+    return TRUE;
+}
+
+void ApplyWin32DarkModePreference(HWND hwnd, bool use_dark) {
+    if (auto set_app_mode = GetSetPreferredAppModeFn()) {
+        // PreferredAppMode: ForceDark = 2, ForceLight = 3. Radium paints its
+        // own surfaces, while this keeps native child controls in that mode.
+        set_app_mode(use_dark ? 2 : 3);
+    }
+    if (auto allow_window_dark = GetAllowDarkModeForWindowFn()) {
+        allow_window_dark(hwnd, use_dark ? TRUE : FALSE);
+    }
+}
+
+BOOL CALLBACK ApplyChildDarkModePreference(HWND child, LPARAM use_dark_param) {
+    const bool use_dark = use_dark_param != FALSE;
+    if (auto allow_window_dark = GetAllowDarkModeForWindowFn()) {
+        allow_window_dark(child, use_dark ? TRUE : FALSE);
+    }
+    wchar_t class_name[32]{};
+    if (GetClassNameW(child, class_name, static_cast<int>(std::size(class_name))) > 0 &&
+        _wcsicmp(class_name, L"Edit") == 0) {
+        ApplyNativeEditTheme(child, use_dark);
+    }
+    return TRUE;
+}
+
+void ApplyNativeWindowTheme(HWND hwnd, const ThemePalette& palette) {
+    BOOL use_dark = palette.mode != ThemeMode::kLight;
+    const bool right_to_left = GetLocalizationManager().IsRightToLeft();
+    SetWindowRightToLeft(hwnd, right_to_left);
+    EnumChildWindows(hwnd, ApplyChildRightToLeft, right_to_left ? TRUE : FALSE);
+    ApplyWin32DarkModePreference(hwnd, use_dark != FALSE);
+    EnumChildWindows(hwnd, ApplyChildDarkModePreference, static_cast<LPARAM>(use_dark));
+    DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &use_dark, sizeof(use_dark));
+    COLORREF caption = palette.app_background.ToWin32ColorRef();
+    DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &caption, sizeof(caption));
+    COLORREF text = palette.text_primary.ToWin32ColorRef();
+    DwmSetWindowAttribute(hwnd, 36 /* DWMWA_TEXT_COLOR */, &text, sizeof(text));
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+}
+#else
+bool IsWindowsAppThemeLight() { return false; }
 #endif
 
 std::string ToLower(std::string_view sv) {
@@ -124,11 +235,12 @@ DesktopView::DesktopView(DownloadController& controller, ipc::IpcServer* ipc_ser
       m_metrics(DesignSystem::ComputeMetrics(96)),
       m_palette(DesignSystem::GetRedesignPalette()) {
     auto settings = m_controller.GetSettings();
+    GetLocalizationManager().SetLocale(settings.language);
     m_draft_settings = settings;
     m_anim.reduced_motion = settings.reduced_motion;
     m_anim.window_visible = !settings.start_minimized;
     m_anim.window_minimized = settings.start_minimized;
-    SetTheme(settings.theme, false);
+    SetTheme(settings.theme, IsWindowsAppThemeLight());
     LoadColumnWidthsFromSettings();
 }
 
@@ -232,39 +344,42 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     int chk_y = (bar_h - chk_s) / 2;
     g.select_all_checkbox_rect = {content_x + 12, chk_y, content_x + 12 + chk_s, chk_y + chk_s};
 
-    int sort_w = DesignSystem::ScaleForDpi(90, m.dpi);
+    int sort_w = DesignSystem::ScaleForDpi(84, m.dpi);
     int sort_h = DesignSystem::ScaleForDpi(36, m.dpi);
     int sort_y = (bar_h - sort_h) / 2;
     g.sort_dropdown_rect = {content_x + 12 + chk_s + 8, sort_y, content_x + 12 + chk_s + 8 + sort_w, sort_y + sort_h};
 
     // Keep enough room for the funnel, caret, and the longest common category
     // label so the filter text does not touch either icon at standard DPI.
-    int filt_w = DesignSystem::ScaleForDpi(132, m.dpi);
+    int filt_w = DesignSystem::ScaleForDpi(124, m.dpi);
     int filt_x = g.sort_dropdown_rect.right + 10;
     g.filter_dropdown_rect = {filt_x, sort_y, filt_x + filt_w, sort_y + sort_h};
 
     int btn_h = DesignSystem::ScaleForDpi(36, m.dpi);
     int by = (bar_h - btn_h) / 2;
 
-    constexpr int kStartAllButtonWidth = 88;
-    constexpr int kPauseAllButtonWidth = 96;
-    constexpr int kClearHistoryButtonWidth = 116;
-    constexpr int kToolbarActionGap = 10;
+    constexpr int kStartAllButtonWidth = 84;
+    constexpr int kPauseAllButtonWidth = 88;
+    constexpr int kClearHistoryButtonWidth = 108;
+    constexpr int kToolbarActionGap = 8;
 
     int add_btn_w = DesignSystem::ScaleForDpi(132, m.dpi);
     int add_btn_x = w - add_btn_w - 12;
     g.add_download_button_rect = {add_btn_x, by, add_btn_x + add_btn_w, by + btn_h};
+    int theme_button_w = DesignSystem::ScaleForDpi(40, m.dpi);
+    g.theme_button_rect = {add_btn_x - theme_button_w - DesignSystem::ScaleForDpi(8, m.dpi), by,
+        add_btn_x - DesignSystem::ScaleForDpi(8, m.dpi), by + btn_h};
 
-    int settings_btn_x = add_btn_x;
+    int settings_btn_x = g.theme_button_rect.left;
     g.settings_button_rect = {0, 0, 0, 0};
     g.search_sliders_rect = {0, 0, 0, 0};
 
-    int search_max_w = DesignSystem::ScaleForDpi(260, m.dpi);
+        int search_max_w = DesignSystem::ScaleForDpi(260, m.dpi);
     int essential_actions_left = filt_x + filt_w + DesignSystem::ScaleForDpi(12, m.dpi);
     int essential_actions_w = DesignSystem::ScaleForDpi(
         kStartAllButtonWidth + kToolbarActionGap +
         kPauseAllButtonWidth + kToolbarActionGap + kClearHistoryButtonWidth, m.dpi);
-    int search_w = std::min(search_max_w, std::max(DesignSystem::ScaleForDpi(80, m.dpi),
+    int search_w = std::min(search_max_w, std::max(DesignSystem::ScaleForDpi(112, m.dpi),
         settings_btn_x - DesignSystem::ScaleForDpi(24, m.dpi) - essential_actions_left - essential_actions_w));
     int search_x = settings_btn_x - search_w - 12;
     g.search_box_rect = {search_x, by, search_x + search_w, by + btn_h};
@@ -299,7 +414,7 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
                 act_x += bw + DesignSystem::ScaleForDpi(kToolbarActionGap, m.dpi);
             }
         }
-        g.toolbar_buttons.push_back({d.id, d.label, d.enabled, d.primary, brc});
+        g.toolbar_buttons.push_back({d.id, GetLocalizationManager().Translate(d.label), d.enabled, d.primary, brc});
     }
 
     auto counts = ComputeCategoryCounts();
@@ -317,6 +432,14 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
         g.sidebar_items.push_back({cat, CategoryToLabel(cat), cnt, cat == m_selected_category, crc});
     }
     g.sidebar_settings_rect = {DesignSystem::ScaleForDpi(12, m.dpi), h - DesignSystem::ScaleForDpi(52, m.dpi), sidebar_w - DesignSystem::ScaleForDpi(12, m.dpi), h - DesignSystem::ScaleForDpi(12, m.dpi)};
+    const int sidebar_action_gap = DesignSystem::ScaleForDpi(4, m.dpi);
+    const int sidebar_action_height = g.sidebar_settings_rect.height();
+    g.sidebar_language_rect = {
+        g.sidebar_settings_rect.left,
+        g.sidebar_settings_rect.top - sidebar_action_gap - sidebar_action_height,
+        g.sidebar_settings_rect.right,
+        g.sidebar_settings_rect.top - sidebar_action_gap
+    };
 
     int hdr_h = m.table_header_height;
     int sb_h = 0; // Bottom status bar permanently removed
@@ -395,26 +518,26 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
         : std::max(DesignSystem::ScaleForDpi(120, m.dpi), available_for_name);
 
     int cx = content_x + 12;
-    g.table_columns.push_back({SortColumn::kFileName, "Name", {cx, bar_h, cx + col_name_total_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kFileName, GetLocalizationManager().Translate("Name"), {cx, bar_h, cx + col_name_total_w, bar_h + hdr_h}});
     cx += col_name_total_w;
 
-    g.table_columns.push_back({SortColumn::kSize, "Size", {cx, bar_h, cx + col_size_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kSize, GetLocalizationManager().Translate("Size"), {cx, bar_h, cx + col_size_w, bar_h + hdr_h}});
     cx += col_size_w;
 
-    g.table_columns.push_back({SortColumn::kStatus, "Status", {cx, bar_h, cx + col_stat_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kStatus, GetLocalizationManager().Translate("Status"), {cx, bar_h, cx + col_stat_w, bar_h + hdr_h}});
     cx += col_stat_w;
 
-    g.table_columns.push_back({SortColumn::kSpeed, "Download", {cx, bar_h, cx + col_dl_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kSpeed, GetLocalizationManager().Translate("Download"), {cx, bar_h, cx + col_dl_w, bar_h + hdr_h}});
     cx += col_dl_w;
 
-    g.table_columns.push_back({SortColumn::kDownloadType, "Upload", {cx, bar_h, cx + col_ul_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kDownloadType, GetLocalizationManager().Translate("Upload"), {cx, bar_h, cx + col_ul_w, bar_h + hdr_h}});
     cx += col_ul_w;
 
-    g.table_columns.push_back({SortColumn::kCreatedAt, "Added", {cx, bar_h, cx + col_added_w, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kCreatedAt, GetLocalizationManager().Translate("Added"), {cx, bar_h, cx + col_added_w, bar_h + hdr_h}});
     cx += col_added_w;
 
-    g.table_columns.push_back({SortColumn::kProgress, "Progress", {cx, bar_h, cx, bar_h + hdr_h}});
-    g.table_columns.push_back({SortColumn::kEta, "ETA", {cx, bar_h, cx, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kProgress, GetLocalizationManager().Translate("Progress"), {cx, bar_h, cx, bar_h + hdr_h}});
+    g.table_columns.push_back({SortColumn::kEta, GetLocalizationManager().Translate("ETA"), {cx, bar_h, cx, bar_h + hdr_h}});
 
     const int body_h = std::max(1, g.table_body_rect.height());
     int row_h = m.table_row_height;
@@ -446,21 +569,21 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
 
     if (det_h > 0) {
         const auto state = ComputeToolbarState();
-        std::vector<std::pair<DetailsActionId, std::pair<const char*, bool>>> actions;
-        if (state.can_open_folder) actions.push_back({DetailsActionId::kOpenFolder, {"Open Folder", false}});
-        if (state.can_open_file) actions.push_back({DetailsActionId::kOpenFile, {"Open File", false}});
-        if (state.can_pause) actions.push_back({DetailsActionId::kPause, {"Pause", true}});
-        if (state.can_resume) actions.push_back({DetailsActionId::kResume, {"Resume", true}});
-        if (state.can_cancel) actions.push_back({DetailsActionId::kCancel, {"Cancel", false}});
+        std::vector<std::pair<DetailsActionId, std::pair<std::string, bool>>> actions;
+        if (state.can_open_folder) actions.push_back({DetailsActionId::kOpenFolder, {GetLocalizationManager().Translate("Open Folder"), false}});
+        if (state.can_open_file) actions.push_back({DetailsActionId::kOpenFile, {GetLocalizationManager().Translate("Open File"), false}});
+        if (state.can_pause) actions.push_back({DetailsActionId::kPause, {GetLocalizationManager().Translate("Pause"), true}});
+        if (state.can_resume) actions.push_back({DetailsActionId::kResume, {GetLocalizationManager().Translate("Resume"), true}});
+        if (state.can_cancel) actions.push_back({DetailsActionId::kCancel, {GetLocalizationManager().Translate("Cancel"), false}});
         if (!state.can_pause && !state.can_resume && !state.can_cancel && (state.can_open_file || state.can_open_folder))
-            actions.push_back({DetailsActionId::kRemoveHistory, {"Remove from History", true}});
+            actions.push_back({DetailsActionId::kRemoveHistory, {GetLocalizationManager().Translate("Remove from History"), true}});
         int action_h = DesignSystem::ScaleForDpi(32, m.dpi);
         int gap = DesignSystem::ScaleForDpi(8, m.dpi);
         int x = w - DesignSystem::ScaleForDpi(16, m.dpi);
         int y = g.details_panel_rect.top + (det_h - action_h) / 2;
         for (auto it = actions.rbegin(); it != actions.rend(); ++it) {
             const int button_w = DesignSystem::ScaleForDpi(
-                it->first == DetailsActionId::kRemoveHistory ? 152 : 112, m.dpi);
+                it->first == DetailsActionId::kRemoveHistory ? 176 : 112, m.dpi);
             x -= button_w;
             g.details_action_buttons.push_back({it->first, it->second.first, it->second.second,
                 {x, y, x + button_w, y + action_h}});
@@ -501,6 +624,10 @@ HitTestResult DesktopView::HitTestPoint(int x, int y, size_t scroll_offset) cons
     }
 
     auto geom = ComputeLayoutGeometry(scroll_offset);
+    if (geom.theme_button_rect.Contains(x, y)) return {HitTargetType::kThemeToggleButton, 0, "", "Toggle light and dark appearance"};
+    if (geom.sidebar_language_rect.Contains(x, y)) {
+        return {HitTargetType::kSidebarLanguageButton, 0, "", "Language"};
+    }
     if (geom.sidebar_settings_rect.Contains(x, y)) {
         return {HitTargetType::kSidebarSettingsButton, 0, "", "Settings"};
     }
@@ -611,6 +738,9 @@ bool DesktopView::HandleMouseClick(int x, int y, bool double_click, size_t scrol
                 auto r = ApplySettingsChanges();
                 if (r.ok()) {
                     CloseSettingsCenter(false);
+#ifdef _WIN32
+                    if (m_hwnd) ApplyNativeWindowTheme(m_hwnd, m_palette);
+#endif
                 }
                 return r.ok();
             }
@@ -627,7 +757,10 @@ bool DesktopView::HandleMouseClick(int x, int y, bool double_click, size_t scrol
                 return true;
             }
             case HitTargetType::kSettingsRestoreDefaultsButton: {
-                ActionRestoreDefaultSettings();
+                auto restored = ActionRestoreDefaultSettings();
+#ifdef _WIN32
+                if (restored.ok() && m_hwnd) ApplyNativeWindowTheme(m_hwnd, m_palette);
+#endif
                 return true;
             }
             case HitTargetType::kSettingsBackdrop: {
@@ -761,7 +894,8 @@ HitTestResult DesktopView::HandleMouseMove(int x, int y, size_t scroll_offset) {
 
     m_hovered_sidebar_index = (hit.type == HitTargetType::kSidebarCategory) ? hit.index : -1;
     m_hovered_details_btn_index = (hit.type == HitTargetType::kSidebarSettingsButton) ? -2 :
-        (hit.type == HitTargetType::kDetailsActionButton ? hit.index : -1);
+        (hit.type == HitTargetType::kSidebarLanguageButton ? -3 :
+        (hit.type == HitTargetType::kDetailsActionButton ? hit.index : -1));
     m_active_tooltip = hit.tooltip_text;
     return hit;
 }
@@ -813,7 +947,7 @@ std::string DesktopView::FormatBytes(uint64_t bytes) {
 }
 
 std::string DesktopView::FormatSpeed(uint64_t bps) {
-    if (bps == 0) return "—";
+    if (bps == 0) return "0 B/s";
     return FormatBytes(bps) + "/s";
 }
 
@@ -924,20 +1058,7 @@ std::string DesktopView::FormatSizePretty(uint64_t bytes) {
 }
 
 std::string DesktopView::FormatSpeedKbps(uint64_t bps) {
-    if (bps == 0) return "0 KB/s";
-    char buf[64]{};
-    if (bps < 1024ULL * 1024ULL) {
-        uint64_t kbps = (bps + 512) / 1024;
-        if (kbps == 0 && bps > 0) kbps = 1;
-        std::snprintf(buf, sizeof(buf), "%llu KB/s", static_cast<unsigned long long>(kbps));
-    } else if (bps < 1024ULL * 1024ULL * 1024ULL) {
-        double mbps = static_cast<double>(bps) / (1024.0 * 1024.0);
-        std::snprintf(buf, sizeof(buf), "%.2f MB/s", mbps);
-    } else {
-        double gbps = static_cast<double>(bps) / (1024.0 * 1024.0 * 1024.0);
-        std::snprintf(buf, sizeof(buf), "%.2f GB/s", gbps);
-    }
-    return std::string(buf);
+    return FormatSpeed(bps);
 }
 
 void DesktopView::ToggleSelectAll() {
@@ -1071,16 +1192,16 @@ void DesktopView::ToggleSidebarVisible() {
 
 std::string DesktopView::CategoryToLabel(SidebarCategory category) {
     switch (category) {
-        case SidebarCategory::kAllDownloads:   return "All Downloads";
-        case SidebarCategory::kInProgress:     return "In Progress";
-        case SidebarCategory::kQueued:         return "Queued";
-        case SidebarCategory::kCompleted:      return "Completed";
-        case SidebarCategory::kFailed:         return "Failed";
-        case SidebarCategory::kVideoDownloads: return "Video Downloads";
-        case SidebarCategory::kScheduled:      return "Scheduled";
-        case SidebarCategory::kPaused:         return "Paused";
+        case SidebarCategory::kAllDownloads:   return GetLocalizationManager().Translate("All Downloads");
+        case SidebarCategory::kInProgress:     return GetLocalizationManager().Translate("In Progress");
+        case SidebarCategory::kQueued:         return GetLocalizationManager().Translate("Queued");
+        case SidebarCategory::kCompleted:      return GetLocalizationManager().Translate("Completed");
+        case SidebarCategory::kFailed:         return GetLocalizationManager().Translate("Failed");
+        case SidebarCategory::kVideoDownloads: return GetLocalizationManager().Translate("Video Downloads");
+        case SidebarCategory::kScheduled:      return GetLocalizationManager().Translate("Scheduled");
+        case SidebarCategory::kPaused:         return GetLocalizationManager().Translate("Paused");
     }
-    return "All Downloads";
+    return GetLocalizationManager().Translate("All Downloads");
 }
 
 bool DesktopView::MatchesCategory(const TaskModel& t, SidebarCategory cat) const {
@@ -1365,12 +1486,13 @@ void DesktopView::EndColumnResize() {
 
 int DesktopView::HitTestColumnDivider(int x, int y, size_t scroll_offset) const {
     auto geom = ComputeLayoutGeometry(scroll_offset);
-    if (y < geom.table_header_rect.top || y > geom.table_header_rect.bottom) {
+    const int hit_slop = DesignSystem::ScaleForDpi(6, m_metrics.dpi);
+    if (y < geom.table_header_rect.top || y >= geom.table_header_rect.bottom) {
         return -1;
     }
     for (size_t i = 0; i < geom.table_columns.size() && i <= 5; ++i) {
         int edge_x = geom.table_columns[i].rect.right;
-        if (std::abs(x - edge_x) <= 4) {
+        if (geom.table_columns[i].rect.width() > 0 && std::abs(x - edge_x) <= hit_slop) {
             return static_cast<int>(i);
         }
     }
@@ -1520,7 +1642,8 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
         switch (t.state) {
             case TaskState::kCompleted:
                 row.status_indicator_color = m_palette.status_success;
-                row.progress_fill_color = m_palette.status_success;
+                row.progress_fill_color = m_palette.mode == ThemeMode::kLight
+                    ? m_palette.accent_primary : m_palette.status_success;
                 break;
             case TaskState::kFailed:
             case TaskState::kCanceled:
@@ -1605,7 +1728,10 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
             }
         }
         row.added_time_text = FormatFriendlyTime(t.created_at_ms);
-        row.upload_speed_text = (t.upload_speed_bps > 0) ? FormatSpeed(t.upload_speed_bps) : "0 KB/s";
+        const bool is_seeding = t.task_type == TaskType::kTorrent &&
+            t.status_detail.find("Seeding to BitTorrent swarm") != std::string::npos;
+        row.upload_speed_text = (t.upload_speed_bps > 0) ? FormatSpeed(t.upload_speed_bps) :
+            ((t.state == TaskState::kCompleted && !is_seeding) ? "" : "0 B/s");
         row.checked = (m_checked_task_ids.count(t.task_id) > 0);
 
         if (t.state == TaskState::kDownloading) {
@@ -1616,7 +1742,7 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
                     : 0.0);
             int ipct = static_cast<int>(pct);
             row.status_text = (t.total_bytes > 0 || (row.is_stream && t.total_segments > 0)) ? ("Downloading " + std::to_string(ipct) + "%") : "Downloading...";
-            row.status_indicator_color = {0xFF, 0x47, 0x57, 255};
+            row.status_indicator_color = m_palette.accent_primary;
         } else if (t.state == TaskState::kProbing) {
             row.status_text = (!t.status_detail.empty()) ? t.status_detail : "Connecting...";
             row.status_indicator_color = {0x8B, 0x5C, 0xF6, 255};
@@ -1667,7 +1793,8 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
             row.full_status_tooltip = row.status_text;
         }
 
-        row.speed_text = (t.state == TaskState::kDownloading) ? FormatSpeedKbps(t.speed_bps) : "0 KB/s";
+        row.speed_text = (t.state == TaskState::kDownloading) ? FormatSpeedKbps(t.speed_bps) :
+            (t.state == TaskState::kCompleted ? "" : "0 B/s");
         uint64_t rem_bytes = (t.total_bytes > t.downloaded_bytes) ? (t.total_bytes - t.downloaded_bytes) : 0;
         row.eta_text = (t.state == TaskState::kDownloading) ? FormatEta(rem_bytes, t.speed_bps) : "—";
 
@@ -1917,16 +2044,16 @@ void DesktopView::SelectSettingsCategory(SettingsCategory category) {
 
 std::string DesktopView::SettingsCategoryToLabel(SettingsCategory category) {
     switch (category) {
-        case SettingsCategory::kGeneral:             return "General";
-        case SettingsCategory::kDownloads:           return "Downloads & Queue";
-        case SettingsCategory::kSaveLocations:       return "Save Locations";
-        case SettingsCategory::kConnectionsAndSpeed: return "Connections & Speed";
-        case SettingsCategory::kBrowserIntegration:  return "Browser Integration";
-        case SettingsCategory::kNotifications:       return "Notifications";
-        case SettingsCategory::kAboutAndDiagnostics: return "About & Diagnostics";
-        case SettingsCategory::kKeyboardShortcuts:   return "Keyboard Shortcuts";
+        case SettingsCategory::kGeneral:             return GetLocalizationManager().Translate("General");
+        case SettingsCategory::kDownloads:           return GetLocalizationManager().Translate("Downloads & Queue");
+        case SettingsCategory::kSaveLocations:       return GetLocalizationManager().Translate("Save Locations");
+        case SettingsCategory::kConnectionsAndSpeed: return GetLocalizationManager().Translate("Connections & Speed");
+        case SettingsCategory::kBrowserIntegration:  return GetLocalizationManager().Translate("Browser Integration");
+        case SettingsCategory::kNotifications:       return GetLocalizationManager().Translate("Notifications");
+        case SettingsCategory::kAboutAndDiagnostics: return GetLocalizationManager().Translate("About & Diagnostics");
+        case SettingsCategory::kKeyboardShortcuts:   return GetLocalizationManager().Translate("Keyboard Shortcuts");
     }
-    return "General";
+    return GetLocalizationManager().Translate("General");
 }
 
 void DesktopView::SetSettingsSearchQuery(std::string query) {
@@ -2005,6 +2132,20 @@ Result<void> DesktopView::SetDraftSettingByKey(std::string_view key, std::string
         m_draft_settings.close_to_tray = parse_bool(value_str);
     } else if (key == "reduced_motion") {
         m_draft_settings.reduced_motion = parse_bool(value_str);
+    } else if (key == "theme") {
+        if (value_str != "system" && value_str != "light" && value_str != "dark") {
+            m_settings_validation_key = std::string(key);
+            m_settings_validation_error = "Choose System, Light, or Dark appearance.";
+            return Result<void>::Err("ERR_SETTINGS_THEME", m_settings_validation_error);
+        }
+        m_draft_settings.theme = std::string(value_str);
+    } else if (key == "language") {
+        if (LocalizationManager::NormalizeLocale(value_str) != value_str) {
+            m_settings_validation_key = std::string(key);
+            m_settings_validation_error = "Choose one of the supported interface languages.";
+            return Result<void>::Err("ERR_SETTINGS_LANGUAGE", m_settings_validation_error);
+        }
+        m_draft_settings.language = std::string(value_str);
     } else if (key == "max_concurrent_tasks") {
         uint64_t v = 0;
         if (!parse_u64(value_str, v) || v < 1 || v > 16) {
@@ -2251,6 +2392,10 @@ Result<void> DesktopView::ApplySettingsChanges() {
 
 void DesktopView::RevertSettingsChanges() {
     m_draft_settings = m_controller.GetSettings();
+    GetLocalizationManager().SetLocale(m_draft_settings.language);
+#ifdef _WIN32
+    if (m_hwnd) ApplyNativeWindowTheme(m_hwnd, m_palette);
+#endif
     m_settings_validation_key.clear();
     m_settings_validation_error.clear();
     m_last_feedback_message = "Reverted unsaved settings changes";
@@ -2277,12 +2422,12 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
         SettingItemView it;
         it.key = std::move(key);
         it.category = cat;
-        it.group_title = std::move(group);
-        it.label = std::move(label);
-        it.description = std::move(desc);
+        it.group_title = GetLocalizationManager().Translate(group);
+        it.label = GetLocalizationManager().Translate(label);
+        it.description = GetLocalizationManager().Translate(desc);
         it.control_type = ctrl;
-        it.value_text = std::move(val_txt);
-        it.default_value_text = std::move(def_txt);
+        it.value_text = GetLocalizationManager().Translate(val_txt);
+        it.default_value_text = GetLocalizationManager().Translate(def_txt);
         it.bool_value = bool_val;
         it.is_modified = modified;
         it.is_advanced = adv;
@@ -2314,6 +2459,10 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
         SettingControlType::kToggleSwitch,
         s.reduced_motion ? "Reduced Motion" : "Standard Animations", "Standard Animations",
         s.reduced_motion, s.reduced_motion != saved.reduced_motion);
+    const std::string theme_label = s.theme == "system" ? "System" : (s.theme == "light" ? "Light" : "Dark");
+    add_item("theme", SettingsCategory::kGeneral, "Interface & Accessibility",
+        "Appearance", "Choose System to follow Windows automatically, or select Light or Dark.",
+        SettingControlType::kDropdown, theme_label, "System", false, s.theme != saved.theme);
 
     // 2. Downloads & Queue
     add_item(
@@ -3163,7 +3312,8 @@ Result<void> DesktopView::ActionSaveSettings(const AppSettings& settings) {
         m_draft_settings = m_controller.GetSettings();
         m_settings_validation_key.clear();
         m_settings_validation_error.clear();
-        SetTheme(settings.theme, false);
+        SetTheme(settings.theme, IsWindowsAppThemeLight());
+        GetLocalizationManager().SetLocale(settings.language);
         m_anim.reduced_motion = settings.reduced_motion;
         if (m_ipc_server) {
             m_ipc_server->SetCaptureEnabled(settings.browser_capture_enabled);
@@ -3179,7 +3329,8 @@ Result<AppSettings> DesktopView::ActionRestoreDefaultSettings() {
         m_draft_settings = *r.value;
         m_settings_validation_key.clear();
         m_settings_validation_error.clear();
-        SetTheme(r.value->theme, false);
+        SetTheme(r.value->theme, IsWindowsAppThemeLight());
+        GetLocalizationManager().SetLocale(r.value->language);
         m_anim.reduced_motion = r.value->reduced_motion;
         if (m_ipc_server) {
             m_ipc_server->SetCaptureEnabled(r.value->browser_capture_enabled);
@@ -3187,6 +3338,21 @@ Result<AppSettings> DesktopView::ActionRestoreDefaultSettings() {
         m_last_feedback_message = "Restored default settings";
     }
     return r;
+}
+
+void DesktopView::RefreshSystemTheme(bool os_prefers_light) {
+    if (m_theme_name == "system") SetTheme("system", os_prefers_light);
+}
+
+Result<void> DesktopView::ToggleTheme() {
+    AppSettings settings = m_controller.GetSettings();
+    settings.theme = (m_palette.mode == ThemeMode::kLight) ? "dark" : "light";
+    auto saved = m_controller.UpdateSettings(settings);
+    if (!saved.ok()) return saved;
+    m_draft_settings = m_controller.GetSettings();
+    SetTheme(settings.theme, IsWindowsAppThemeLight());
+    m_last_feedback_message = settings.theme == "light" ? "Light theme enabled" : "Dark theme enabled";
+    return Result<void>::Ok();
 }
 
 Result<void> DesktopView::ActionSetTaskSpeedLimit(const std::string& task_id, uint64_t bps) {
@@ -3618,6 +3784,7 @@ struct Win32WindowContext {
     DownloadController* controller{nullptr};
     HWND hwnd{nullptr};
     HWND hSearchEdit{nullptr};
+    HWND hThemeTooltip{nullptr};
     NOTIFYICONDATAW nid{};
     bool tray_added{false};
     bool is_dragging_vscroll{false};
@@ -3768,6 +3935,7 @@ struct ModernEditData {
     int pad_x{8};
     int pad_y{4};
     int radius{6};
+    ThemePalette palette{DesignSystem::GetRedesignPalette()};
 };
 
 LRESULT CALLBACK ModernEditSubclassProc(
@@ -3811,26 +3979,15 @@ LRESULT CALLBACK ModernEditSubclassProc(
                 RECT rc{0, 0, wr.right - wr.left, wr.bottom - wr.top};
                 bool is_enabled = IsWindowEnabled(hWnd) != FALSE;
                 
-                // Focus uses the shared Radium coral accent.
-                // Hover: #555866
-                // Normal: #3E404A
-                // Disabled: #2A2A30
-                COLORREF border_clr = !is_enabled ? RGB(0x2A, 0x2A, 0x30)
-                                      : (data->is_focused ? DesignSystem::GetRedesignPalette().accent_primary.ToWin32ColorRef()
-                                      : (data->is_hovered ? RGB(0x55, 0x58, 0x66) : RGB(0x3E, 0x40, 0x4A)));
+                COLORREF border_clr = !is_enabled ? data->palette.border_subtle.ToWin32ColorRef()
+                                      : (data->is_focused ? data->palette.accent_primary.ToWin32ColorRef()
+                                      : (data->is_hovered ? data->palette.border_focus.ToWin32ColorRef()
+                                                          : data->palette.border_subtle.ToWin32ColorRef()));
                 
                 HBRUSH hBorderBrush = CreateSolidBrush(border_clr);
                 FrameRect(hdc, &rc, hBorderBrush);
                 DeleteObject(hBorderBrush);
 
-                // Subtle inner accent line when focused for a crisp, high-DPI modern border feel
-                if (data->is_focused && is_enabled) {
-                    RECT inner_rc = rc;
-                    InflateRect(&inner_rc, -1, -1);
-                    HBRUSH hGlowBrush = CreateSolidBrush(RGB(0x80, 0x27, 0x2B));
-                    FrameRect(hdc, &inner_rc, hGlowBrush);
-                    DeleteObject(hGlowBrush);
-                }
                 ReleaseDC(hWnd, hdc);
             }
             return res;
@@ -3848,14 +4005,14 @@ LRESULT CALLBACK ModernEditSubclassProc(
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
-void InstallModernEditControl(HWND hEdit, uint32_t dpi = 96) {
+void InstallModernEditControl(HWND hEdit, uint32_t dpi, const ThemePalette& palette) {
     if (!hEdit) return;
     int pad_x = DesignSystem::ScaleForDpi(8, dpi);
     int pad_y = DesignSystem::ScaleForDpi(4, dpi);
     int r = DesignSystem::ScaleForDpi(6, dpi);
     SendMessageW(hEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(pad_x, pad_x));
 
-    auto* data = new ModernEditData{false, false, pad_x, pad_y, r};
+    auto* data = new ModernEditData{false, false, pad_x, pad_y, r, palette};
     SetWindowSubclass(hEdit, ModernEditSubclassProc, SUBCLASS_MODERN_EDIT_ID, reinterpret_cast<DWORD_PTR>(data));
 }
 
@@ -3957,11 +4114,11 @@ void FrameRectBorder(HDC hdc, const RECT& rc, ColorRgba col, int thickness = 1) 
     DeleteObject(br);
 }
 
-void ApplyWindowGlassBackdropWin32(HWND hwnd, bool is_transient_dialog = false) {
+void ApplyWindowGlassBackdropWin32(HWND hwnd, const ThemePalette& palette, bool is_transient_dialog = false) {
     if (!hwnd || !IsWindow(hwnd)) return;
 
-    // 1. Immersive dark mode (DWMWA_USE_IMMERSIVE_DARK_MODE = 20)
-    BOOL use_dark = TRUE;
+    // Match native title bars and non-client controls to the active Radium theme.
+    BOOL use_dark = palette.mode != ThemeMode::kLight;
     DwmSetWindowAttribute(hwnd, 20, &use_dark, sizeof(use_dark));
 
     // 2. Windows 11 rounded corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, 2 = DWMWCP_ROUND)
@@ -3969,9 +4126,9 @@ void ApplyWindowGlassBackdropWin32(HWND hwnd, bool is_transient_dialog = false) 
     DwmSetWindowAttribute(hwnd, 33, &corner_pref, sizeof(corner_pref));
 
     // 3. Titlebar styling
-    COLORREF titlebar_col = RGB(0x16, 0x16, 0x18);
+    COLORREF titlebar_col = palette.app_background.ToWin32ColorRef();
     DwmSetWindowAttribute(hwnd, 35, &titlebar_col, sizeof(titlebar_col));
-    COLORREF titletext_col = RGB(0xF2, 0xF2, 0xF3);
+    COLORREF titletext_col = palette.text_primary.ToWin32ColorRef();
     DwmSetWindowAttribute(hwnd, 36, &titletext_col, sizeof(titletext_col));
 
     // 4. Windows 11 Mica / Acrylic backdrop (DWMWA_SYSTEMBACKDROP_TYPE = 38)
@@ -3983,6 +4140,7 @@ void ApplyWindowGlassBackdropWin32(HWND hwnd, bool is_transient_dialog = false) 
         BOOL mica_on = TRUE;
         DwmSetWindowAttribute(hwnd, 1029, &mica_on, sizeof(mica_on));
     }
+    ApplyNativeWindowTheme(hwnd, palette);
 }
 
 void DrawGlassPanelGdi(HDC hdc, const RECT& rc, int radius, ColorRgba fill, ColorRgba border, int border_w = 1, bool add_top_specular = true) {
@@ -4134,6 +4292,8 @@ struct NewDownloadDialogContext {
     bool submitted{false};
     bool is_submitting{false};
     std::vector<QualityChoice> quality_choices;
+    bool has_manifest_qualities{false};
+    std::string bound_url;
 
     uint64_t current_probe_id{0};
     std::shared_ptr<std::atomic<bool>> dlg_alive{std::make_shared<std::atomic<bool>>(true)};
@@ -4217,8 +4377,9 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 -DesignSystem::ScaleForDpi(12, dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-            ctx->hBgBrush = CreateSolidBrush(RGB(0x16, 0x16, 0x18));
-            ctx->hEditBrush = CreateSolidBrush(RGB(0x20, 0x20, 0x26));
+            const auto& palette = ctx->view->GetPalette();
+            ctx->hBgBrush = CreateSolidBrush(palette.app_background.ToWin32ColorRef());
+            ctx->hEditBrush = CreateSolidBrush(palette.surface_elevated.ToWin32ColorRef());
 
             HINSTANCE hInst = GetModuleHandleW(nullptr);
 
@@ -4233,7 +4394,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 pad_x, y_url, full_w, edit_h, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5001)), hInst, nullptr);
             SendMessageW(ctx->hUrlEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hUrlEdit, EM_SETCUEBANNER, FALSE, reinterpret_cast<LPARAM>(L"Paste or enter download URL (HTTP, HTTPS, FTP, or video link)..."));
-            InstallModernEditControl(ctx->hUrlEdit, dpi);
+            InstallModernEditControl(ctx->hUrlEdit, dpi, ctx->view->GetPalette());
 
             // Filename Edit (Row 1: Label at 136, Control at 158)
             int y_fn = DesignSystem::ScaleForDpi(NewDownloadDialogLayout::ControlTop(1), dpi);
@@ -4242,7 +4403,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 pad_x, y_fn, full_w, edit_h, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5002)), hInst, nullptr);
             SendMessageW(ctx->hFilenameEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hFilenameEdit, EM_SETCUEBANNER, FALSE, reinterpret_cast<LPARAM>(L"File name (leave blank to auto-detect from server)"));
-            InstallModernEditControl(ctx->hFilenameEdit, dpi);
+            InstallModernEditControl(ctx->hFilenameEdit, dpi, ctx->view->GetPalette());
 
             // Save Dir Edit & Browse Button (Row 2: Label at 196, Control at 218)
             auto s = ctx->controller->GetSettings();
@@ -4255,7 +4416,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                 pad_x, y_dir, dir_w, edit_h, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5003)), hInst, nullptr);
             SendMessageW(ctx->hSaveDirEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
-            InstallModernEditControl(ctx->hSaveDirEdit, dpi);
+            InstallModernEditControl(ctx->hSaveDirEdit, dpi, ctx->view->GetPalette());
 
             ctx->hBrowseBtn = CreateWindowExW(0, L"BUTTON", L"Browse...",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
@@ -4275,6 +4436,9 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 auto t = ctx->controller->GetTask(ctx->existing_task_id);
                 if (t.has_value()) {
                     existing_task = t;
+                    if (ctx->initial_file_size <= 0 && t->total_bytes > 0) {
+                        ctx->initial_file_size = static_cast<int64_t>(t->total_bytes);
+                    }
                     if (t->task_type == TaskType::kStreamHls || t->task_type == TaskType::kStreamDash || t->category == "Video") {
                         is_video_stream = true;
                     }
@@ -4282,6 +4446,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
 
             ctx->quality_choices.clear();
+            ctx->has_manifest_qualities = false;
             if (existing_task.has_value() && !existing_task->stream_options.cached_manifest_body.empty() &&
                 (existing_task->stream_options.cached_manifest_body.front() == '{' || existing_task->stream_options.cached_manifest_body.front() == '[')) {
                 try {
@@ -4307,6 +4472,9 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                 qc.label = !qc.resolution.empty() ? qc.resolution : qc.id;
                             }
                             ctx->quality_choices.push_back(std::move(qc));
+                        }
+                        if (!ctx->quality_choices.empty()) {
+                            ctx->has_manifest_qualities = true;
                         }
                     }
                 } catch (...) {}
@@ -4437,7 +4605,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 DesignSystem::ScaleForDpi(72, dpi), DesignSystem::ScaleForDpi(24, dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5011)), hInst, nullptr);
             SendMessageW(ctx->hScheduleTimeEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
-            InstallModernEditControl(ctx->hScheduleTimeEdit, dpi);
+            InstallModernEditControl(ctx->hScheduleTimeEdit, dpi, ctx->view->GetPalette());
 
             // Download & Cancel Action Buttons
             int y_btn = DesignSystem::ScaleForDpi(NewDownloadDialogLayout::kButtonsTop, dpi);
@@ -4543,21 +4711,23 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 return TRUE;
             } else if (dis->CtlID == 5009) { // Cancel button (Glass elevated)
                 int btn_r = DesignSystem::ScaleForDpi(8, btn_dpi);
-                ColorRgba bg_col = is_selected ? ColorRgba{0x33, 0x33, 0x38, 255} : (is_focused ? ColorRgba{0x2A, 0x2A, 0x30, 255} : ColorRgba{0x22, 0x22, 0x28, 255});
-                ColorRgba border_col = is_focused ? ColorRgba{0x55, 0x58, 0x66, 220} : ColorRgba{0x3E, 0x40, 0x4A, 180};
+                const auto& pal = ctx->view->GetPalette();
+                ColorRgba bg_col = is_selected ? pal.surface_pressed : pal.surface_primary;
+                ColorRgba border_col = is_focused ? pal.border_focus : pal.border_subtle;
                 DrawRoundedBoxGdi(hdcBtn, rcBtn, btn_r, bg_col, border_col, 1);
                 SelectObject(hdcBtn, ctx->hFontBody);
-                SetTextColor(hdcBtn, RGB(0xDE, 0xDF, 0xE4));
+                SetTextColor(hdcBtn, pal.text_primary.ToWin32ColorRef());
                 SetBkMode(hdcBtn, TRANSPARENT);
                 DrawTextW(hdcBtn, L"Cancel", -1, &rcBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
             } else if (dis->CtlID == 5004) { // Browse button (Glass secondary)
                 int btn_r = DesignSystem::ScaleForDpi(6, btn_dpi);
-                ColorRgba bg_col = is_selected ? ColorRgba{0x33, 0x33, 0x38, 255} : (is_focused ? ColorRgba{0x2A, 0x2A, 0x30, 255} : ColorRgba{0x22, 0x22, 0x28, 255});
-                ColorRgba border_col = is_focused ? ColorRgba{0x55, 0x58, 0x66, 220} : ColorRgba{0x3E, 0x40, 0x4A, 180};
+                const auto& pal = ctx->view->GetPalette();
+                ColorRgba bg_col = is_selected ? pal.surface_pressed : pal.surface_primary;
+                ColorRgba border_col = is_focused ? pal.border_focus : pal.border_subtle;
                 DrawRoundedBoxGdi(hdcBtn, rcBtn, btn_r, bg_col, border_col, 1);
                 SelectObject(hdcBtn, ctx->hFontBody);
-                SetTextColor(hdcBtn, RGB(0xDE, 0xDF, 0xE4));
+                SetTextColor(hdcBtn, pal.text_primary.ToWin32ColorRef());
                 SetBkMode(hdcBtn, TRANSPARENT);
                 DrawTextW(hdcBtn, L"Browse...", -1, &rcBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
@@ -4566,8 +4736,9 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         case WM_CTLCOLOREDIT: {
             HDC hdcEdit = reinterpret_cast<HDC>(wParam);
-            SetTextColor(hdcEdit, RGB(0xF2, 0xF2, 0xF3));
-            SetBkColor(hdcEdit, RGB(0x20, 0x20, 0x26));
+            const auto& palette = ctx->view->GetPalette();
+            SetTextColor(hdcEdit, palette.text_primary.ToWin32ColorRef());
+            SetBkColor(hdcEdit, palette.surface_elevated.ToWin32ColorRef());
             return reinterpret_cast<LRESULT>(ctx->hEditBrush);
         }
         case WM_CTLCOLORSTATIC: {
@@ -4575,17 +4746,18 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             HWND hCtl = reinterpret_cast<HWND>(lParam);
             if (hCtl == ctx->hQualityCombo) {
                 SetBkMode(hdcStatic, OPAQUE);
-                SetBkColor(hdcStatic, RGB(0x20, 0x20, 0x26));
-                SetTextColor(hdcStatic, RGB(0xF2, 0xF2, 0xF3));
+                const auto& palette = ctx->view->GetPalette();
+                SetBkColor(hdcStatic, palette.surface_elevated.ToWin32ColorRef());
+                SetTextColor(hdcStatic, palette.text_primary.ToWin32ColorRef());
                 return reinterpret_cast<LRESULT>(ctx->hEditBrush);
             } else if (hCtl == ctx->hSpaceLabel) {
-                SetTextColor(hdcStatic, RGB(0x8E, 0x8E, 0x98));
+                SetTextColor(hdcStatic, ctx->view->GetPalette().text_muted.ToWin32ColorRef());
             } else if (hCtl == ctx->hFileSizeLabel) {
-                SetTextColor(hdcStatic, RGB(0x38, 0xBD, 0xF8));
+                SetTextColor(hdcStatic, ctx->view->GetPalette().accent_cyan.ToWin32ColorRef());
             } else {
-                SetTextColor(hdcStatic, RGB(0xA4, 0xA5, 0xAC));
+                SetTextColor(hdcStatic, ctx->view->GetPalette().text_secondary.ToWin32ColorRef());
             }
-            SetBkColor(hdcStatic, RGB(0x16, 0x16, 0x18));
+            SetBkColor(hdcStatic, ctx->view->GetPalette().app_background.ToWin32ColorRef());
             return reinterpret_cast<LRESULT>(ctx->hBgBrush);
         }
         case WM_CTLCOLORBTN: {
@@ -4666,9 +4838,16 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                       u.find("youtu.be") != std::string::npos ||
                                       u.find(".m3u8") != std::string::npos ||
                                       u.find(".mpd") != std::string::npos);
+
+                // If URL hasn't changed from what was initially populated and we already have manifest qualities or probed size, don't re-probe
+                bool url_unchanged = (!ctx->bound_url.empty() && ctx->bound_url == u);
+                if (!url_unchanged) {
+                    ctx->bound_url = u;
+                }
+
                 int count = static_cast<int>(SendMessageW(ctx->hQualityCombo, CB_GETCOUNT, 0, 0));
                 bool has_stream_items = (count > 1);
-                if (is_stream_url && !has_stream_items) {
+                if (is_stream_url && !has_stream_items && !ctx->has_manifest_qualities) {
                     SendMessageW(ctx->hQualityCombo, CB_RESETCONTENT, 0, 0);
                     ctx->quality_choices.clear();
                     ctx->quality_choices.push_back({"best", "Best Available Quality (Auto)", "Auto", 0, -1, true, "best", "best", "", "", false});
@@ -4682,12 +4861,36 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         SendMessageW(ctx->hQualityCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(Utf8ToW(qc.label).c_str()));
                     }
                     SendMessageW(ctx->hQualityCombo, CB_SETCURSEL, 0, 0);
-                } else if (!is_stream_url && has_stream_items) {
+                } else if (!is_stream_url && has_stream_items && !ctx->has_manifest_qualities) {
                     SendMessageW(ctx->hQualityCombo, CB_RESETCONTENT, 0, 0);
                     ctx->quality_choices.clear();
                     ctx->quality_choices.push_back({"original", "Original / Direct File (Server Default)", "", 0, -1, false, "best", "best", "", "", false, ""});
                     SendMessageW(ctx->hQualityCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Original / Direct File (Server Default)"));
                     SendMessageW(ctx->hQualityCombo, CB_SETCURSEL, 0, 0);
+                }
+
+                // If this is a stream URL or we already have manifest qualities, display the quality size or initial size directly without an HTTP file probe
+                if (is_stream_url || ctx->has_manifest_qualities) {
+                    int cur = static_cast<int>(SendMessageW(ctx->hQualityCombo, CB_GETCURSEL, 0, 0));
+                    if (cur >= 0 && static_cast<size_t>(cur) < ctx->quality_choices.size() && ctx->quality_choices[static_cast<size_t>(cur)].size > 0) {
+                        const auto& qc = ctx->quality_choices[static_cast<size_t>(cur)];
+                        std::string sz_str = DesktopView::FormatSizePretty(static_cast<uint64_t>(qc.size));
+                        std::wstring txt = std::wstring(L"Size: ") + (qc.size_estimated ? L"~" : L"") + Utf8ToW(sz_str) + (qc.size_estimated ? L" (estimated)" : L"");
+                        SetWindowTextW(ctx->hFileSizeLabel, txt.c_str());
+                    } else if (ctx->initial_file_size > 0) {
+                        std::wstring s_sz = L"Size: " + Utf8ToW(DesktopView::FormatSizePretty(static_cast<uint64_t>(ctx->initial_file_size)));
+                        SetWindowTextW(ctx->hFileSizeLabel, s_sz.c_str());
+                    } else {
+                        SetWindowTextW(ctx->hFileSizeLabel, L"Size: Unknown");
+                    }
+                    return 0;
+                }
+
+                // If URL was unchanged and we already have a known initial file size (e.g. from intercepted offer or existing task), don't wipe it
+                if (url_unchanged && ctx->initial_file_size > 0) {
+                    std::wstring s_sz = L"Download Size: " + Utf8ToW(DesktopView::FormatSizePretty(static_cast<uint64_t>(ctx->initial_file_size)));
+                    SetWindowTextW(ctx->hFileSizeLabel, s_sz.c_str());
+                    return 0;
                 }
 
                 // Check size probing for local torrent or remote HTTP/HTTPS resource
@@ -5269,6 +5472,8 @@ void ShowNewDownloadDialogWin32(
     if (dlg_x < work_rc.left) dlg_x = work_rc.left + 20;
     if (dlg_y < work_rc.top) dlg_y = work_rc.top + 20;
 
+    ctx.bound_url = candidate_url;
+
     // Clean modern dialog frame without redundant 3D modal borders or nested outlines
     DWORD ex_style = (owner_hwnd ? 0 : WS_EX_APPWINDOW) | WS_EX_CONTROLPARENT;
     HWND hDlg = CreateWindowExW(
@@ -5288,7 +5493,7 @@ void ShowNewDownloadDialogWin32(
         SendMessageW(hDlg, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hDlgIcon));
     }
 
-    ApplyWindowGlassBackdropWin32(hDlg, true /* is_transient_dialog */);
+    ApplyWindowGlassBackdropWin32(hDlg, view.GetPalette(), true /* is_transient_dialog */);
 
     if (!candidate_url.empty()) {
         SetWindowTextW(ctx.hUrlEdit, Utf8ToW(candidate_url).c_str());
@@ -5311,6 +5516,14 @@ void ShowNewDownloadDialogWin32(
     if (file_size > 0) {
         std::wstring s_sz = L"Download Size: " + Utf8ToW(DesktopView::FormatSizePretty(static_cast<uint64_t>(file_size)));
         SetWindowTextW(ctx.hFileSizeLabel, s_sz.c_str());
+    } else if (ctx.has_manifest_qualities) {
+        int cur = static_cast<int>(SendMessageW(ctx.hQualityCombo, CB_GETCURSEL, 0, 0));
+        if (cur >= 0 && static_cast<size_t>(cur) < ctx.quality_choices.size() && ctx.quality_choices[static_cast<size_t>(cur)].size > 0) {
+            const auto& qc = ctx.quality_choices[static_cast<size_t>(cur)];
+            std::string sz_str = DesktopView::FormatSizePretty(static_cast<uint64_t>(qc.size));
+            std::wstring txt = std::wstring(L"Size: ") + (qc.size_estimated ? L"~" : L"") + Utf8ToW(sz_str) + (qc.size_estimated ? L" (estimated)" : L"");
+            SetWindowTextW(ctx.hFileSizeLabel, txt.c_str());
+        }
     } else if (!candidate_url.empty()) {
         SendMessageW(hDlg, WM_COMMAND, MAKEWPARAM(5001, EN_CHANGE), reinterpret_cast<LPARAM>(ctx.hUrlEdit));
     }
@@ -5393,6 +5606,7 @@ struct SimpleInputDialogContext {
     HFONT hFontBold{nullptr};
     HBRUSH hBgBrush{nullptr};
     HBRUSH hEditBrush{nullptr};
+    ThemePalette palette{DesignSystem::GetRedesignPalette()};
 };
 
 LRESULT CALLBACK SimpleInputDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -5416,8 +5630,8 @@ LRESULT CALLBACK SimpleInputDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             ctx->hFontBold = CreateFontW(-DesignSystem::ScaleForDpi(15, dpi), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-            ctx->hBgBrush = CreateSolidBrush(RGB(0x18, 0x18, 0x1E));
-            ctx->hEditBrush = CreateSolidBrush(RGB(0x20, 0x20, 0x28));
+            ctx->hBgBrush = CreateSolidBrush(ctx->palette.app_background.ToWin32ColorRef());
+            ctx->hEditBrush = CreateSolidBrush(ctx->palette.surface_elevated.ToWin32ColorRef());
 
             HINSTANCE hInst = GetModuleHandleW(nullptr);
             int pad_x = DesignSystem::ScaleForDpi(24, dpi);
@@ -5430,7 +5644,7 @@ LRESULT CALLBACK SimpleInputDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 pad_x, edit_y, edit_w, edit_h, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(7001)), hInst, nullptr);
             SendMessageW(ctx->hEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hEdit, EM_SETSEL, 0, -1);
-            InstallModernEditControl(ctx->hEdit, dpi);
+            InstallModernEditControl(ctx->hEdit, dpi, ctx->palette);
 
             int btn_y = DesignSystem::ScaleForDpi(108, dpi);
             int btn_w = DesignSystem::ScaleForDpi(100, dpi);
@@ -5487,11 +5701,11 @@ LRESULT CALLBACK SimpleInputDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 DrawTextW(hdc, L"OK", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
             } else if (dis->CtlID == 7003) { // Cancel button
-                ColorRgba bg = is_sel ? ColorRgba{0x28, 0x28, 0x32, 255} : ColorRgba{0x20, 0x20, 0x28, 255};
-                ColorRgba border{0x44, 0x44, 0x50, 255};
+                ColorRgba bg = is_sel ? ctx->palette.surface_pressed : ctx->palette.surface_primary;
+                ColorRgba border = ctx->palette.border_subtle;
                 DrawRoundedBoxGdi(hdc, rc, 16, bg, border, 1);
                 SelectObject(hdc, ctx->hFontBody);
-                SetTextColor(hdc, RGB(0xDE, 0xDF, 0xE4));
+                SetTextColor(hdc, ctx->palette.text_primary.ToWin32ColorRef());
                 SetBkMode(hdc, TRANSPARENT);
                 DrawTextW(hdc, L"Cancel", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
@@ -5500,8 +5714,8 @@ LRESULT CALLBACK SimpleInputDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         case WM_CTLCOLOREDIT: {
             HDC hdcEdit = reinterpret_cast<HDC>(wParam);
-            SetTextColor(hdcEdit, RGB(0xF2, 0xF2, 0xF3));
-            SetBkColor(hdcEdit, RGB(0x20, 0x20, 0x28));
+            SetTextColor(hdcEdit, ctx->palette.text_primary.ToWin32ColorRef());
+            SetBkColor(hdcEdit, ctx->palette.surface_elevated.ToWin32ColorRef());
             return reinterpret_cast<LRESULT>(ctx->hEditBrush);
         }
         case WM_PAINT: {
@@ -5520,7 +5734,7 @@ LRESULT CALLBACK SimpleInputDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
             SetBkMode(hdc, TRANSPARENT);
             SelectObject(hdc, ctx->hFontBold);
-            SetTextColor(hdc, RGB(0xF2, 0xF2, 0xF3));
+            SetTextColor(hdc, ctx->palette.text_primary.ToWin32ColorRef());
             RECT prc{pad_x, prompt_y, rc.right - pad_x, prompt_y + prompt_h};
             DrawTextW(hdc, ctx->prompt.c_str(), -1, &prc, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
             EndPaint(hwnd, &ps);
@@ -5575,6 +5789,10 @@ bool ShowSimpleInputDialogWin32(HWND hwnd_parent, const std::wstring& title, con
     ctx.title = title;
     ctx.prompt = prompt;
     ctx.initial_value = initial_value;
+    if (hwnd_parent && IsWindow(hwnd_parent)) {
+        auto* owner_ctx = reinterpret_cast<Win32WindowContext*>(GetWindowLongPtrW(hwnd_parent, GWLP_USERDATA));
+        if (owner_ctx && owner_ctx->view) ctx.palette = owner_ctx->view->GetPalette();
+    }
 
     UINT dpi = 96;
     if (hwnd_parent && IsWindow(hwnd_parent)) {
@@ -5605,8 +5823,7 @@ bool ShowSimpleInputDialogWin32(HWND hwnd_parent, const std::wstring& title, con
         SendMessageW(hDlg, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hDlgIcon));
     }
 
-    BOOL use_dark = TRUE;
-    DwmSetWindowAttribute(hDlg, DWMWA_USE_IMMERSIVE_DARK_MODE, &use_dark, sizeof(use_dark));
+    ApplyWindowGlassBackdropWin32(hDlg, ctx.palette, true /* is_transient_dialog */);
 
     EnableWindow(hwnd_parent, FALSE);
     SetForegroundWindow(hDlg);
@@ -5691,7 +5908,7 @@ LRESULT CALLBACK DeleteConfirmDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             ctx->hFontSmall = CreateFontW(-DesignSystem::ScaleForDpi(12, ctx->dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-            ctx->hBgBrush = CreateSolidBrush(RGB(0x16, 0x16, 0x18));
+            ctx->hBgBrush = CreateSolidBrush(ctx->view->GetPalette().app_background.ToWin32ColorRef());
 
             HINSTANCE hInst = GetModuleHandleW(nullptr);
 
@@ -5773,20 +5990,22 @@ LRESULT CALLBACK DeleteConfirmDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 DrawTextW(hdc, L"Permanently Delete", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
             } else if (dis->CtlID == 6003) { // Cancel
-                ColorRgba bg = is_sel ? ColorRgba{0x33, 0x33, 0x38, 255} : (is_focused ? ColorRgba{0x2A, 0x2A, 0x30, 255} : ColorRgba{0x22, 0x22, 0x28, 255});
-                ColorRgba border = is_focused ? ColorRgba{0x55, 0x58, 0x66, 220} : ColorRgba{0x38, 0x3A, 0x44, 150};
+                const auto& pal = ctx->view->GetPalette();
+                ColorRgba bg = is_sel ? pal.surface_pressed : pal.surface_primary;
+                ColorRgba border = is_focused ? pal.border_focus : pal.border_subtle;
                 DrawRoundedBoxGdi(hdc, rc, r, bg, border, 1);
                 SelectObject(hdc, ctx->hFontBody);
-                SetTextColor(hdc, RGB(0xD0, 0xD1, 0xD6));
+                SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
                 SetBkMode(hdc, TRANSPARENT);
                 DrawTextW(hdc, L"Cancel", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
             } else if (dis->CtlID == 6004) { // Remove from List
-                ColorRgba bg = is_sel ? ColorRgba{0x33, 0x33, 0x38, 255} : (is_focused ? ColorRgba{0x2A, 0x2A, 0x30, 255} : ColorRgba{0x22, 0x22, 0x28, 255});
-                ColorRgba border = is_focused ? ColorRgba{0x55, 0x58, 0x66, 220} : ColorRgba{0x3E, 0x40, 0x4A, 180};
+                const auto& pal = ctx->view->GetPalette();
+                ColorRgba bg = is_sel ? pal.surface_pressed : pal.surface_primary;
+                ColorRgba border = is_focused ? pal.border_focus : pal.border_subtle;
                 DrawRoundedBoxGdi(hdc, rc, r, bg, border, 1);
                 SelectObject(hdc, ctx->hFontBold);
-                SetTextColor(hdc, RGB(0xF2, 0xF2, 0xF3));
+                SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
                 SetBkMode(hdc, TRANSPARENT);
                 DrawTextW(hdc, L"Remove from List", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 return TRUE;
@@ -5807,7 +6026,7 @@ LRESULT CALLBACK DeleteConfirmDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             // Title: choose how to remove the selected download(s)
             SetBkMode(hdc, TRANSPARENT);
             SelectObject(hdc, ctx->hFontTitle);
-            SetTextColor(hdc, RGB(0xF2, 0xF2, 0xF3));
+            SetTextColor(hdc, ctx->view->GetPalette().text_primary.ToWin32ColorRef());
             int title_y = pad;
             RECT title_rc{content_x, title_y, content_x + content_w, title_y + DesignSystem::ScaleForDpi(26, ctx->dpi)};
             DrawTextW(hdc, L"Remove Download", -1, &title_rc, DT_LEFT | DT_TOP | DT_SINGLELINE);
@@ -5820,7 +6039,7 @@ LRESULT CALLBACK DeleteConfirmDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
             // Subtitle / question with middle truncation
             SelectObject(hdc, ctx->hFontBody);
-            SetTextColor(hdc, RGB(0xDE, 0xDF, 0xE4));
+            SetTextColor(hdc, ctx->view->GetPalette().text_secondary.ToWin32ColorRef());
             std::wstring q_text;
             if (ctx->files_info.size() == 1) {
                 std::string fname = ctx->files_info[0].first;
@@ -6002,7 +6221,7 @@ void ShowDeleteConfirmationDialogWin32(HWND hwnd_parent, DesktopView& view, Down
         SendMessageW(hDlg, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hDlgIcon));
     }
 
-    ApplyWindowGlassBackdropWin32(hDlg, true /* is_transient_dialog */);
+    ApplyWindowGlassBackdropWin32(hDlg, ctx.view->GetPalette(), true /* is_transient_dialog */);
 
     if (owner_hwnd && IsWindow(owner_hwnd)) {
         EnableWindow(owner_hwnd, FALSE);
@@ -6075,14 +6294,14 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
     modal_rc.bottom += slide_offset_y;
 
     // Palette tokens tuned to reference design
-    ColorRgba window_bg{0x13, 0x14, 0x18, 255};      // Dark minimal background
-    ColorRgba window_border{0x23, 0x25, 0x2D, 255};  // Subtle boundary
-    ColorRgba card_bg{0x16, 0x17, 0x1C, 255};        // Subtle inner card surface
-    ColorRgba card_border{0x24, 0x26, 0x2E, 255};    // Clean rounded container border
-    ColorRgba divider_col{0x1E, 0x20, 0x27, 255};    // Subtle separator line
-    ColorRgba sel_tab_bg{0x1D, 0x1C, 0x20, 255};     // Selected category dark highlight
-    ColorRgba sel_tab_border{0x2C, 0x2B, 0x30, 255}; // Soft border around selected category
-    ColorRgba coral_red{0xFF, 0x47, 0x57, 255};      // Signature coral red accent
+    ColorRgba window_bg = pal.surface_primary;
+    ColorRgba window_border = pal.border_subtle;
+    ColorRgba card_bg = pal.surface_elevated;
+    ColorRgba card_border = pal.border_subtle;
+    ColorRgba divider_col = pal.border_subtle;
+    ColorRgba sel_tab_bg = pal.surface_selected;
+    ColorRgba sel_tab_border = pal.border_subtle;
+    ColorRgba coral_red = pal.accent_primary;
 
     // Draw main settings window
     DrawRoundedBoxGdi(hdc, modal_rc, DesignSystem::ScaleForDpi(12, m.dpi), window_bg, window_border, 1);
@@ -6093,7 +6312,7 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
     // Header Title (clean, no heavy gradient/glass box)
     RECT title_rc{modal_rc.left + DesignSystem::ScaleForDpi(20, m.dpi), modal_rc.top, modal_rc.right - DesignSystem::ScaleForDpi(20, m.dpi), modal_rc.top + header_h};
     SelectObject(hdc, hFontBold);
-    SetTextColor(hdc, RGB(0xEE, 0xEE, 0xF1));
+    SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
     DrawTextW(hdc, L"Radium Settings & Configuration Center", -1, &title_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // Sidebar categories
@@ -6110,9 +6329,9 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
             RECT ind_rc{crc.left + DesignSystem::ScaleForDpi(4, m.dpi), crc.top + bar_pad, crc.left + DesignSystem::ScaleForDpi(4, m.dpi) + bar_w, crc.bottom - bar_pad};
             DrawRoundedBoxGdi(hdc, ind_rc, bar_w / 2, coral_red, coral_red, 0);
 
-            SetTextColor(hdc, RGB(0xF6, 0xF6, 0xF8));
+            SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
         } else {
-            SetTextColor(hdc, RGB(0x9E, 0xA2, 0xAE)); // Inactive items muted but readable
+            SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
         }
 
         std::string lbl = cat.label;
@@ -6157,7 +6376,7 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
             lbl_rc.right = item.control_rect.left - DesignSystem::ScaleForDpi(16, m.dpi);
             lbl_rc.bottom = rrc.top + DesignSystem::ScaleForDpi(30, m.dpi);
             SelectObject(hdc, hFontBold);
-            SetTextColor(hdc, RGB(0xF2, 0xF2, 0xF4));
+            SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
             std::wstring wtitle = Utf8ToW(item.label + (item.is_modified ? "  [Modified]" : ""));
             DrawTextW(hdc, wtitle.c_str(), -1, &lbl_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
@@ -6168,7 +6387,7 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
             desc_rc.right = item.control_rect.left - DesignSystem::ScaleForDpi(16, m.dpi);
             desc_rc.bottom = rrc.bottom - DesignSystem::ScaleForDpi(8, m.dpi);
             SelectObject(hdc, hFontBody);
-            SetTextColor(hdc, RGB(0x94, 0x97, 0xA2));
+            SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
             std::wstring wdesc = Utf8ToW(item.description);
             DrawTextW(hdc, wdesc.c_str(), -1, &desc_rc, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
@@ -6194,12 +6413,12 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
             } else {
                 // Modernized button / dropdown / text field
                 bool is_action = (item.control_type == SettingControlType::kActionButton);
-                ColorRgba ctrl_bg = is_action ? coral_red : ColorRgba{0x22, 0x24, 0x2C, 255};
-                ColorRgba ctrl_border = is_action ? coral_red : ColorRgba{0x34, 0x37, 0x42, 255};
+                ColorRgba ctrl_bg = is_action ? coral_red : pal.surface_primary;
+                ColorRgba ctrl_border = is_action ? coral_red : pal.border_subtle;
                 DrawRoundedBoxGdi(hdc, ctrl_rc, DesignSystem::ScaleForDpi(6, m.dpi), ctrl_bg, ctrl_border, 1);
 
                 SelectObject(hdc, is_action ? hFontBold : hFontBody);
-                SetTextColor(hdc, is_action ? RGB(255, 255, 255) : RGB(0xE2, 0xE4, 0xEA));
+                SetTextColor(hdc, is_action ? RGB(255, 255, 255) : pal.text_primary.ToWin32ColorRef());
                 std::wstring wval = Utf8ToW(item.value_text);
                 if (item.control_type == SettingControlType::kDropdown) {
                     RECT txt_rc = ctrl_rc;
@@ -6219,15 +6438,17 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
 
     // Restore Defaults button
     RECT rst_rc = ToWinRect(sv.restore_defaults_rect);
-    DrawRoundedBoxGdi(hdc, rst_rc, DesignSystem::ScaleForDpi(6, m.dpi), ColorRgba{0x1A, 0x1B, 0x20, 255}, ColorRgba{0x30, 0x32, 0x3A, 255}, 1);
+    DrawRoundedBoxGdi(hdc, rst_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_primary, pal.border_subtle, 1);
     SelectObject(hdc, hFontBody);
-    SetTextColor(hdc, RGB(0xDD, 0xDE, 0xE4));
-    DrawTextW(hdc, L"Restore Defaults", -1, &rst_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
+    const std::wstring restore_text = Utf8ToW(GetLocalizationManager().Translate("Restore defaults"));
+    DrawTextW(hdc, restore_text.c_str(), -1, &rst_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // Cancel button
     RECT can_rc = ToWinRect(sv.cancel_button_rect);
-    DrawRoundedBoxGdi(hdc, can_rc, DesignSystem::ScaleForDpi(6, m.dpi), ColorRgba{0x1A, 0x1B, 0x20, 255}, ColorRgba{0x30, 0x32, 0x3A, 255}, 1);
-    DrawTextW(hdc, L"Cancel", -1, &can_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawRoundedBoxGdi(hdc, can_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_primary, pal.border_subtle, 1);
+    const std::wstring cancel_text = Utf8ToW(GetLocalizationManager().Translate("Cancel"));
+    DrawTextW(hdc, cancel_text.c_str(), -1, &can_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // Primary Apply & Save button in coral red
     RECT app_rc = ToWinRect(sv.apply_button_rect);
@@ -6235,7 +6456,8 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
     DrawRoundedBoxGdi(hdc, app_rc, DesignSystem::ScaleForDpi(6, m.dpi), app_bg, app_bg, 0);
     SelectObject(hdc, hFontBold);
     SetTextColor(hdc, RGB(255, 255, 255));
-    DrawTextW(hdc, L"Apply & Save", -1, &app_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    const std::wstring apply_text = Utf8ToW(GetLocalizationManager().Translate("Apply & Save"));
+    DrawTextW(hdc, apply_text.c_str(), -1, &app_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     // Status message beside Restore Defaults
     RECT banner_rc{rst_rc.right + DesignSystem::ScaleForDpi(14, m.dpi), ftr_rc.top, can_rc.left - DesignSystem::ScaleForDpi(14, m.dpi), ftr_rc.bottom};
@@ -6529,6 +6751,85 @@ void DrawGearGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
     SelectObject(hdc, oldBrush);
     SelectObject(hdc, oldPen);
     DeleteObject(hPen);
+}
+
+void DrawGlobeGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
+    const int cx = (rc.left + rc.right) / 2;
+    const int cy = (rc.top + rc.bottom) / 2;
+    const int radius = std::max(5, static_cast<int>(std::min(rc.right - rc.left, rc.bottom - rc.top) / 3));
+    HPEN pen = CreatePen(PS_SOLID, 1, col.ToWin32ColorRef());
+    HGDIOBJ old_pen = SelectObject(hdc, pen);
+    HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+
+    Ellipse(hdc, cx - radius, cy - radius, cx + radius + 1, cy + radius + 1);
+    Ellipse(hdc, cx - radius / 2, cy - radius, cx + radius / 2 + 1, cy + radius + 1);
+    MoveToEx(hdc, cx - radius + 1, cy, nullptr);
+    LineTo(hdc, cx + radius, cy);
+    const int latitude_y = std::max(2, radius / 2);
+    const int latitude_x = static_cast<int>(std::sqrt(static_cast<double>(radius * radius - latitude_y * latitude_y)));
+    MoveToEx(hdc, cx - latitude_x, cy - latitude_y, nullptr);
+    LineTo(hdc, cx + latitude_x + 1, cy - latitude_y);
+    MoveToEx(hdc, cx - latitude_x, cy + latitude_y, nullptr);
+    LineTo(hdc, cx + latitude_x + 1, cy + latitude_y);
+
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen);
+}
+
+void DrawThemeGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col, ColorRgba cutout, bool show_moon) {
+    const int cx = (rc.left + rc.right) / 2;
+    const int cy = (rc.top + rc.bottom) / 2;
+    const int glyph_size = static_cast<int>(std::min(rc.right - rc.left, rc.bottom - rc.top));
+    const int radius = std::max(4, glyph_size / 4);
+    const int stroke = std::max(1, glyph_size / 18);
+    HPEN pen = CreatePen(PS_SOLID, stroke, col.ToWin32ColorRef());
+    HPEN cutout_pen = CreatePen(PS_SOLID, 1, cutout.ToWin32ColorRef());
+    HBRUSH brush = CreateSolidBrush(col.ToWin32ColorRef());
+    HBRUSH cutout_brush = CreateSolidBrush(cutout.ToWin32ColorRef());
+    HGDIOBJ old_pen = SelectObject(hdc, pen);
+    HGDIOBJ old_brush = SelectObject(hdc, brush);
+    if (show_moon) {
+        Ellipse(hdc, cx - radius, cy - radius, cx + radius + 1, cy + radius + 1);
+        HGDIOBJ previous_brush = SelectObject(hdc, cutout_brush);
+        HGDIOBJ previous_pen = SelectObject(hdc, cutout_pen);
+        const int inner_radius = std::max(3, radius - 1);
+        const int crescent_offset = std::max(2, radius / 2);
+        Ellipse(hdc, cx - inner_radius + crescent_offset, cy - inner_radius - 1,
+                cx + inner_radius + crescent_offset, cy + inner_radius + 1);
+        SelectObject(hdc, previous_pen);
+        SelectObject(hdc, previous_brush);
+    } else {
+        // A clean outlined center and short, evenly spaced rays read as a
+        // modern sun glyph at toolbar scale without the heavy spoked look.
+        const int center_radius = std::max(2, glyph_size / 11);
+        const int ring_radius = std::max(center_radius + 2, glyph_size / 5);
+        HGDIOBJ previous_brush = SelectObject(hdc, cutout_brush);
+        HGDIOBJ previous_pen = SelectObject(hdc, pen);
+        Ellipse(hdc, cx - ring_radius, cy - ring_radius, cx + ring_radius + 1, cy + ring_radius + 1);
+        SelectObject(hdc, brush);
+        Ellipse(hdc, cx - center_radius, cy - center_radius,
+                cx + center_radius + 1, cy + center_radius + 1);
+        for (int ray = 0; ray < 8; ++ray) {
+            const double angle = ray * 3.14159265358979323846 / 4.0;
+            const int ray_inner = ring_radius + std::max(2, glyph_size / 14);
+            const int ray_outer = ray_inner + std::max(2, glyph_size / 12);
+            const int x1 = cx + static_cast<int>(ray_inner * std::cos(angle));
+            const int y1 = cy + static_cast<int>(ray_inner * std::sin(angle));
+            const int x2 = cx + static_cast<int>(ray_outer * std::cos(angle));
+            const int y2 = cy + static_cast<int>(ray_outer * std::sin(angle));
+            MoveToEx(hdc, x1, y1, nullptr);
+            LineTo(hdc, x2, y2);
+        }
+        SelectObject(hdc, previous_pen);
+        SelectObject(hdc, previous_brush);
+    }
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(brush);
+    DeleteObject(cutout_brush);
+    DeleteObject(cutout_pen);
+    DeleteObject(pen);
 }
 
 void DrawSlidersGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
@@ -7005,9 +7306,10 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             ctx->hFontBody  = CreateFontW(f_body_sz, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
             ctx->hFontSmall = CreateFontW(f_small_sz, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
-            ctx->hBgBrush = CreateSolidBrush(RGB(0x16, 0x16, 0x18));
-            ctx->hPanelBrush = CreateSolidBrush(RGB(0x1E, 0x1E, 0x22));
-            ctx->hEditBrush = CreateSolidBrush(RGB(0x20, 0x20, 0x26));
+            const auto& palette = ctx->view->GetPalette();
+            ctx->hBgBrush = CreateSolidBrush(palette.app_background.ToWin32ColorRef());
+            ctx->hPanelBrush = CreateSolidBrush(palette.surface_primary.ToWin32ColorRef());
+            ctx->hEditBrush = CreateSolidBrush(palette.surface_elevated.ToWin32ColorRef());
 
             RECT rcClient{};
             GetClientRect(hwnd, &rcClient);
@@ -7041,7 +7343,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, edit_w, ctrl_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorSaveDirEdit)), hInst, nullptr);
             SendMessageW(ctx->hSaveDirEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
-            InstallModernEditControl(ctx->hSaveDirEdit, ctx->dpi);
+            InstallModernEditControl(ctx->hSaveDirEdit, ctx->dpi, ctx->view->GetPalette());
 
             ctx->hBrowseBtn = CreateWindowExW(0, L"BUTTON", L"...",
                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW | WS_TABSTOP,
@@ -7090,7 +7392,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), ctrl_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorTagsEdit)), hInst, nullptr);
             SendMessageW(ctx->hTagsEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
-            InstallModernEditControl(ctx->hTagsEdit, ctx->dpi);
+            InstallModernEditControl(ctx->hTagsEdit, ctx->dpi, ctx->view->GetPalette());
 
             // Torrent Options
             cur_y += DesignSystem::ScaleForDpi(42, ctx->dpi);
@@ -7187,7 +7489,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 filter_x, r_top, filter_w, DesignSystem::ScaleForDpi(28, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorFilterEdit)), hInst, nullptr);
             SendMessageW(ctx->hFilterEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
-            InstallModernEditControl(ctx->hFilterEdit, ctx->dpi);
+            InstallModernEditControl(ctx->hFilterEdit, ctx->dpi, ctx->view->GetPalette());
 
             // File list
             int list_top = r_top + DesignSystem::ScaleForDpi(62, ctx->dpi);
@@ -7234,29 +7536,32 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             HWND hCtl = reinterpret_cast<HWND>(lParam);
             if (hCtl == ctx->hModeCombo || hCtl == ctx->hCategoryCombo ||
                 hCtl == ctx->hStopCondCombo || hCtl == ctx->hLayoutCombo) {
+                const auto& palette = ctx->view->GetPalette();
                 SetBkMode(hdc, OPAQUE);
-                SetBkColor(hdc, RGB(0x20, 0x20, 0x26));
-                SetTextColor(hdc, RGB(0xF2, 0xF2, 0xF3));
+                SetBkColor(hdc, palette.surface_elevated.ToWin32ColorRef());
+                SetTextColor(hdc, palette.text_primary.ToWin32ColorRef());
                 return reinterpret_cast<INT_PTR>(ctx->hEditBrush);
             }
             SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(0xDE, 0xDF, 0xE4));
+            SetTextColor(hdc, ctx->view->GetPalette().text_secondary.ToWin32ColorRef());
             return reinterpret_cast<INT_PTR>(ctx->hBgBrush);
         }
 
         case WM_CTLCOLOREDIT: {
             HDC hdc = reinterpret_cast<HDC>(wParam);
+            const auto& palette = ctx->view->GetPalette();
             SetBkMode(hdc, OPAQUE);
-            SetBkColor(hdc, RGB(0x20, 0x20, 0x26));
-            SetTextColor(hdc, RGB(0xFF, 0xFF, 0xFF));
+            SetBkColor(hdc, palette.surface_elevated.ToWin32ColorRef());
+            SetTextColor(hdc, palette.text_primary.ToWin32ColorRef());
             return reinterpret_cast<INT_PTR>(ctx->hEditBrush);
         }
 
         case WM_CTLCOLORLISTBOX: {
             HDC hdc = reinterpret_cast<HDC>(wParam);
+            const auto& palette = ctx->view->GetPalette();
             SetBkMode(hdc, OPAQUE);
-            SetBkColor(hdc, RGB(0x18, 0x18, 0x1C));
-            SetTextColor(hdc, RGB(0xEE, 0xEE, 0xF2));
+            SetBkColor(hdc, palette.surface_primary.ToWin32ColorRef());
+            SetTextColor(hdc, palette.text_primary.ToWin32ColorRef());
             return reinterpret_cast<INT_PTR>(ctx->hPanelBrush);
         }
 
@@ -7356,7 +7661,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             FillRectSolid(hdc, hdr_accent, pal.accent_primary);
 
             SelectObject(hdc, ctx->hFontBold);
-            SetTextColor(hdc, RGB(0x9E, 0xA2, 0xB0));
+            SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
             TextOutW(hdc, right_x + DesignSystem::ScaleForDpi(38, ctx->dpi), hdr_y + DesignSystem::ScaleForDpi(4, ctx->dpi), L"Name", 4);
 
             int size_col_w = DesignSystem::ScaleForDpi(110, ctx->dpi);
@@ -7385,7 +7690,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
                 const ThemePalette pal = ctx->view ? ctx->view->GetPalette() : DesignSystem::GetRedesignPalette();
                 bool is_selected = (dis->itemState & ODS_SELECTED) != 0;
-                ColorRgba row_bg = is_selected ? pal.surface_selected : ((dis->itemID % 2 == 0) ? ColorRgba{0x18, 0x18, 0x1C, 255} : ColorRgba{0x1C, 0x1C, 0x21, 255});
+                ColorRgba row_bg = is_selected ? pal.surface_selected : ((dis->itemID % 2 == 0) ? pal.surface_primary : pal.app_background);
                 HBRUSH brBg = CreateSolidBrush(row_bg.ToWin32ColorRef());
                 FillRect(hdcItem, &rc, brBg);
                 DeleteObject(brBg);
@@ -7402,7 +7707,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                                   rc.left + indent - DesignSystem::ScaleForDpi(6, ctx->dpi), rc.top + (rc.bottom - rc.top) / 2 + 4};
                     int cx = (caret_rc.left + caret_rc.right) / 2;
                     int cy = (caret_rc.top + caret_rc.bottom) / 2;
-                    DrawCaretGlyphGdi(hdcItem, cx, cy, ColorRgba{0x8E, 0x92, 0xA0, 255}, !node.expanded);
+                    DrawCaretGlyphGdi(hdcItem, cx, cy, pal.text_muted, !node.expanded);
                 }
 
                 // Checkbox
@@ -7416,7 +7721,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     RECT bar{chk_rc.left + 3, chk_rc.top + (chk_rc.bottom - chk_rc.top) / 2 - 1, chk_rc.right - 3, chk_rc.top + (chk_rc.bottom - chk_rc.top) / 2 + 1};
                     FillRectSolid(hdcItem, bar, ColorRgba{255, 255, 255, 255});
                 } else {
-                    DrawCheckboxGdi(hdcItem, chk_rc, false, ColorRgba{0x22, 0x22, 0x28, 255}, ColorRgba{0x55, 0x58, 0x66, 255}, ColorRgba{255, 255, 255, 255});
+                    DrawCheckboxGdi(hdcItem, chk_rc, false, pal.surface_primary, pal.border_subtle, pal.text_primary);
                 }
 
                 // Icon
@@ -7447,13 +7752,13 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 RECT name_rc{name_x, rc.top, size_x - DesignSystem::ScaleForDpi(6, ctx->dpi), rc.bottom};
                 SelectObject(hdcItem, node.is_dir ? ctx->hFontBold : ctx->hFontBody);
                 SetBkMode(hdcItem, TRANSPARENT);
-                SetTextColor(hdcItem, is_selected ? RGB(255, 255, 255) : (node.is_dir ? RGB(0xFD, 0xFD, 0xFE) : RGB(0xDE, 0xDF, 0xE4)));
+                SetTextColor(hdcItem, is_selected ? pal.text_primary.ToWin32ColorRef() : (node.is_dir ? pal.text_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef()));
                 DrawTextW(hdcItem, node.name.c_str(), -1, &name_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
                 // Size
                 RECT sz_rc{size_x, rc.top, prio_x - DesignSystem::ScaleForDpi(6, ctx->dpi), rc.bottom};
                 SelectObject(hdcItem, ctx->hFontSmall);
-                SetTextColor(hdcItem, RGB(0x9E, 0xA2, 0xB0));
+                SetTextColor(hdcItem, pal.text_secondary.ToWin32ColorRef());
                 std::wstring sz_txt = Utf8ToW(FormatAddTorrentBytes(node.size));
                 DrawTextW(hdcItem, sz_txt.c_str(), -1, &sz_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
@@ -7482,11 +7787,12 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 return TRUE;
             } else if (dis->CtlID == kAddTorCancelBtn || dis->CtlID == kAddTorBrowseBtn ||
                        dis->CtlID == kAddTorSelectAllBtn || dis->CtlID == kAddTorSelectNoneBtn || dis->CtlID == kAddTorSaveTorrentBtn) {
-                ColorRgba bg_col = is_selected ? ColorRgba{0x33, 0x33, 0x3A, 255} : (is_focused ? ColorRgba{0x2C, 0x2C, 0x34, 255} : ColorRgba{0x22, 0x22, 0x28, 255});
-                ColorRgba border_col = is_focused ? ColorRgba{0x55, 0x58, 0x66, 220} : ColorRgba{0x3E, 0x40, 0x4A, 180};
+                const auto& pal = ctx->view->GetPalette();
+                ColorRgba bg_col = is_selected ? pal.surface_pressed : pal.surface_primary;
+                ColorRgba border_col = is_focused ? pal.border_focus : pal.border_subtle;
                 DrawRoundedBoxGdi(hdcBtn, rcBtn, DesignSystem::ScaleForDpi(6, ctx->dpi), bg_col, border_col, 1);
                 SelectObject(hdcBtn, ctx->hFontBody);
-                SetTextColor(hdcBtn, RGB(0xDE, 0xDF, 0xE4));
+                SetTextColor(hdcBtn, pal.text_primary.ToWin32ColorRef());
                 SetBkMode(hdcBtn, TRANSPARENT);
 
                 const wchar_t* label = L"";
@@ -7716,7 +8022,7 @@ bool ShowAddTorrentDialogWin32(
     if (!hDlg) return false;
     ctx.hDlg = hDlg;
 
-    ApplyWindowGlassBackdropWin32(hDlg, true);
+    ApplyWindowGlassBackdropWin32(hDlg, view.GetPalette(), true);
 
     if (hwnd_parent && IsWindow(hwnd_parent)) {
         EnableWindow(hwnd_parent, FALSE);
@@ -7791,11 +8097,12 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
         const auto& action = geometry.details_action_buttons[i];
         RECT button_rc = ToWinRect(action.rect);
         bool hovered = view.GetHoveredDetailsBtnIndex() == static_cast<int>(i);
-        ColorRgba bg = action.is_primary ? (hovered ? pal.accent_hover : pal.accent_primary) :
+        const bool is_primary = action.is_primary || action.action_id == DetailsActionId::kRemoveHistory;
+        ColorRgba bg = is_primary ? (hovered ? pal.accent_hover : pal.accent_primary) :
             (hovered ? pal.surface_hover : pal.surface_elevated);
         DrawRoundedBoxGdi(hdc, button_rc, DesignSystem::ScaleForDpi(6, m.dpi), bg,
-                          action.is_primary ? bg : pal.border_subtle, action.is_primary ? 0 : 1);
-        SetTextColor(hdc, action.is_primary ? pal.text_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
+                          is_primary ? bg : pal.border_subtle, is_primary ? 0 : 1);
+        SetTextColor(hdc, is_primary ? RGB(255, 255, 255) : pal.text_secondary.ToWin32ColorRef());
         std::wstring label = Utf8ToW(action.label);
         int text_inset = DesignSystem::ScaleForDpi(8, m.dpi);
         RECT label_rc{button_rc.left + text_inset, button_rc.top, button_rc.right - text_inset, button_rc.bottom};
@@ -7864,7 +8171,7 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
         // Col 1, Row 3: Destination Folder
         RECT dest_rc{text_left, top_y + line_h * 2, text_left + col1_w, top_y + line_h * 3};
         SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
-        std::wstring wdest = L"Folder: " + Utf8ToW(details.destination_path);
+        std::wstring wdest = L"Location: " + Utf8ToW(DestinationFolderForDisplay(details.destination_path));
         DrawTextW(hdc, wdest.c_str(), -1, &dest_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
 
         // Col 2, Row 1: Source URL (redacted)
@@ -7919,7 +8226,7 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
 
         RECT dest_rc{text_left, top_y + line_h * 2, text_right, top_y + line_h * 3};
         SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
-        std::wstring wdest = L"Folder: " + Utf8ToW(details.destination_path);
+        std::wstring wdest = L"Location: " + Utf8ToW(DestinationFolderForDisplay(details.destination_path));
         DrawTextW(hdc, wdest.c_str(), -1, &dest_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
     }
 }
@@ -7936,6 +8243,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     HDC hdc = CreateCompatibleDC(hdc_screen);
     HBITMAP hbm = CreateCompatibleBitmap(hdc_screen, std::max(1, w), std::max(1, h));
     HGDIOBJ old_bm = SelectObject(hdc, hbm);
+    if (GetLocalizationManager().IsRightToLeft()) SetLayout(hdc, LAYOUT_RTL);
 
     const auto& pal = view.GetPalette();
     auto geom = view.ComputeLayoutGeometry(view.GetScrollOffset());
@@ -8006,6 +8314,19 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         std::wstring label = Utf8ToW(item.label);
         DrawTextW(hdc, label.c_str(), -1, &label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
+    RECT sidebar_language_rc = ToWinRect(geom.sidebar_language_rect);
+    const bool language_hovered = view.GetHoveredDetailsBtnIndex() == -3;
+    if (language_hovered) DrawRoundedBoxGdi(hdc, sidebar_language_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_hover, pal.surface_hover, 0);
+    RECT language_icon_rc{sidebar_language_rc.left + DesignSystem::ScaleForDpi(8, m.dpi), sidebar_language_rc.top + 4,
+                          sidebar_language_rc.left + DesignSystem::ScaleForDpi(30, m.dpi), sidebar_language_rc.bottom - 4};
+    DrawGlobeGlyphGdi(hdc, language_icon_rc, language_hovered ? pal.accent_primary : pal.text_secondary);
+    RECT language_label_rc{sidebar_language_rc.left + DesignSystem::ScaleForDpi(38, m.dpi), sidebar_language_rc.top,
+                           sidebar_language_rc.right - 8, sidebar_language_rc.bottom};
+    SelectObject(hdc, hFontSmall);
+    SetTextColor(hdc, language_hovered ? pal.accent_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
+    const std::wstring language_text = Utf8ToW(GetLocalizationManager().Translate("Language"));
+    DrawTextW(hdc, language_text.c_str(), -1, &language_label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
     RECT sidebar_settings_rc = ToWinRect(geom.sidebar_settings_rect);
     bool settings_hovered = view.GetHoveredDetailsBtnIndex() == -2;
     if (settings_hovered) DrawRoundedBoxGdi(hdc, sidebar_settings_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_hover, pal.surface_hover, 0);
@@ -8016,7 +8337,8 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     RECT sidebar_gear_rc{sidebar_settings_rc.left + DesignSystem::ScaleForDpi(8, m.dpi), sidebar_settings_rc.top + 4,
                          sidebar_settings_rc.left + DesignSystem::ScaleForDpi(30, m.dpi), sidebar_settings_rc.bottom - 4};
     DrawGearGlyphGdi(hdc, sidebar_gear_rc, settings_hovered ? pal.accent_primary : pal.text_secondary);
-    DrawTextW(hdc, L"Settings", -1, &settings_label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const std::wstring settings_text = Utf8ToW(GetLocalizationManager().Translate("Settings"));
+    DrawTextW(hdc, settings_text.c_str(), -1, &settings_label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     // 1. Compact toolbar in the main content region.
     RECT tb_rc = ToWinRect(geom.toolbar_rect);
@@ -8034,7 +8356,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     DrawHamburgerGlyphGdi(hdc, sort_rc.left + 14, sort_rc.top + (sort_rc.bottom - sort_rc.top) / 2 - 5, 12, 10, pal.text_muted);
     RECT sort_txt_rc{sort_rc.left + 32, sort_rc.top, sort_rc.right - 18, sort_rc.bottom};
     SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-    std::wstring sort_label = L"Sort";
+    std::wstring sort_label = Utf8ToW(GetLocalizationManager().Translate("Sort"));
     DrawTextW(hdc, sort_label.c_str(), -1, &sort_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     DrawCaretGlyphGdi(hdc, sort_rc.right - 12, sort_rc.top + (sort_rc.bottom - sort_rc.top) / 2, pal.text_muted, false);
 
@@ -8044,7 +8366,9 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     DrawFunnelGlyphGdi(hdc, filter_rc.left + 14, filter_rc.top + (filter_rc.bottom - filter_rc.top) / 2 - 5, 12, pal.text_muted);
     RECT filter_txt_rc{filter_rc.left + 32, filter_rc.top, filter_rc.right - 18, filter_rc.bottom};
     SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-    std::wstring wcat = (view.GetSelectedCategory() == SidebarCategory::kAllDownloads) ? L"All files" : Utf8ToW(view.CategoryToLabel(view.GetSelectedCategory()));
+    std::wstring wcat = (view.GetSelectedCategory() == SidebarCategory::kAllDownloads)
+        ? Utf8ToW(GetLocalizationManager().Translate("All files"))
+        : Utf8ToW(view.CategoryToLabel(view.GetSelectedCategory()));
     DrawTextW(hdc, wcat.c_str(), -1, &filter_txt_rc,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     DrawCaretGlyphGdi(hdc, filter_rc.right - 12, filter_rc.top + (filter_rc.bottom - filter_rc.top) / 2, pal.text_muted, false);
@@ -8063,7 +8387,21 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     DrawRoundedBoxGdi(hdc, add_rc, DesignSystem::ScaleForDpi(6, m.dpi), add_bg, add_bg, 0);
     SelectObject(hdc, hFontBold);
     SetTextColor(hdc, RGB(255, 255, 255));
-    DrawTextW(hdc, L"+ Add download", -1, &add_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    std::wstring add_download_text = L"+ " + Utf8ToW(GetLocalizationManager().Translate("Add download"));
+    DrawTextW(hdc, add_download_text.c_str(), -1, &add_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    RECT theme_rc = ToWinRect(geom.theme_button_rect);
+    POINT theme_cursor{};
+    GetCursorPos(&theme_cursor);
+    ScreenToClient(hwnd, &theme_cursor);
+    const bool theme_hovered = geom.theme_button_rect.Contains(theme_cursor.x, theme_cursor.y);
+    const bool theme_pressed = view.GetAnimationState().pressed_toolbar_idx == -2;
+    const ColorRgba theme_button_bg = theme_pressed ? pal.surface_pressed :
+        (theme_hovered ? pal.surface_hover : pal.surface_primary);
+    DrawRoundedBoxGdi(hdc, theme_rc, DesignSystem::ScaleForDpi(8, m.dpi),
+        theme_button_bg, pal.border_subtle, 1);
+    DrawThemeGlyphGdi(hdc, theme_rc, pal.accent_primary, theme_button_bg,
+        pal.mode == ThemeMode::kLight);
 
     // 1.5 Dynamic Context Action Buttons (smooth hover & press transitions)
     for (size_t btn_idx = 1; btn_idx < geom.toolbar_buttons.size() - 1; ++btn_idx) {
@@ -8086,7 +8424,13 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         DrawGlassPanelGdi(hdc, brc, 16, btn_bg, btn_border, 1, false);
 
         SelectObject(hdc, hFontSmallBold);
-        ColorRgba txt_col = hovered ? pal.text_primary : pal.text_secondary;
+        const bool is_start_all = btn.action_id == ToolbarActionId::kStartAll;
+        if (is_start_all) {
+            const ColorRgba start_all_bg = hovered ? pal.surface_pressed : pal.surface_selected;
+            DrawRoundedBoxGdi(hdc, brc, DesignSystem::ScaleForDpi(8, m.dpi), start_all_bg,
+                              pal.accent_primary, 1);
+        }
+        ColorRgba txt_col = is_start_all ? pal.accent_primary : (hovered ? pal.text_primary : pal.text_secondary);
         SetTextColor(hdc, txt_col.ToWin32ColorRef());
         std::wstring wlbl = Utf8ToW(btn.label);
         int text_inset = DesignSystem::ScaleForDpi(8, m.dpi);
@@ -8099,13 +8443,14 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     DrawRoundedBoxGdi(hdc, search_rc, 20, pal.surface_primary, pal.border_subtle, 1);
     DrawSearchGlassGdi(hdc, search_rc.left + 14, search_rc.top + (search_rc.bottom - search_rc.top) / 2 - 6, 13, pal.text_muted);
 
-    // 2. Table Column Headers (static and non-interactive)
+    // 2. Table Column Headers and discoverable resize handles
     RECT header_rc = ToWinRect(geom.table_header_rect);
     SelectObject(hdc, hFontSmallBold);
     SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
     RECT clip_hdr_rc{};
     bool needs_header = (IntersectRect(&clip_hdr_rc, &ps.rcPaint, &header_rc) != 0);
     if (needs_header) {
+    const int hovered_divider_idx = view.HitTestColumnDivider(theme_cursor.x, theme_cursor.y, view.GetScrollOffset());
     for (size_t col_idx = 0; col_idx < geom.table_columns.size(); ++col_idx) {
         const auto& col = geom.table_columns[col_idx];
         if (col.rect.width() <= 0) continue;
@@ -8116,8 +8461,12 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         // Draw Excel-style resize divider handle between columns
         if (col_idx < 6 && col.rect.right > 0 && col.rect.right < w) {
             bool is_resizing = (view.GetResizingColumnIndex() == static_cast<int>(col_idx));
-            RECT div_handle{col.rect.right - 1, header_rc.top + 8, col.rect.right + 1, header_rc.bottom - 8};
-            FillRectSolid(hdc, div_handle, is_resizing ? pal.accent_primary : ColorRgba{0x45, 0x47, 0x50, 255});
+            bool is_hovered = hovered_divider_idx == static_cast<int>(col_idx);
+            int half_width = (is_resizing || is_hovered) ? DesignSystem::ScaleForDpi(2, m.dpi) : 1;
+            RECT div_handle{col.rect.right - half_width, header_rc.top + 8,
+                            col.rect.right + half_width, header_rc.bottom - 8};
+            FillRectSolid(hdc, div_handle,
+                          (is_resizing || is_hovered) ? pal.accent_primary : pal.border_subtle);
         }
     }
     RECT hdr_div{0, header_rc.bottom - 1, w, header_rc.bottom};
@@ -8193,12 +8542,12 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
             }
 
             RECT row_div{rrc.left, rrc.bottom - 1, rrc.right, rrc.bottom};
-            FillRectSolid(hdc, row_div, ColorRgba{0x20, 0x20, 0x24, 255});
+            FillRectSolid(hdc, row_div, pal.border_subtle);
 
             RECT chk_rc = ToWinRect(rl.checkbox_rect);
             DrawCheckboxGdi(hdc, chk_rc, r.checked, pal.surface_primary, pal.border_subtle, pal.accent_primary);
 
-            int idx_w = DesignSystem::ScaleForDpi(32, m.dpi);
+            int idx_w = DesignSystem::ScaleForDpi(24, m.dpi);
             RECT idx_rc{chk_rc.right + 4, rrc.top, chk_rc.right + 4 + idx_w, rrc.bottom};
             SelectObject(hdc, hFontBody);
             SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
@@ -8212,9 +8561,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
             DrawFileTypeIconGdi(hdc, icon_x, icon_y, icon_w, icon_h, r, pal);
 
             SelectObject(hdc, hFontBold);
-            const ColorRgba row_primary_text = (r.selected && pal.mode == ThemeMode::kLight)
-                ? ColorRgba{0xF2, 0xF2, 0xF3, 255}
-                : pal.text_primary;
+            const ColorRgba row_primary_text = pal.text_primary;
             SetTextColor(hdc, row_primary_text.ToWin32ColorRef());
             int name_right = std::min(rl.filename_rect.right, geom.table_columns[0].rect.right);
             RECT fn_rc{icon_x + icon_w + 10, rrc.top + 7, std::max(icon_x + icon_w + 10, name_right - 10), rrc.top + 27};
@@ -8331,7 +8678,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                 DrawTextW(hdc, wst.c_str(), -1, &st_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
 
-            // Column 3: Download Speed strictly in KB/s
+            // Column 3: Download rate, formatted in shared binary byte units
             if (geom.table_columns.size() > 3 && geom.table_columns[3].rect.width() > 0) {
                 RECT dl_rc = ToWinRect(geom.table_columns[3].rect);
                 dl_rc.top = rrc.top;
@@ -8384,16 +8731,16 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                     RECT spd_rc{act_rc.right + 8, dl_rc.top, dl_rc.right - 2, dl_rc.bottom};
                     SelectObject(hdc, hFontBody);
                     SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-                    DrawTextW(hdc, L"0 KB/s", -1, &spd_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-                } else {
+                    DrawTextW(hdc, L"0 B/s", -1, &spd_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                } else if (r.state != TaskState::kCompleted) {
                     RECT spd_rc{act_rc.left, dl_rc.top, dl_rc.right - 2, dl_rc.bottom};
                     SelectObject(hdc, hFontBody);
                     SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-                    DrawTextW(hdc, L"0 KB/s", -1, &spd_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    DrawTextW(hdc, L"0 B/s", -1, &spd_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
                 }
             }
 
-            // Column 4: Upload Speed strictly in KB/s
+            // Column 4: Upload rate, formatted in shared binary byte units
             if (geom.table_columns.size() > 4 && geom.table_columns[4].rect.width() > 0) {
                 RECT ul_rc = ToWinRect(geom.table_columns[4].rect);
                 ul_rc.top = rrc.top;
@@ -8401,8 +8748,10 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                 ul_rc.right -= DesignSystem::ScaleForDpi(2, m.dpi);
                 SelectObject(hdc, hFontBody);
                 SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-                std::wstring wul = Utf8ToW(r.upload_speed_text);
-                DrawTextW(hdc, wul.c_str(), -1, &ul_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                if (!r.upload_speed_text.empty()) {
+                    std::wstring wul = Utf8ToW(r.upload_speed_text);
+                    DrawTextW(hdc, wul.c_str(), -1, &ul_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                }
             }
 
             // Column 5: Added Timestamp
@@ -8584,27 +8933,29 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     }
 
     if (ctx && !ctx->conflict_dialog_task_id.empty()) {
-        FillRectSolid(hdc, client_rc, ColorRgba{6, 6, 8, 210});
+        const ColorRgba scrim = (pal.mode == ThemeMode::kLight)
+            ? ColorRgba{0x65, 0x6B, 0x73, 96} : ColorRgba{6, 6, 8, 210};
+        FillRectSolid(hdc, client_rc, scrim);
         auto l = ComputeConflictDialogLayout(w, h, m.dpi);
-        const ColorRgba modal_bg{0x1E, 0x1E, 0x22, 255};
-        const ColorRgba modal_border{0x35, 0x35, 0x3D, 255};
-        const ColorRgba coral{0xFF, 0x47, 0x57, 255};
+        const ColorRgba modal_bg = pal.surface_primary;
+        const ColorRgba modal_border = pal.border_subtle;
+        const ColorRgba accent = pal.accent_primary;
         DrawRoundedBoxGdi(hdc, l.card, DesignSystem::ScaleForDpi(14, m.dpi), modal_bg, modal_border, 1);
         SelectObject(hdc, hFontBold);
-        SetTextColor(hdc, RGB(245, 245, 248));
+        SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
         RECT title{l.card.left + DesignSystem::ScaleForDpi(28, m.dpi), l.card.top + DesignSystem::ScaleForDpi(20, m.dpi), l.close.left, l.card.top + DesignSystem::ScaleForDpi(58, m.dpi)};
         DrawTextW(hdc, L"Warning: file exists already", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        SetTextColor(hdc, RGB(133, 137, 146));
+        SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
         DrawTextW(hdc, L"×", 1, &l.close, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         SelectObject(hdc, hFontBody);
-        SetTextColor(hdc, RGB(225, 226, 231));
+        SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
         DrawTextW(hdc, ctx->conflict_dialog_path.c_str(), static_cast<int>(ctx->conflict_dialog_path.size()), &l.path,
                   DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
         RECT check_box{l.checkbox.left, l.checkbox.top + DesignSystem::ScaleForDpi(5, m.dpi),
                        l.checkbox.left + DesignSystem::ScaleForDpi(20, m.dpi), l.checkbox.top + DesignSystem::ScaleForDpi(25, m.dpi)};
         DrawRoundedBoxGdi(hdc, check_box, DesignSystem::ScaleForDpi(4, m.dpi), modal_bg, modal_border, 1);
         if (ctx->conflict_dialog_remember) {
-            HPEN pen = CreatePen(PS_SOLID, DesignSystem::ScaleForDpi(2, m.dpi), coral.ToWin32ColorRef());
+            HPEN pen = CreatePen(PS_SOLID, DesignSystem::ScaleForDpi(2, m.dpi), accent.ToWin32ColorRef());
             HGDIOBJ old_pen = SelectObject(hdc, pen);
             MoveToEx(hdc, check_box.left + 4, check_box.top + 10, nullptr);
             LineTo(hdc, check_box.left + 8, check_box.top + 14);
@@ -8613,7 +8964,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         }
         RECT check_label{check_box.right + DesignSystem::ScaleForDpi(10, m.dpi), l.checkbox.top,
                          l.checkbox.right, l.checkbox.bottom};
-        SetTextColor(hdc, RGB(205, 207, 213));
+        SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
         DrawTextW(hdc, L"Remember my choice for all downloads", -1, &check_label,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         auto draw_button = [&](const RECT& rc, const wchar_t* label, ColorRgba bg, ColorRgba border, COLORREF text) {
@@ -8623,9 +8974,9 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         };
         SelectObject(hdc, hFontSmallBold);
         std::wstring rename = L"RENAME (" + std::to_wstring(ctx->conflict_dialog_rename_number) + L")";
-        draw_button(l.rename, rename.c_str(), coral, coral, RGB(255, 255, 255));
-        draw_button(l.overwrite, L"Overwrite", ColorRgba{0x2B, 0x2B, 0x31, 255}, modal_border, RGB(225, 226, 231));
-        draw_button(l.abort, L"Abort", ColorRgba{0x2B, 0x2B, 0x31, 255}, modal_border, RGB(225, 226, 231));
+        draw_button(l.rename, rename.c_str(), accent, accent, pal.text_primary.ToWin32ColorRef());
+        draw_button(l.overwrite, L"Overwrite", pal.surface_elevated, modal_border, pal.text_primary.ToWin32ColorRef());
+        draw_button(l.abort, L"Abort", pal.surface_elevated, modal_border, pal.text_primary.ToWin32ColorRef());
     }
 
     SelectObject(hdc, old_font);
@@ -8634,6 +8985,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     DeleteObject(hFontSmall);
     DeleteObject(hFontSmallBold);
 
+    SetLayout(hdc, 0);
     BitBlt(hdc_screen, 0, 0, w, h, hdc, 0, 0, SRCCOPY);
     SelectObject(hdc, old_bm);
     DeleteObject(hbm);
@@ -8641,27 +8993,11 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     EndPaint(hwnd, &ps);
 }
 
-static void InitWin32DarkMode(HWND hwnd) {
-    ApplyWindowGlassBackdropWin32(hwnd, false /* is_transient_dialog */);
-    BOOL use_dark = TRUE;
-    DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &use_dark, sizeof(use_dark));
-    COLORREF titlebar_col = RGB(0x16, 0x16, 0x18);
-    DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &titlebar_col, sizeof(titlebar_col));
-    COLORREF titletext_col = RGB(0xFF, 0xFF, 0xFF);
-    DwmSetWindowAttribute(hwnd, 36 /* DWMWA_TEXT_COLOR */, &titletext_col, sizeof(titletext_col));
-
-    HMODULE hUxTheme = LoadLibraryW(L"uxtheme.dll");
+static void InitWin32Theme(HWND hwnd, const ThemePalette& palette) {
+    ApplyWindowGlassBackdropWin32(hwnd, palette, false /* is_transient_dialog */);
+    ApplyNativeWindowTheme(hwnd, palette);
+    HMODULE hUxTheme = GetUxThemeModule();
     if (hUxTheme) {
-        using fnSetPreferredAppMode = int(WINAPI*)(int mode);
-        auto pfnSetPreferredAppMode = reinterpret_cast<fnSetPreferredAppMode>(GetProcAddress(hUxTheme, MAKEINTRESOURCEA(135)));
-        if (pfnSetPreferredAppMode) {
-            pfnSetPreferredAppMode(2 /* ForceDark */);
-        }
-        using fnAllowDarkModeForWindow = BOOL(WINAPI*)(HWND, BOOL);
-        auto pfnAllowDarkModeForWindow = reinterpret_cast<fnAllowDarkModeForWindow>(GetProcAddress(hUxTheme, MAKEINTRESOURCEA(133)));
-        if (pfnAllowDarkModeForWindow) {
-            pfnAllowDarkModeForWindow(hwnd, TRUE);
-        }
         using fnFlushMenuThemes = void(WINAPI*)();
         auto pfnFlushMenuThemes = reinterpret_cast<fnFlushMenuThemes>(GetProcAddress(hUxTheme, MAKEINTRESOURCEA(136)));
         if (pfnFlushMenuThemes) {
@@ -8682,12 +9018,21 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
+    if (GetLocalizationManager().IsRightToLeft() &&
+        (msg == WM_MOUSEMOVE || msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
+         msg == WM_LBUTTONDBLCLK || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
+         msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP)) {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        lParam = MAKELPARAM(client.right - GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+    }
+
     switch (msg) {
         case WM_CREATE: {
             if (g_msgTaskbarButtonCreated == 0) {
                 g_msgTaskbarButtonCreated = RegisterWindowMessageW(L"TaskbarButtonCreated");
             }
-            InitWin32DarkMode(hwnd);
+            InitWin32Theme(hwnd, ctx->view->GetPalette());
             DragAcceptFiles(hwnd, TRUE);
             HICON hAppIcon = CreateRadiumAppIcon();
             if (hAppIcon) {
@@ -8725,6 +9070,10 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 std::max(10, geom.search_box_rect.width() - edit_pad - 14), edit_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_SEARCH_EDIT)),
                 GetModuleHandleW(nullptr), nullptr);
+            if (ctx->hSearchEdit) {
+                ApplyNativeEditTheme(ctx->hSearchEdit,
+                    ctx->view->GetPalette().mode != ThemeMode::kLight);
+            }
             int edit_font_sz = DesignSystem::ScaleForDpi(15, ctx->view->GetMetrics().dpi);
             HFONT hEditFont = CreateFontW(
                 -edit_font_sz, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -8739,10 +9088,12 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             HDC hdcEdit = reinterpret_cast<HDC>(wParam);
             HWND hCtl = reinterpret_cast<HWND>(lParam);
             if (hCtl == ctx->hSearchEdit) {
-                SetTextColor(hdcEdit, RGB(0xF0, 0xF0, 0xF5));
-                SetBkColor(hdcEdit, RGB(0x1E, 0x1E, 0x22));
-                static HBRUSH hEditBrush = CreateSolidBrush(RGB(0x1E, 0x1E, 0x22));
-                return reinterpret_cast<LRESULT>(hEditBrush);
+                const auto& palette = ctx->view->GetPalette();
+                SetTextColor(hdcEdit, palette.text_primary.ToWin32ColorRef());
+                SetBkColor(hdcEdit, palette.surface_primary.ToWin32ColorRef());
+                static HBRUSH hLightEditBrush = CreateSolidBrush(RGB(0xFF, 0xFF, 0xFF));
+                static HBRUSH hDarkEditBrush = CreateSolidBrush(RGB(0x1E, 0x1E, 0x22));
+                return reinterpret_cast<LRESULT>(palette.mode == ThemeMode::kLight ? hLightEditBrush : hDarkEditBrush);
             }
             break;
         }
@@ -8816,6 +9167,14 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             UINT dpi = GetDpiForWindow(hwnd);
             ctx->view->SetWindowDimensions(LOWORD(lParam), HIWORD(lParam), dpi > 0 ? dpi : 96);
             auto geom = ctx->view->ComputeLayoutGeometry(ctx->view->GetScrollOffset());
+            if (ctx->hThemeTooltip) {
+                TOOLINFOW tool{};
+                tool.cbSize = sizeof(tool);
+                tool.hwnd = hwnd;
+                tool.uId = 1;
+                tool.rect = ToWinRect(geom.theme_button_rect);
+                SendMessageW(ctx->hThemeTooltip, TTM_NEWTOOLRECTW, 0, reinterpret_cast<LPARAM>(&tool));
+            }
             if (ctx->hSearchEdit) {
                 int edit_pad = DesignSystem::ScaleForDpi(32, ctx->view->GetMetrics().dpi);
                 int edit_h = DesignSystem::ScaleForDpi(22, ctx->view->GetMetrics().dpi);
@@ -8895,7 +9254,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 }
             }
 
-            if (old_tb != new_tb || old_sb != new_sb) {
+            if (old_tb != new_tb || old_sb != new_sb || geom.theme_button_rect.Contains(x, y)) {
                 RECT tb_rc = ToWinRect(geom.toolbar_rect);
                 InvalidateRect(hwnd, &tb_rc, FALSE);
             }
@@ -8914,7 +9273,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 RECT rc = ToWinRect(ctx->view->GetRowRect(static_cast<size_t>(old_row)));
                 RedrawWindow(hwnd, &rc, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
             }
-            if (old_tb >= 0 || old_sb >= 0) {
+            if (old_tb >= 0 || old_sb >= 0 || ctx->view) {
                 auto geom = ctx->view->ComputeLayoutGeometry(ctx->view->GetScrollOffset());
                 RECT tb_rc = ToWinRect(geom.toolbar_rect);
                 InvalidateRect(hwnd, &tb_rc, FALSE);
@@ -8939,7 +9298,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 return 0;
             }
             // Clear toolbar press state for button release animation
-            if (ctx->view->GetAnimationState().pressed_toolbar_idx >= 0) {
+            if (ctx->view->GetAnimationState().pressed_toolbar_idx != -1) {
                 ctx->view->GetAnimationState().pressed_toolbar_idx = -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
@@ -9016,12 +9375,57 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             }
 
             auto hit = ctx->view->HitTestPoint(x, y, scroll_offset);
+            if (hit.type == HitTargetType::kSidebarLanguageButton) {
+                const auto& languages = LocalizationManager::Languages();
+                const std::string selected_locale = ctx->controller->GetSettings().language;
+                HMENU language_menu = CreatePopupMenu();
+                if (language_menu) {
+                    AppendMenuW(language_menu, MF_STRING | MF_DISABLED | MF_GRAYED, 100, L"Choose a language");
+                    AppendMenuW(language_menu, MF_SEPARATOR, 0, nullptr);
+                    for (size_t i = 0; i < languages.size(); ++i) {
+                        const auto& option = languages[i];
+                        const UINT id = static_cast<UINT>(i + 1);
+                        const UINT flags = MF_STRING | (selected_locale == option.locale ? MF_CHECKED : 0);
+                        const std::wstring native_name = Utf8ToW(option.native_name);
+                        AppendMenuW(language_menu, flags, id, native_name.c_str());
+                    }
+
+                    RECT language_rect = ToWinRect(geom.sidebar_language_rect);
+                    POINT menu_anchor{language_rect.left, language_rect.bottom};
+                    ClientToScreen(hwnd, &menu_anchor);
+                    const int choice = TrackPopupMenu(language_menu, TPM_RETURNCMD | TPM_NONOTIFY,
+                        menu_anchor.x, menu_anchor.y, 0, hwnd, nullptr);
+                    DestroyMenu(language_menu);
+
+                    if (choice >= 1 && static_cast<size_t>(choice - 1) < languages.size()) {
+                        ctx->view->SetDraftSettingByKey("language", languages[static_cast<size_t>(choice - 1)].locale);
+                    }
+                    if (choice >= 1 && static_cast<size_t>(choice - 1) < languages.size()) {
+                        const auto saved = ctx->view->ApplySettingsChanges();
+                        if (saved.ok()) {
+                            ApplyNativeWindowTheme(hwnd, ctx->view->GetPalette());
+                        } else {
+                            const std::wstring error = Utf8ToW(saved.error ? saved.error->message : "Could not save language preference.");
+                            MessageBoxW(hwnd, error.c_str(), L"Language", MB_OK | MB_ICONWARNING);
+                        }
+                    }
+                }
+                InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
+            }
+            if (hit.type == HitTargetType::kThemeToggleButton) {
+                auto changed = ctx->view->ToggleTheme();
+                if (changed.ok()) ApplyNativeWindowTheme(hwnd, ctx->view->GetPalette());
+                InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
+            }
 
             // Track pressed toolbar button for press animation feedback
             if (msg == WM_LBUTTONDOWN) {
                 int new_pressed = -1;
                 if (hit.type == HitTargetType::kToolbarButton) new_pressed = hit.index;
                 else if (hit.type == HitTargetType::kAddDownloadButton) new_pressed = 0;
+                else if (hit.type == HitTargetType::kThemeToggleButton) new_pressed = -2;
                 ctx->view->GetAnimationState().pressed_toolbar_idx = new_pressed;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
@@ -9056,7 +9460,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     }
                     if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
                         hit.task_id == "admin_startup_log") {
-                        ShowStartupLogDialogWin32(hwnd, *ctx->controller);
+                        ShowStartupLogDialogWin32(hwnd, *ctx->controller, ctx->view->GetPalette());
                         InvalidateRect(hwnd, nullptr, FALSE);
                         return 0;
                     }
@@ -9071,7 +9475,19 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         POINT pt{ctrl_rc.left, ctrl_rc.bottom + 2};
                         ClientToScreen(hwnd, &pt);
                         HMENU hMenu = CreatePopupMenu();
-                        if (hit.task_id == "conflict_policy") {
+                        if (hit.task_id == "theme") {
+                            const auto& current_theme = ctx->view->GetDraftSettings().theme;
+                            AppendMenuW(hMenu, MF_STRING | (current_theme == "system" ? MF_CHECKED : 0), 1, L"System (follow Windows)");
+                            AppendMenuW(hMenu, MF_STRING | (current_theme == "light" ? MF_CHECKED : 0), 2, L"Light");
+                            AppendMenuW(hMenu, MF_STRING | (current_theme == "dark" || current_theme == "coral_dark" ? MF_CHECKED : 0), 3, L"Dark");
+                            int choice = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, nullptr);
+                            DestroyMenu(hMenu);
+                            if (choice == 1) ctx->view->SetDraftSettingByKey("theme", "system");
+                            else if (choice == 2) ctx->view->SetDraftSettingByKey("theme", "light");
+                            else if (choice == 3) ctx->view->SetDraftSettingByKey("theme", "dark");
+                            InvalidateRect(hwnd, nullptr, FALSE);
+                            return 0;
+                        } else if (hit.task_id == "conflict_policy") {
                             auto pol = ctx->view->GetDraftSettings().conflict_policy;
                             AppendMenuW(hMenu, MF_STRING | (pol == ConflictPolicy::kAutoRename ? MF_CHECKED : 0), 1, L"Auto-Rename (Numbered Copy)");
                             AppendMenuW(hMenu, MF_STRING | (pol == ConflictPolicy::kOverwrite ? MF_CHECKED : 0), 2, L"Overwrite Existing File");
@@ -9655,7 +10071,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 }
             } else if (cmd == IDM_CTX_SETTINGS) ctx->view->OpenSettingsCenter(SettingsCategory::kGeneral);
             else if (cmd == IDM_CTX_BROWSER_STAT) ctx->view->OpenSettingsCenter(SettingsCategory::kBrowserIntegration);
-            else if (cmd == IDM_CTX_STARTUP_LOG) ShowStartupLogDialogWin32(hwnd, *ctx->controller);
+            else if (cmd == IDM_CTX_STARTUP_LOG) ShowStartupLogDialogWin32(hwnd, *ctx->controller, ctx->view->GetPalette());
             else if (cmd == IDM_CTX_ABOUT) ctx->view->OpenSettingsCenter(SettingsCategory::kAboutAndDiagnostics);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -9851,6 +10267,13 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                             hwnd, *ctx->view, *ctx->controller, offer->url, offer->file_name, offer->save_dir, static_cast<int64_t>(offer->file_size), offer->task_id);
                     }
                 } else {
+                    int64_t initial_sz = static_cast<int64_t>(offer->file_size);
+                    if (initial_sz <= 0 && !offer->task_id.empty()) {
+                        auto existing = ctx->controller->GetTask(offer->task_id);
+                        if (existing.has_value() && existing->total_bytes > 0) {
+                            initial_sz = static_cast<int64_t>(existing->total_bytes);
+                        }
+                    }
                     ShowNewDownloadDialogWin32(
                         hwnd,
                         *ctx->view,
@@ -9858,7 +10281,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         offer->url,
                         offer->file_name,
                         offer->save_dir,
-                        static_cast<int64_t>(offer->file_size),
+                        initial_sz,
                         offer->task_id);
                 }
                 delete offer;
@@ -10058,6 +10481,15 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             }
             break;
         }
+        case WM_SETTINGCHANGE:
+        case WM_THEMECHANGED: {
+            if (ctx && ctx->view && ctx->controller->GetSettings().theme == "system") {
+                ctx->view->RefreshSystemTheme(IsWindowsAppThemeLight());
+                ApplyNativeWindowTheme(hwnd, ctx->view->GetPalette());
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            break;
+        }
         case WM_CLOSE: {
             if (ctx->controller->GetSettings().close_to_tray && ctx->tray_added) {
                 ShowWindow(hwnd, SW_HIDE);
@@ -10158,12 +10590,22 @@ int DesktopView::RunWin32MessageLoop() {
     if (!hwnd) return 1;
     ctx.hwnd = hwnd;
 
-    BOOL use_dark = TRUE;
-    DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &use_dark, sizeof(use_dark));
-    COLORREF titlebar_col = RGB(0x16, 0x16, 0x18);
-    DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &titlebar_col, sizeof(titlebar_col));
-    COLORREF titletext_col = RGB(0xFF, 0xFF, 0xFF);
-    DwmSetWindowAttribute(hwnd, 36 /* DWMWA_TEXT_COLOR */, &titletext_col, sizeof(titletext_col));
+    ctx.hThemeTooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+        WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        hwnd, nullptr, hInst, nullptr);
+    if (ctx.hThemeTooltip) {
+        TOOLINFOW tool{};
+        tool.cbSize = sizeof(tool);
+        tool.uFlags = TTF_SUBCLASS;
+        tool.hwnd = hwnd;
+        tool.uId = 1;
+        tool.lpszText = const_cast<LPWSTR>(L"Switch between Light and Dark appearance");
+        const auto geometry = ComputeLayoutGeometry(GetScrollOffset());
+        tool.rect = ToWinRect(geometry.theme_button_rect);
+        SendMessageW(ctx.hThemeTooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+    }
+
+    ApplyNativeWindowTheme(hwnd, GetPalette());
 
     ctx.nid.cbSize = sizeof(NOTIFYICONDATAW);
     ctx.nid.hWnd = hwnd;

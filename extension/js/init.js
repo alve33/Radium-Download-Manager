@@ -12,7 +12,7 @@ var SourceType = {
 };
 
 var G = {
-  version: "1.0.0",
+  version: (typeof chrome !== "undefined" && chrome.runtime && typeof chrome.runtime.getManifest === "function" && chrome.runtime.getManifest()) ? (chrome.runtime.getManifest().version || "1.0.0") : "1.0.0",
   nativeHostName: "com.radium.downloadmanager",
   fallbackNativeHostNames: ["com.flux.downloadmanager", "org.flux.native", "org.openidm.native"],
   enableCapture: true,

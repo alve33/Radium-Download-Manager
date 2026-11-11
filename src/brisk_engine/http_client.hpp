@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include "common/types.hpp"
 
 namespace openidm::brisk {
@@ -90,7 +91,7 @@ public:
 };
 
 struct HttpNetworkOptions {
-    std::string proxy_mode{"system"};                 // "direct", "system", "manual"
+    std::string proxy_mode{"direct"};                 // "direct", "system", "manual"
     std::string proxy_server;                         // e.g. "http://127.0.0.1:8080"
     std::string proxy_bypass;                         // e.g. "<local>;*.internal"
     std::string proxy_username;
@@ -98,6 +99,8 @@ struct HttpNetworkOptions {
     std::string server_auth_username;
     std::string server_auth_password;                 // Decrypted plaintext for WinHTTP API
     bool enable_integrated_auth{true};                // Windows Negotiate / NTLM autologon
+    // Optional redacted stage timings for callers that need request latency diagnostics.
+    std::function<void(std::string_view, int64_t)> on_timing;
 };
 
 class HttpClient {

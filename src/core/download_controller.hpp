@@ -25,11 +25,13 @@
 #include "engine_ftp/ftp_client.hpp"
 #include "engine_stream/nm3u8dl_re_adapter.hpp"
 #include "engine_stream/rtsp_mms_adapter.hpp"
+#include "engine_torrent/torrent_creator.hpp"
 #include "engine_torrent/torrent_engine.hpp"
 #include "engine_torrent/torrent_parser.hpp"
 #include "security/antivirus_scanner.hpp"
 #include "storage/import_export.hpp"
 #include "storage/sqlite_store.hpp"
+#include "common/central_config.hpp"
 
 namespace openidm {
 
@@ -39,11 +41,11 @@ struct ControllerConfig {
     std::filesystem::path temp_root_dir;
     std::filesystem::path nm3u8dl_binary_path;
     std::filesystem::path ffmpeg_binary_path;
-    uint32_t max_concurrent_tasks{3};
-    uint64_t global_speed_limit_bps{0};
+    uint32_t max_concurrent_tasks{radium::config::DefaultSettingsConfig::kMaxConcurrentTasks};
+    uint64_t global_speed_limit_bps{radium::config::DefaultSettingsConfig::kSpeedLimitBps};
     bool allow_loopback{false};
-    int stall_timeout_ms{3000};
-    uint64_t min_split_bytes{131072};
+    int stall_timeout_ms{radium::config::NetworkPoliciesConfig::kStallTimeoutMs};
+    uint64_t min_split_bytes{radium::config::NetworkPoliciesConfig::kMinSplitBytes};
     torrent::TorrentMetadataSelectionCallback torrent_metadata_selection_callback;
     std::function<std::string()> local_time_override;
     std::function<Result<security::ScanReport>(const std::filesystem::path&)> av_scan_override;
@@ -70,6 +72,12 @@ public:
         const std::string& file_name = "",
         uint64_t file_size = 0,
         const std::string& etag = "",
+        const std::string& exclude_task_id = "") const;
+
+    // Checks for destination path conflict across existing tasks
+    core::DuplicateMatch CheckDestinationConflict(
+        const std::string& save_dir,
+        const std::string& file_name,
         const std::string& exclude_task_id = "") const;
 
     // Ingest an already completed/transferred file (e.g. from browser-generated Blob/Data transfer)
@@ -156,8 +164,24 @@ public:
     void OnSystemSuspend();
     void OnSystemResume();
 
+    // Advanced BitTorrent Capabilities (Creator, Swarm Inspector, Sequential Mode)
+    Result<std::vector<uint8_t>> CreateTorrent(
+        const std::filesystem::path& source_path,
+        const torrent::TorrentCreatorOptions& options = torrent::TorrentCreatorOptions{});
+
+    Result<void> CreateTorrentFile(
+        const std::filesystem::path& source_path,
+        const std::filesystem::path& output_torrent_path,
+        const torrent::TorrentCreatorOptions& options = torrent::TorrentCreatorOptions{});
+
+    Result<void> AddTrackersToTask(const std::string& task_id, const std::vector<std::string>& new_trackers);
+    Result<torrent::TorrentSwarmDetails> GetTorrentSwarmDetails(const std::string& task_id);
+    Result<void> SetTorrentSequentialMode(const std::string& task_id, bool enable);
+
     std::vector<TaskModel> ListTasks() const;
     std::optional<TaskModel> GetTask(const std::string& task_id) const;
+    bool HasActiveTasks() const;
+    size_t GetTaskCount() const;
 
     // Multi-Queue Management (Phase 3 & Advanced Scheduler)
     Result<void> UpsertQueue(const QueueConfig& queue);

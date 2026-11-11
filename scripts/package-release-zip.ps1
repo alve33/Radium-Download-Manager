@@ -26,14 +26,19 @@ if (-not $Version) {
     if ($env:RADIUM_VERSION) {
         $Version = $env:RADIUM_VERSION
     } else {
-        try {
-            $gitTag = (git describe --tags --exact-match 2>$null)
-            if ($gitTag -match '^v?(\d+\.\d+\.\d+.*)$') {
-                $Version = $Matches[1]
+        $versionFile = Join-Path $RepoRoot "VERSION"
+        if (Test-Path $versionFile) {
+            $Version = (Get-Content $versionFile -Raw).Trim()
+        } else {
+            try {
+                $gitTag = (git describe --tags --exact-match 2>$null)
+                if ($gitTag -match '^v?(\d+\.\d+\.\d+.*)$') {
+                    $Version = $Matches[1]
+                }
+            } catch {}
+            if (-not $Version) {
+                $Version = "1.0.0"
             }
-        } catch {}
-        if (-not $Version) {
-            $Version = "1.0.0"
         }
     }
 }
@@ -266,6 +271,12 @@ function Build-PackageArchive([string]$Type, [string]$ZipFileName) {
         Copy-Item -Path $RadiumExe -Destination (Join-Path $stageDir "radium.exe") -Force
         Copy-Item -Path $RadiumNmhExe -Destination (Join-Path $stageDir "radium-nmh.exe") -Force
 
+        $desktopCatalog = Join-Path $RepoRoot "translations\desktop.json"
+        if (-not (Test-Path -LiteralPath $desktopCatalog)) { throw "Desktop translation catalog is missing: $desktopCatalog" }
+        $translationsDir = Join-Path $stageDir "translations"
+        New-Item -ItemType Directory -Force -Path $translationsDir | Out-Null
+        Copy-Item -LiteralPath $desktopCatalog -Destination (Join-Path $translationsDir "desktop.json") -Force
+
         # License and Documentation
         $docFiles = @("README.md", "LICENSE", "THIRD_PARTY_NOTICES.md")
         foreach ($doc in $docFiles) {
@@ -325,7 +336,7 @@ function Build-PackageArchive([string]$Type, [string]$ZipFileName) {
         $toolsDest = Join-Path $stageDir "tools\win-x64"
         New-Item -ItemType Directory -Force -Path $toolsDest | Out-Null
 
-        $components = @("radium.exe", "radium-nmh.exe", "extension", "manifests")
+        $components = @("radium.exe", "radium-nmh.exe", "translations/desktop.json", "extension", "manifests")
 
         if ($Type -eq "Full") {
             if ($Nm3u8dlExe -and (Test-Path $Nm3u8dlExe)) {

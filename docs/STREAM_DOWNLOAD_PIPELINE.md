@@ -152,3 +152,20 @@ For YouTube streams and watch URLs requiring JS signature decryption, adaptive f
 3. **Best-Effort Format Selection:** The pipeline selects the requested itag/resolution when available. YouTube may provide a lower available format; after non-empty/container/codec/duration validation, Radium retains that output, logs the actual dimensions, and reports them in the completed task details instead of deleting it for a resolution mismatch.
 4. **Post-Download Media Quality Verification:** `VerifyMediaQuality` probes probed dimensions with `ffprobe.exe` (or `ffmpeg.exe`), asserting that widescreen scope formats (e.g. 1920x960 2:1) satisfy 1080p requirements (`width >= 1800`), and rejecting degraded files with `ERR_STREAM_QUALITY_MISMATCH`.
 5. **Direct URL Transfer:** When player metadata or prewarming provides a usable direct URL, Radium starts one streaming HTTP request per video/audio track instead of a size probe followed by serial byte-range requests. A direct-path error is logged before fallback so telemetry exposes which transfer path failed.
+
+---
+
+## 7. Modular Multi-Site Video Extraction Architecture (`VideoExtractionManager`)
+
+To support broad website compatibility beyond YouTube—including **Bilibili**, **Facebook**, **Adult Video Platforms** (Pornhub, XVideos, XNXX, xHamster, SpankBang, RedTube, YouPorn, Eporner, etc.), and general third-party streaming platforms (Vimeo, Dailymotion, Twitch, X/Twitter, Instagram, TikTok, Reddit, Streamable, PeerTube)—Radium implements `IVideoExtractor` and `VideoExtractionManager` in `src/engine_stream/video_extractor.hpp/.cpp`:
+
+1. **Modular Extractor Interface (`IVideoExtractor`):**
+   - `BilibiliExtractor`: Parses `window.__playinfo__` (DASH separate `.m4s` video/audio tracks and `durl` progressive streams) and `window.__INITIAL_STATE__` (BV/AV IDs, multipart `?p=N` episodes), injects mandatory `Referer: https://www.bilibili.com/` and `Origin: https://www.bilibili.com` headers to prevent HTTP 403, pairs the selected video representation with the highest-bitrate audio representation for FFmpeg lossless muxing (`-c copy`), and falls back to `yt-dlp` when needed.
+   - `FacebookExtractor`: Normalizes mobile/share/reel/watch URLs (`m.facebook.com`, `fb.watch`, `/reel/`), strips `bytestart` and `byteend` range-trap parameters from `fbcdn.net` URLs (`StripCdnRangeTrapParams`), extracts HD/SD progressive and DASH representations from page HTML/GraphQL, detects login-wall responses (`ERR_EXTRACTOR_LOGIN_REQUIRED`), and supports explicit authorized browser session cookies via temporary Netscape cookie files scoped to the root registrable domain (`.facebook.com`).
+   - `AdultPlatformExtractor`: Extracts multi-resolution MP4 and HLS/DASH streams from `flashvars` / `mediaDefinitions`, `html5player.setVideo*`, and `<video>/<source>` structures across major adult video platforms, preserving signed CDN query parameters and site-specific `Referer`/`Origin` headers, with `yt-dlp` backend fallback.
+   - `GeneralYtDlpExtractor`: Invokes `yt-dlp.exe --dump-single-json --no-playlist` inside a restricted temporary directory with root-domain Netscape cookie files (`ExtractRegistrableDomain`), site-specific `--referer`/`--user-agent`/`--add-header`, and parses real available formats without inventing fake resolutions.
+2. **Real Format Selection & Expiration Handling:**
+   - The Add Download dialog (`WM_OPENIDM_PROBE_COMPLETE`) and `video.extract` IPC method populate quality selectors strictly from actual formats returned by `VideoExtractionManager`.
+   - `ParseUrlExpirationEpoch` and `IsStreamUrlExpired` inspect `expire=`, `expires=`, `e=`, `oe=`, `validto=`, and `hdnea=` parameters so expired CDN URLs are automatically refreshed before transfer or retry.
+   - `ExtractionDiagnosticReport::ToRedactedJson()` logs structured diagnostic telemetry with all sensitive cookies, tokens, and authorization headers redacted via `Logger::RedactSensitiveData`.
+

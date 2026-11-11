@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "brisk_engine/http_client.hpp"
 #include "common/crypto_utils.hpp"
+#include "common/version.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -733,7 +734,13 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             return Result<HttpResponseMeta>::Err(parsed_res.error->code, parsed_res.error->message);
         }
         ParsedUrl pu = *parsed_res.value;
+        auto dns_check_start = std::chrono::steady_clock::now();
         bool host_is_private = pu.is_loopback_or_private || HttpClient::CheckHostResolvesToPrivate(pu.host);
+        if (net_opts.on_timing) {
+            auto dns_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - dns_check_start).count();
+            net_opts.on_timing("Public-host safety DNS check", dns_check_ms);
+        }
         if (!allow_loopback_redirect && host_is_private) {
             return Result<HttpResponseMeta>::Err(
                 "ERR_NET_UNSAFE_HOST",
@@ -787,31 +794,65 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
 #ifdef _WIN32
         // ---------------------------------------------------------------------
         // Native Windows 11 WinHTTP Implementation (BUG-003 Fix)
+        // Shared persistent HINTERNET session pool for zero-latency DNS/TLS/TCP reuse
         // ---------------------------------------------------------------------
-        DWORD access_type = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
-        LPCWSTR proxy_name = WINHTTP_NO_PROXY_NAME;
-        LPCWSTR proxy_bypass = WINHTTP_NO_PROXY_BYPASS;
-        std::wstring wproxy;
-        std::wstring wbypass;
+        static std::mutex s_session_mu;
+        static std::map<std::string, HINTERNET> s_session_pool;
 
-        if (net_opts.proxy_mode == "direct") {
-            access_type = WINHTTP_ACCESS_TYPE_NO_PROXY;
-        } else if (net_opts.proxy_mode == "manual" && !net_opts.proxy_server.empty()) {
-            access_type = WINHTTP_ACCESS_TYPE_NAMED_PROXY;
-            wproxy = Utf8ToWide(net_opts.proxy_server);
-            proxy_name = wproxy.c_str();
-            if (!net_opts.proxy_bypass.empty()) {
-                wbypass = Utf8ToWide(net_opts.proxy_bypass);
-                proxy_bypass = wbypass.c_str();
+        std::string session_key = net_opts.proxy_mode + "|" + net_opts.proxy_server + "|" + net_opts.proxy_bypass;
+        HINTERNET hSession = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(s_session_mu);
+            auto it = s_session_pool.find(session_key);
+            if (it != s_session_pool.end() && it->second != nullptr) {
+                hSession = it->second;
+            } else {
+                DWORD access_type = WINHTTP_ACCESS_TYPE_NO_PROXY;
+                LPCWSTR proxy_name = WINHTTP_NO_PROXY_NAME;
+                LPCWSTR proxy_bypass = WINHTTP_NO_PROXY_BYPASS;
+                std::wstring wproxy;
+                std::wstring wbypass;
+
+                if (net_opts.proxy_mode == "system") {
+                    access_type = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+                } else if (net_opts.proxy_mode == "manual" && !net_opts.proxy_server.empty()) {
+                    access_type = WINHTTP_ACCESS_TYPE_NAMED_PROXY;
+                    wproxy = Utf8ToWide(net_opts.proxy_server);
+                    proxy_name = wproxy.c_str();
+                    if (!net_opts.proxy_bypass.empty()) {
+                        wbypass = Utf8ToWide(net_opts.proxy_bypass);
+                        proxy_bypass = wbypass.c_str();
+                    }
+                }
+
+                hSession = WinHttpOpen(
+                    L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                    access_type,
+                    proxy_name,
+                    proxy_bypass,
+                    0);
+                if (hSession) {
+                    // Set connection limit per server high to prevent WinHTTP from throttling concurrent connections
+                    DWORD max_conns = 64;
+                    WinHttpSetOption(hSession, WINHTTP_OPTION_MAX_CONNS_PER_SERVER, &max_conns, sizeof(max_conns));
+                    WinHttpSetOption(hSession, WINHTTP_OPTION_MAX_CONNS_PER_1_0_SERVER, &max_conns, sizeof(max_conns));
+
+                    // Enable modern HTTP/2 and HTTP/3 protocol flags for multiplexing and TCP efficiency on supported Windows versions
+                    DWORD http_protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
+#if defined(WINHTTP_PROTOCOL_FLAG_HTTP3)
+                    http_protocols |= WINHTTP_PROTOCOL_FLAG_HTTP3;
+#endif
+                    WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &http_protocols, sizeof(http_protocols));
+
+                    // Enable TCP Fast Open to eliminate connection handshake RTT
+#if defined(WINHTTP_OPTION_TCP_FAST_OPEN)
+                    DWORD fast_open = 1;
+                    WinHttpSetOption(hSession, WINHTTP_OPTION_TCP_FAST_OPEN, &fast_open, sizeof(fast_open));
+#endif
+                    s_session_pool[session_key] = hSession;
+                }
             }
         }
-
-        HINTERNET hSession = WinHttpOpen(
-            L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            access_type,
-            proxy_name,
-            proxy_bypass,
-            0);
         if (!hSession) {
             return Result<HttpResponseMeta>::Err("ERR_NET_INIT", "WinHttpOpen failed", true);
         }
@@ -819,17 +860,11 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         int connect_timeout = std::clamp(timeout_ms, 3000, 15000);
         int send_timeout = std::clamp(timeout_ms, 5000, 30000);
         int recv_timeout = std::clamp(timeout_ms, 5000, 60000);
-        WinHttpSetTimeouts(hSession, resolve_timeout, connect_timeout, send_timeout, recv_timeout);
-
-        // Enable modern HTTP/2 protocol flag for multiplexing and TCP efficiency on supported Windows versions
-        DWORD http_protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
-        WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &http_protocols, sizeof(http_protocols));
 
         std::wstring whost = Utf8ToWide(pu.host);
         HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(), pu.port, 0);
         if (!hConnect) {
             DWORD conn_err = GetLastError();
-            WinHttpCloseHandle(hSession);
             return Result<HttpResponseMeta>::Err("ERR_NET_CONNECT", "WinHttpConnect failed for " + pu.host + " (error " + std::to_string(conn_err) + ")", true);
         }
 
@@ -840,9 +875,9 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         if (!hRequest) {
             DWORD req_err = GetLastError();
             WinHttpCloseHandle(hConnect);
-            WinHttpCloseHandle(hSession);
             return Result<HttpResponseMeta>::Err("ERR_NET_REQUEST", "WinHttpOpenRequest failed (error " + std::to_string(req_err) + ")", true);
         }
+        WinHttpSetTimeouts(hRequest, resolve_timeout, connect_timeout, send_timeout, recv_timeout);
 
         // Disable automatic WinHTTP redirects so OpenIDM's SSRF redirect guard inspects every hop
         DWORD disable_redirects = WINHTTP_DISABLE_REDIRECTS;
@@ -875,7 +910,6 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         auto cleanup_winhttp = [&]() {
             if (hRequest) { WinHttpCloseHandle(hRequest); hRequest = nullptr; }
             if (hConnect) { WinHttpCloseHandle(hConnect); hConnect = nullptr; }
-            if (hSession) { WinHttpCloseHandle(hSession); hSession = nullptr; }
         };
 
         std::ostringstream hdr_stream;
@@ -897,8 +931,19 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             WinHttpAddRequestHeaders(hRequest, wheaders.c_str(), static_cast<DWORD>(wheaders.size()), WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
         }
 
-        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-            !WinHttpReceiveResponse(hRequest, nullptr)) {
+        auto send_start = std::chrono::steady_clock::now();
+        BOOL send_ok = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+        if (net_opts.on_timing) {
+            net_opts.on_timing("WinHTTP send/connect/TLS", std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - send_start).count());
+        }
+        auto response_start = std::chrono::steady_clock::now();
+        BOOL response_ok = send_ok && WinHttpReceiveResponse(hRequest, nullptr);
+        if (send_ok && net_opts.on_timing) {
+            net_opts.on_timing("WinHTTP response headers", std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - response_start).count());
+        }
+        if (!send_ok || !response_ok) {
             DWORD winhttp_err = GetLastError();
             cleanup_winhttp();
             std::string err_code = "ERR_NET_SEND";
@@ -987,18 +1032,36 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         uint64_t bytes_delivered = 0;
         constexpr size_t kSocketBufSize = 262144;
         auto rbuf = std::make_unique<uint8_t[]>(kSocketBufSize);
+        auto first_body_byte_start = std::chrono::steady_clock::now();
+        bool recorded_first_body_byte = false;
         while (!meta.has_content_length || bytes_delivered < meta.content_length) {
             if (cancel_flag.load()) {
                 cleanup_winhttp();
                 return Result<HttpResponseMeta>::Err("ERR_CANCELED", "Transfer canceled");
             }
+            DWORD bytes_avail = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &bytes_avail)) {
+                DWORD err = GetLastError();
+                cleanup_winhttp();
+                return Result<HttpResponseMeta>::Err("ERR_NET_TIMEOUT", "WinHttpQueryDataAvailable failed (error " + std::to_string(err) + ")", true, true);
+            }
+            if (bytes_avail == 0) break;
+            DWORD to_read = std::clamp<DWORD>(bytes_avail, 4096, static_cast<DWORD>(kSocketBufSize));
+            if (bytes_delivered == 0 && to_read > 16384) {
+                to_read = 16384; // Deliver first chunk immediately without waiting to fill 256 KiB
+            }
             DWORD bytes_read = 0;
-            if (!WinHttpReadData(hRequest, rbuf.get(), static_cast<DWORD>(kSocketBufSize), &bytes_read)) {
+            if (!WinHttpReadData(hRequest, rbuf.get(), to_read, &bytes_read)) {
                 DWORD err = GetLastError();
                 cleanup_winhttp();
                 return Result<HttpResponseMeta>::Err("ERR_NET_TIMEOUT", "WinHttpReadData failed (error " + std::to_string(err) + ")", true, true);
             }
             if (bytes_read == 0) break;
+            if (!recorded_first_body_byte && net_opts.on_timing) {
+                recorded_first_body_byte = true;
+                net_opts.on_timing("WinHTTP first body byte", std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - first_body_byte_start).count());
+            }
             if (on_chunk && !on_chunk(rbuf.get(), bytes_read)) {
                 cleanup_winhttp();
                 return Result<HttpResponseMeta>::Err("ERR_CONSUMER_ABORTED", "Body consumer aborted transfer");
@@ -1066,6 +1129,10 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
             if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0) {
+                int nodelay = 1;
+                setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+                int rcvbuf = 1048576; // 1 MB TCP window receive buffer
+                setsockopt(sock, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&rcvbuf), sizeof(rcvbuf));
                 break;
             }
             close(sock);
@@ -1150,7 +1217,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             req << k << ": " << v << "\r\n";
         }
         if (!has_ua) {
-            req << "User-Agent: Radium/1.0.0 (Windows NT 10.0; Win64; x64)\r\n";
+            req << "User-Agent: Radium/" << RADIUM_VERSION_STRING << " (Windows NT 10.0; Win64; x64)\r\n";
         }
         if (range_start.has_value()) {
             req << "Range: bytes=" << *range_start << "-";
@@ -1169,7 +1236,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
 
         std::string header_buf;
         header_buf.reserve(4096);
-        std::vector<char> tmp_vec(8192);
+        std::vector<char> tmp_vec(131072);
         char* tmp = tmp_vec.data();
         size_t header_end_pos = std::string::npos;
         while ((header_end_pos = header_buf.find("\r\n\r\n")) == std::string::npos) {
@@ -1349,8 +1416,8 @@ Result<HttpResponseMeta> HttpClient::ProbeResource(
     return PerformGet(
         url,
         combined,
-        std::nullopt,
-        std::nullopt,
+        uint64_t{0},
+        uint64_t{0},
         timeout_ms,
         allow_loopback,
         cancel,

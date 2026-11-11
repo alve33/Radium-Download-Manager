@@ -45,7 +45,9 @@ public:
     static bool MigrateLegacyDataIfNeeded(const std::filesystem::path& target_radium_dir);
 
     // Resolves platform-appropriate application data directory (%LOCALAPPDATA%\Radium Download Manager on Windows 11)
+    // Automatically checks for portable mode marker ('radium.portable' or 'portable.dat') in executable directory.
     static std::filesystem::path GetDefaultAppDataDir();
+    static bool IsPortableMode(const std::filesystem::path& exe_dir);
 
     // Resolves platform-appropriate default downloads directory (%USERPROFILE%\Downloads\Radium on Windows 11)
     static std::filesystem::path GetDefaultDownloadsDir(const std::filesystem::path& exe_dir);
@@ -76,6 +78,9 @@ public:
     // completely avoiding MSVC path::string() codecvt exception (No mapping for Unicode character in target multi-byte code page).
     static std::string PathToUtf8(const std::filesystem::path& p);
     static std::filesystem::path Utf8ToPath(std::string_view utf8_str);
+
+    // Normalizes file paths for robust case-insensitive comparison on Windows and case-sensitive on POSIX.
+    static bool PathsEquivalent(const std::filesystem::path& p1, const std::filesystem::path& p2);
 };
 
 } // namespace openidm

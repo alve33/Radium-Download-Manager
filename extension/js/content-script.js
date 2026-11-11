@@ -441,12 +441,19 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       }
 
       if (onDownloadClick) {
+        const pageLoc = (doc && doc.location && doc.location.href) ? doc.location.href : (typeof location !== "undefined" ? location.href : "");
+        let safeTopLoc = pageLoc;
+        try {
+          if (typeof window !== "undefined" && window.top && window.top.location && window.top.location.href) {
+            safeTopLoc = window.top.location.href;
+          }
+        } catch (_) {}
         onDownloadClick({
           videoSrc: (chosenQ && chosenQ.videoUrl) ? chosenQ.videoUrl : (liveIsBlob ? "" : liveSrc),
           isMseBlob: liveIsBlob,
-          pageTitle: doc.title || "video",
-          frameUrl: (doc.location ? doc.location.href : ""),
-          tabUrl: (doc.location ? doc.location.href : ""),
+          pageTitle: (doc && doc.title) ? doc.title : (typeof document !== "undefined" ? document.title : "video"),
+          frameUrl: pageLoc,
+          tabUrl: safeTopLoc || pageLoc,
           isIframe: (typeof window !== "undefined" && window.self !== window.top),
           buttonEl: btn,
           selectEl,
@@ -873,7 +880,7 @@ function extractEligiblePageLinks(doc) {
   const seen = new Set();
   const results = [];
 
-  const extCategories = {
+  const extCategories = (typeof RADIUM_FILE_CATEGORIES !== "undefined") ? RADIUM_FILE_CATEGORIES : {
     zip: "Compressed", rar: "Compressed", "7z": "Compressed", tar: "Compressed", gz: "Compressed", bz2: "Compressed", xz: "Compressed",
     pdf: "Documents", doc: "Documents", docx: "Documents", xls: "Documents", xlsx: "Documents", ppt: "Documents", pptx: "Documents", epub: "Documents", txt: "Documents", csv: "Documents",
     exe: "Applications", msi: "Applications", dmg: "Applications", pkg: "Applications", deb: "Applications", rpm: "Applications", apk: "Applications",
@@ -913,8 +920,30 @@ function extractEligiblePageLinks(doc) {
   return results;
 }
 
+function injectCatchScriptIfNeeded() {
+  // In Firefox MV3 (or browsers where content scripts cannot declare "world": "MAIN"),
+  // inject catch.js via a <script> element into the DOM so it runs in the page's MAIN world.
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) {
+      if (document.getElementById("radium-injected-catch-script")) return;
+      const script = document.createElement("script");
+      script.id = "radium-injected-catch-script";
+      script.src = chrome.runtime.getURL("catch-script/catch.js");
+      script.async = false;
+      const target = document.head || document.documentElement;
+      if (target) {
+        target.appendChild(script);
+        script.remove();
+      }
+    }
+  } catch (err) {
+    // Suppress potential CSP restrictions gracefully
+  }
+}
+
 function initContentScript() {
   if (typeof document === "undefined" || typeof window === "undefined") return;
+  injectCatchScriptIfNeeded();
 
   // 1. Intercept link clicks with capture phase at window level
   // Pointerdown listener for generic interactions (SEC-001 enforces strict anchor token binding in handleLinkClick)
@@ -1210,11 +1239,28 @@ function initContentScript() {
                 lastCand.qualities.find(q => !q.isAudioOnly) ||
                 lastCand.qualities[0];
     }
-    const candidateId = mediaMeta.candidateId || (lastCand && lastCand.candidateId) || "";
-    const qualityId = mediaMeta.qualityId || (chosenQ && (chosenQ.id || chosenQ.resolution)) || (lastCand && lastCand.qualityId) || "";
-    const resolution = mediaMeta.resolution || (chosenQ && chosenQ.resolution) || (lastCand && lastCand.resolution) || "";
-    const videoFilter = mediaMeta.videoFilter || (chosenQ && (chosenQ.videoFilter || chosenQ.resolution)) || "best";
-    const videoSrc = mediaMeta.videoSrc || (chosenQ && chosenQ.videoUrl) || (lastCand ? (lastCand.url || lastCand.videoUrl) : "") || "";
+    // Never pick subtitle files (.srt, .vtt) as the primary video source
+    let candidateId = mediaMeta.candidateId || (lastCand && lastCand.candidateId) || "";
+    let qualityId = mediaMeta.qualityId || (chosenQ && (chosenQ.id || chosenQ.resolution)) || (lastCand && lastCand.qualityId) || "";
+    let resolution = mediaMeta.resolution || (chosenQ && chosenQ.resolution) || (lastCand && lastCand.resolution) || "";
+    let videoFilter = mediaMeta.videoFilter || (chosenQ && (chosenQ.videoFilter || chosenQ.resolution)) || "best";
+    let videoSrc = mediaMeta.videoSrc || (chosenQ && chosenQ.videoUrl) || (lastCand ? (lastCand.url || lastCand.videoUrl) : "") || "";
+    if (videoSrc && (videoSrc.toLowerCase().includes(".srt") || videoSrc.toLowerCase().includes(".vtt"))) {
+      videoSrc = "";
+      candidateId = "";
+    }
+    const curLoc = (typeof location !== "undefined" && location.href) ? location.href : "";
+    let effectivePageUrl = mediaMeta.tabUrl || mediaMeta.frameUrl || curLoc;
+    try {
+      if (typeof window !== "undefined" && window.top && window.top.location && window.top.location.href) {
+        effectivePageUrl = window.top.location.href;
+      }
+    } catch (_) {}
+    const isSupportedSite = /bilibili\.com|b23\.tv|youtube\.com|youtu\.be|facebook\.com|fb\.watch|fbcdn\.net|pornhub\.com|phncdn\.com/i.test(effectivePageUrl) ||
+                            /bilibili\.com|b23\.tv|facebook\.com|pornhub\.com/i.test(curLoc);
+    if (isSupportedSite && (!videoSrc || videoSrc.startsWith("blob:"))) {
+      videoSrc = effectivePageUrl;
+    }
 
     safeSendRuntimeMessage({
       action: "downloadMedia",
@@ -1225,9 +1271,8 @@ function initContentScript() {
       selectedQuality: chosenQ,
       url: videoSrc,
       isMseBlob: Boolean(mediaMeta.isMseBlob),
-      // The user explicitly pressed the in-player download button. Start the
-      // selected stream immediately instead of opening a second confirmation.
-      autoStart: true,
+      // Browser media downloads must prompt the user via the New Download dialog before transferring
+      autoStart: false,
       clickTime: Date.now(),
       pageTitle: mediaMeta.pageTitle || document.title || "video",
       tabUrl: mediaMeta.tabUrl || location.href,

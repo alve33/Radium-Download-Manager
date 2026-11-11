@@ -14,6 +14,7 @@ namespace openidm {
 class CryptoUtils {
 public:
     static Result<std::string> ComputeFileSha256Hex(const std::filesystem::path& file_path);
+    static Result<std::string> ComputeFileMd5Hex(const std::filesystem::path& file_path);
     static std::string ComputeBufferSha256Hex(std::string_view data);
     static std::string ComputeBufferSha1Hex(std::string_view data);
     static std::vector<uint8_t> ComputeBufferSha1Raw(const uint8_t* data, size_t len);

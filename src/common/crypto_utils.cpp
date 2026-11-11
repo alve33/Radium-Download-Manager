@@ -100,6 +100,48 @@ std::vector<uint8_t> CryptoUtils::ComputeBufferSha1Raw(const uint8_t* data, size
     return out;
 }
 
+Result<std::string> CryptoUtils::ComputeFileMd5Hex(const std::filesystem::path& file_path) {
+    std::ifstream ifs(file_path, std::ios::binary);
+    if (!ifs) {
+        return Result<std::string>::Err("ERR_STORAGE_READ", "Cannot open file for MD5: " + file_path.string());
+    }
+#ifdef _WIN32
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+    unsigned char hash[16]{};
+    BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_MD5_ALGORITHM, nullptr, 0);
+    BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0);
+    std::vector<char> buf(65536);
+    while (ifs) {
+        ifs.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        std::streamsize got = ifs.gcount();
+        if (got > 0) {
+            BCryptHashData(hHash, reinterpret_cast<PUCHAR>(buf.data()), static_cast<ULONG>(got), 0);
+        }
+    }
+    BCryptFinishHash(hHash, hash, sizeof(hash), 0);
+    BCryptDestroyHash(hHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+    return Result<std::string>::Ok(BytesToHex(hash, 16));
+#else
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_md5(), nullptr);
+    std::vector<char> buf(65536);
+    while (ifs) {
+        ifs.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        std::streamsize got = ifs.gcount();
+        if (got > 0) {
+            EVP_DigestUpdate(ctx, buf.data(), static_cast<size_t>(got));
+        }
+    }
+    unsigned char hash[16]{};
+    unsigned int len = 0;
+    EVP_DigestFinal_ex(ctx, hash, &len);
+    EVP_MD_CTX_free(ctx);
+    return Result<std::string>::Ok(BytesToHex(hash, len));
+#endif
+}
+
 Result<std::string> CryptoUtils::ComputeFileSha256Hex(const std::filesystem::path& file_path) {
     std::ifstream ifs(file_path, std::ios::binary);
     if (!ifs) {

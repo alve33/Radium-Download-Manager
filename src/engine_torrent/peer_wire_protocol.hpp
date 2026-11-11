@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "common/crypto_utils.hpp"
+#include "common/version.hpp"
 #include "engine_torrent/bencode.hpp"
 
 namespace openidm::torrent {
@@ -24,7 +25,10 @@ constexpr size_t kPieceHashLength = 20;
 constexpr size_t kPeerIdLength = 20;
 constexpr size_t kBlockLength = 16384; // 16 KB standard block length
 constexpr size_t kHandshakeLength = 68;
-constexpr size_t kDefaultMaxOutstandingRequests = 6;
+// Keep enough 16 KiB blocks in flight to cover typical peer RTTs. Six requests
+// cap each connection at 96 KiB outstanding, which leaves fast links idle while
+// waiting for responses. 64 requests provide a 1 MiB per-peer pipeline.
+constexpr size_t kDefaultMaxOutstandingRequests = 64;
 constexpr size_t kCompactLenIpv4 = 6;
 constexpr size_t kCompactLenIpv6 = 18;
 
@@ -237,7 +241,7 @@ public:
         BencodeValue m = BencodeValue::MakeDict();
         m.as_dict()["ut_metadata"] = BencodeValue(static_cast<int64_t>(ut_metadata_id));
         root.as_dict()["m"] = std::move(m);
-        root.as_dict()["v"] = BencodeValue("Radium 1.0.0");
+        root.as_dict()["v"] = BencodeValue("Radium " RADIUM_VERSION_STRING);
         if (metadata_size > 0) {
             root.as_dict()["metadata_size"] = BencodeValue(static_cast<int64_t>(metadata_size));
         }

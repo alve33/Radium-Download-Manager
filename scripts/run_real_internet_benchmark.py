@@ -474,7 +474,7 @@ def generate_markdown_report(specs: dict, probe: dict, idm_res: dict, flux_res: 
     """Generates the verified Markdown benchmark report."""
     timestamp_utc = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
-    md = f"""# Real Internet Download Performance Benchmark: Flux vs Internet Download Manager (IDM)
+    md = f"""# Real Internet Download Performance Benchmark: Radium vs Internet Download Manager (IDM)
 
 **Document Status:** Published Benchmark Report  
 **Benchmark Execution Date:** {timestamp_utc}  
@@ -569,7 +569,7 @@ Both applications targeted the identical direct HTTPS download URL (`{probe['url
 
 def main():
     print("=" * 70)
-    print("Flux vs IDM Real Internet Download Benchmark Harness (Hetzner 100MB)")
+    print("Radium vs IDM Real Internet Download Benchmark Harness (Hetzner 100MB)")
     print("=" * 70)
 
     WORK_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,30 @@
+{
+  "version": "1.0.0",
+  "product_name": "Radium Download Manager",
+  "short_name": "Radium",
+  "host_platform": "Windows 11 (AMD64)",
+  "flux_binary_bytes": 3064320,
+  "flux_nmh_binary_bytes": 109568,
+  "nm3u8dl_re_worker_bytes": 17197568,
+  "combined_core_binaries_kb": 3099.5,
+  "total_all_three_binaries_kb": 19894.0,
+  "cold_startup_list_median_ms": 41.37,
+  "idle_daemon_rss_mb": 12.25,
+  "peak_http_8conn_rss_mb": 18.21,
+  "peak_stream_worker_rss_mb": 13.79,
+  "system_ffmpeg_baseline_rss_mb": 6.84,
+  "peak_stream_with_ffmpeg_rss_mb": 14.2,
+  "large_1000_tasks_snapshot_ms": 77.33,
+  "throughput_16mb_8conn_median_mbps": 176.2,
+  "cpu_time_16mb_8conn_ms": 171.88,
+  "leftover_temp_files_count": 0,
+  "timestamp_utc": "2026-11-07T14:40:07.835462+00:00",
+  "python_version": "3.12.10",
+  "os_environment": {
+    "system": "Windows",
+    "release": "11",
+    "version": "10.0.26200",
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 142 Stepping 12, GenuineIntel"
+  }
+}

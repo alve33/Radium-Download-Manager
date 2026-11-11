@@ -47,6 +47,30 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
 
+# Resolve authoritative version from root VERSION file if not explicitly provided or defaulted
+if (-not $Version -or $Version -eq "1.0.0.0") {
+    $versionFilePath = Join-Path $RepoRoot "VERSION"
+    if (Test-Path $versionFilePath) {
+        $rawVer = (Get-Content $versionFilePath -Raw).Trim()
+        if ($rawVer -match '^(\d+)\.(\d+)\.(\d+)') {
+            $Version = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+        }
+    }
+}
+
+$configFilePath = Join-Path $RepoRoot "config\radium_config.json"
+if (Test-Path $configFilePath) {
+    try {
+        $cfgJson = Get-Content $configFilePath -Raw | ConvertFrom-Json
+        if ($cfgJson.product.msix_package_name -and ($PackageName -eq "RadiumDownloadManager")) {
+            $PackageName = $cfgJson.product.msix_package_name
+        }
+        if ($cfgJson.product.publisher_display_name -and ($PublisherDisplayName -eq "Radium Contributors")) {
+            $PublisherDisplayName = $cfgJson.product.publisher_display_name
+        }
+    } catch {}
+}
+
 if (-not $OutputDir) {
     $OutputDir = Join-Path $RepoRoot "release"
 }

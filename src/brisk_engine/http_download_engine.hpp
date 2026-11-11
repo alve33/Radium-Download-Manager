@@ -36,6 +36,7 @@ struct EngineProgress {
     std::string resolved_filename;
     std::string etag;
     std::string last_modified;
+    std::string status_detail;
     std::vector<Segment> segments;
 };
 

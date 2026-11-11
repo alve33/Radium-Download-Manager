@@ -1230,10 +1230,17 @@ async function runTests() {
   const mDev = JSON.parse(fs.readFileSync(path.join(rootDir, "extension", "manifest.json"), "utf8"));
   const mChr = JSON.parse(fs.readFileSync(path.join(rootDir, "extension", "manifest.chromium.json"), "utf8"));
   const mFox = JSON.parse(fs.readFileSync(path.join(rootDir, "extension", "manifest.firefox.json"), "utf8"));
+  const versionPath = path.join(rootDir, "VERSION");
+  if (fs.existsSync(versionPath)) {
+    const expectedVer = fs.readFileSync(versionPath, "utf8").trim();
+    assert.strictEqual(mDev.version, expectedVer, "manifest.json version matches authoritative VERSION file");
+    assert.strictEqual(mChr.version, expectedVer, "manifest.chromium.json version matches authoritative VERSION file");
+    assert.strictEqual(mFox.version, expectedVer, "manifest.firefox.json version matches authoritative VERSION file");
+  }
   assert.strictEqual(JSON.stringify(mDev), JSON.stringify(mChr), "manifest.json and manifest.chromium.json must remain identical");
   assert.strictEqual(mDev.name, "Radium Download Manager");
   assert.strictEqual(mFox.name, "Radium Download Manager");
-  console.log("  [Manifest Parity] verified manifest.json == manifest.chromium.json -> PASS");
+  console.log("  [Manifest Parity & Central Version] verified manifest versions match root VERSION -> PASS");
 
   // [Scenario 27] Regression SEC-001 & BUG-039 Invariant Verification
   console.log("\n[20/20] Testing Regression Invariants for SEC-001 (Anchor-Bound Blob Authorization) & BUG-039 (Firefox MV3)...");
@@ -1251,8 +1258,88 @@ async function runTests() {
   testSec001AdversarialSuite();
   console.log("  [Regression Invariants] verified SEC-001 and BUG-039 invariants -> PASS");
 
+  // [Scenario 28] Multi-Site Video Extraction & Compatibility Overhaul Verification
+  console.log("\n[21/21] Testing Multi-Site Video Extraction (Bilibili, Facebook, Adult Platforms, Vimeo, Twitch)...");
+  const fns = require("../extension/js/function.js");
+  // 1. Verify isSupportedVideoSiteWatchUrl & isWebpageWatchUrl for Bilibili, Facebook, Adult Sites, and general platforms
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.bilibili.com/video/BV1xx411c7mD?p=2"), true, "Bilibili BV watch URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://b23.tv/BV1xx411c7mD"), true, "Bilibili b23.tv short URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.facebook.com/watch/?v=1234567890"), true, "Facebook Watch URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.facebook.com/reel/987654321"), true, "Facebook Reel URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://fb.watch/abc123xyz/"), true, "fb.watch short URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.pornhub.com/view_video.php?viewkey=64a1b2c3d4"), true, "Pornhub viewkey URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.xvideos.com/video.kdfj123/test_title"), true, "XVideos video URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://xhamster.com/videos/sample-video-12345"), true, "xHamster video URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://spankbang.com/5abcd/video/sample"), true, "SpankBang video URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://vimeo.com/123456789"), true, "Vimeo video URL recognized");
+  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.dailymotion.com/video/x8abcde"), true, "Dailymotion video URL recognized");
+  // Direct media files on those hosts must NOT be classified as webpage watch URLs
+  assert.strictEqual(fns.isWebpageWatchUrl("https://cdn.bilibili.com/video/sample.mp4"), false, "Direct MP4 URL is not a webpage watch URL");
+  assert.strictEqual(fns.isWebpageWatchUrl("https://ev-h.phncdn.com/hls/videos/master.m3u8?validfrom=1700000000"), false, "Direct HLS master.m3u8 is not a webpage watch URL");
+
+  // 2. Verify Facebook CDN (fbcdn.net) bytestart/byteend range trap stripping in normalizeMediaUrl
+  const rawFbCdn = "https://video.fdac1-1.fna.fbcdn.net/v/t42.1790-2/100000_n.mp4?_nc_cat=104&bytestart=0&byteend=524287&efg=eyJ2ZW5jb2RlX3RhZyI6InN2ZV9oZCJ9&oh=abc&oe=6789ABCD";
+  const normFbCdn = fns.normalizeMediaUrl(rawFbCdn);
+  assert.ok(!normFbCdn.includes("bytestart="), "fbcdn.net bytestart parameter must be stripped");
+  assert.ok(!normFbCdn.includes("byteend="), "fbcdn.net byteend parameter must be stripped");
+  assert.ok(normFbCdn.includes("oh=abc") && normFbCdn.includes("oe=6789ABCD"), "fbcdn.net signature params oh/oe must be preserved");
+
+  // 3. Verify Bilibili .m4s chunk spam is suppressed from individual file capture
+  const biliChunkClassified = fns.classifyNetworkResource({
+    url: "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/12/34/56789/56789-1-30080.m4s?e=ig8euxZM2rNcNbdlhoNvNC8BqJIzNbfqXBvEqxTEto8BTrNvN0GvT90W5JZMkX_YN0MvXg8gNEV4NC8xNEV4N03eN0B5tZlqNxTEto8BTrNvNeZVuJ10Kj_g2UB02J0mN0B5tZlqNCNEto8BTrNvNC7MTX502C8f2jmMQJ6mqF2fka1mqx6gqj0eN0B599M=",
+    statusCode: 206,
+    tabId: 88,
+    responseHeaders: [
+      { name: "Content-Type", value: "video/iso.segment" },
+      { name: "Content-Range", value: "bytes 0-256000/15400200" }
+    ]
+  });
+  assert.strictEqual(biliChunkClassified, null, "Bilibili bilivideo.com .m4s DASH segment must be suppressed from individual file capture");
+
+  // 4. Verify Bilibili window.__playinfo__ extraction in catch.js
+  const capturedBiliEvents = [];
+  const mockBiliWin = {
+    location: {
+      hostname: "www.bilibili.com",
+      href: "https://www.bilibili.com/video/BV1xx411c7mD"
+    },
+    document: {
+      title: "Bilibili 1080p Test_哔哩哔哩_bilibili",
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener: () => {}
+    },
+    __playinfo__: {
+      code: 0,
+      data: {
+        dash: {
+          duration: 120,
+          video: [
+            { id: 80, baseUrl: "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/video_1080p.m4s", width: 1920, height: 1080, bandwidth: 3000000, codecs: "avc1.640028" },
+            { id: 64, baseUrl: "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/video_720p.m4s", width: 1280, height: 720, bandwidth: 1500000, codecs: "avc1.64001f" }
+          ],
+          audio: [
+            { id: 30280, baseUrl: "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/audio_192k.m4s", bandwidth: 192000, codecs: "mp4a.40.2" }
+          ]
+        }
+      }
+    },
+    addEventListener: () => {}
+  };
+  installDeepSearchHooks(mockBiliWin, "test-bili-nonce", (ev) => capturedBiliEvents.push(ev));
+  assert.ok(capturedBiliEvents.length >= 1, "catch.js extracted Bilibili window.__playinfo__ DASH streams");
+  const biliEvent = capturedBiliEvents[0];
+  assert.strictEqual(biliEvent.pageTitle, "Bilibili 1080p Test");
+  assert.strictEqual(biliEvent.resolution, "1080p");
+  assert.strictEqual(biliEvent.requiresAudioMux, true);
+  assert.strictEqual(biliEvent.videoUrl, "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/video_1080p.m4s");
+  assert.strictEqual(biliEvent.pairedAudioUrl, "https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/audio_192k.m4s");
+  assert.strictEqual(biliEvent.qualities.length, 2);
+  console.log("  -> PASS");
+
   console.log("\n=======================================================");
-  console.log("Browser Extension Suite: 18/18 suites (26/26 edge scenarios) PASSED.");
+  console.log("Browser Extension Suite: 19/19 suites (28/28 edge scenarios) PASSED.");
   console.log("=======================================================");
   process.exit(0);
 }

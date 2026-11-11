@@ -23,7 +23,7 @@ FFMPEG_SHA256="40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6"
 JOBS="${JOBS:-$(nproc)}"
 
 echo "============================================================"
-echo "  Flux Minimal FFmpeg Build (MSYS2/MinGW-w64)"
+echo "  Radium Minimal FFmpeg Build (MSYS2/MinGW-w64)"
 echo "  Work Dir  : $WORK_DIR"
 echo "  Output    : $OUTPUT_DIR/ffmpeg.exe"
 echo "  Jobs      : $JOBS"
@@ -41,7 +41,7 @@ fi
 GCC_VERSION=$(x86_64-w64-mingw32-gcc --version | head -1)
 echo "  GCC: $GCC_VERSION"
 if ! command -v nasm &>/dev/null; then
-    echo "WARNING: nasm not found - x264/x265 encoders won't build (not needed for Flux)."
+    echo "WARNING: nasm not found - x264/x265 encoders won't build (not needed for Radium)."
 fi
 
 # 2. Download and verify source

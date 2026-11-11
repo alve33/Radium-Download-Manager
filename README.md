@@ -11,6 +11,10 @@
 <h1 align="center">Radium Download Manager</h1>
 
 <p align="center">
+  <b>English</b> · <a href="README.ja.md">日本語</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.fr.md">Français</a> · <a href="README.pt-BR.md">Português</a> · <a href="README.de-DE.md">Deutsch</a> · <a href="README.ru-RU.md">Русский</a> · <a href="README.it-IT.md">Italiano</a> · <a href="README.ar-SA.md">العربية</a>
+</p>
+
+<p align="center">
   <b>Fast, simple Windows 11 download manager with built-in video fetching.</b><br>
   Accelerate multi-connection file downloads and capture videos from supported browsers (HLS, DASH, and web streams).<br>
   Lightweight native C++20 &amp; Win32 app with zero Electron bloat, minimal RAM, and no background noise.
@@ -30,6 +34,9 @@
   <a href="#quick-overview"><b>Overview</b></a> ·
   <a href="#downloads--installation"><b>Downloads</b></a> ·
   <a href="#key-features"><b>Features</b></a> ·
+  <a href="#light-and-dark-themes"><b>Themes</b></a> ·
+  <a href="#multilingual-interface"><b>Languages</b></a> ·
+  <a href="#screenshots"><b>Screenshots</b></a> ·
   <a href="#performance-benchmarks"><b>Benchmarks vs IDM</b></a> ·
   <a href="#high-performance-download-engine"><b>Download Engine</b></a> ·
   <a href="#bittorrent-downloads"><b>BitTorrent</b></a> ·
@@ -167,6 +174,122 @@ Cryptographic checksums for published release binaries are available in [SHA256S
 - **Site Grabber:** Bounded BFS crawler with depth (1–5) and page caps, HTML/CSS link extraction, redirect base URL propagation, and strict SSRF defenses against private/loopback/multicast destinations.
 - **Antivirus Scanning:** Post-download Windows Defender (`MpCmdRun.exe`) validation with explicit threat detection, exit code 2 stdout discrimination, and strict mode (`av_strict_mode`) to fail unverified files on scanner error.
 - **Automatic Categorization:** Deterministic rule precedence (Site Rules > Custom Extensions > Standard Filename > MIME Content-Type > General) with sanitized directory path routing.
+
+<br>
+
+## Light and Dark Themes
+
+Radium is tailored for Windows 11 with comprehensive first-class support for both light and dark visual aesthetics. Whether working in bright daytime ambient environments or low-light workspaces, the entire user interface—from table grids and progress indicators to configuration modals—adapts cleanly.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>☀️ Light Mode</h3>
+      <ul>
+        <li><b>Aesthetic:</b> Crisp, modern high-contrast white canvas (<code>#FFFFFF</code>) with light neutral surface elevation (<code>#F5F7F9</code>) and soft separators (<code>#E1E8ED</code>).</li>
+        <li><b>Primary Accent:</b> Refined Sky Blue (<code>#168BCB</code>) for selection states, focus highlights, and active progress gauges.</li>
+        <li><b>Typography:</b> Deep charcoal text (<code>#202124</code>) and slate secondary metadata (<code>#656B73</code>) meeting WCAG AAA legibility targets.</li>
+        <li><b>Native Windows Theming:</b> Seamless integration with Windows <code>Explorer</code> theme controls and lightweight translucent glass accents.</li>
+      </ul>
+    </td>
+    <td width="50%" valign="top">
+      <h3>🌙 Dark Mode</h3>
+      <ul>
+        <li><b>Aesthetic:</b> Deep space slate canvas (<code>#0F172A</code> / <code>#161618</code>) with elevated navy surfaces (<code>#1E293B</code> / <code>#28282E</code>).</li>
+        <li><b>Primary Accent:</b> Signature Coral Red (<code>#FF4757</code>) preserving Radium's classic visual identity alongside Celestial Violet (<code>#8B5CF6</code>) stream badges.</li>
+        <li><b>Typography:</b> Crisp off-white text (<code>#F8FAFC</code>) with muted slate secondary labels (<code>#94A3B8</code>) for comfortable night viewing.</li>
+        <li><b>Native Windows Theming:</b> Full <code>DarkMode_Explorer</code> control styling with dark window frames and subtle edge lighting.</li>
+      </ul>
+    </td>
+  </tr>
+</table>
+
+### Dynamic Theme Switching & System Detection
+- **System Synchronization (`system`):** Automatically polls and adheres to the Windows system-wide app theme (`AppsUseLightTheme` in Windows Personalize registry). Changing your Windows theme immediately adjusts Radium without a restart.
+- **Explicit Modes (`light` or `dark`):** Pin Radium permanently to your preferred mode regardless of OS settings.
+- **Instant Dedicated Toolbar Toggle:** Easily switch between Light and Dark modes on the fly using the dedicated theme toggle button located directly in the main toolbar, complete with tactile press animation and persistent configuration saving.
+- **Persistence:** Selected theme choices are immediately committed to local configuration and retained across application restarts.
+
+<br>
+
+## Multilingual Interface
+
+Radium is built from the ground up for a global user base. Internationalization is integrated natively into the core Win32 desktop application, utilizing ISO standard language catalogs and offline translation resources with zero external web dependency.
+
+> [!NOTE]
+> **README Translations vs. Application Interface Languages:**
+> To keep the repository clean and maintainable, complete GitHub documentation is provided in **12 primary README languages** (accessible via the selector at the top). The actual **Radium desktop application**, however, includes built-in interface catalogs for **24 native languages and writing systems**!
+
+### Key Multilingual Capabilities
+- **Comprehensive Settings Selection:** Switch application languages instantly through the **Settings Center** (`General` tab) or the sidebar language entry.
+- **Native Writing Systems:** All languages are displayed in their authentic native scripts (e.g., *日本語*, *한국어*, *العربية*, *Русский*) so users can always identify their native language effortlessly.
+- **Instant Switching & Persistent Preferences:** Changing language preferences updates the interface dynamically and persists seamlessly across app restarts.
+- **Automatic System Locale Resolution:** On first launch, Radium queries `GetUserDefaultLocaleName` to automatically match your Windows display language.
+- **Offline & Self-Contained:** Language strings are loaded directly from local JSON catalogs (`translations/desktop.json`) with fallback to English for missing keys.
+- **Script & Unicode Fidelity:** Native ISO C++20 Unicode pipeline using UTF-8 internally and `std::wstring` at Win32 boundaries, with right-to-left (RTL) layout awareness designed for Arabic (`ar-SA`) and Persian (`fa-IR`).
+
+### Application Language Catalog Status
+
+The table below reflects the actual status of language catalogs in the Radium desktop application (`src/ui/localization.cpp` and `translations/desktop.json`):
+
+| Language | Native Name | Code | Status | README Available |
+| :--- | :--- | :---: | :---: | :---: |
+| **English** | English | `en` | **Available (Base)** | [README.md](README.md) |
+| **Japanese** | 日本語 | `ja` | **Available** | [README.ja.md](README.ja.md) |
+| **Simplified Chinese** | 简体中文 | `zh-CN` | **Available** | [README.zh-CN.md](README.zh-CN.md) |
+| **Traditional Chinese** | 繁體中文 | `zh-TW` | **Available** | [README.zh-TW.md](README.zh-TW.md) |
+| **Korean** | 한국어 | `ko` | **Available** | [README.ko.md](README.ko.md) |
+| **Spanish** | Español | `es` | **Available** | [README.es.md](README.es.md) |
+| **French** | Français | `fr` | **Available** | [README.fr.md](README.fr.md) |
+| **Brazilian Portuguese** | Português (Brasil) | `pt-BR` | **Available** | [README.pt-BR.md](README.pt-BR.md) |
+| **German** | Deutsch | `de-DE` | **Available** | [README.de-DE.md](README.de-DE.md) |
+| **Russian** | Русский | `ru-RU` | **Available** | [README.ru-RU.md](README.ru-RU.md) |
+| **Italian** | Italiano | `it-IT` | **Available** | [README.it-IT.md](README.it-IT.md) |
+| **Arabic** | العربية | `ar-SA` | **Available (RTL)** | [README.ar-SA.md](README.ar-SA.md) |
+| **Vietnamese** | Tiếng Việt | `vi` | **Available** | Planned |
+| **Dutch** | Nederlands | `nl-NL` | **Available** | Planned |
+| **Polish** | Polski | `pl-PL` | **Available** | Planned |
+| **Turkish** | Türkçe | `tr-TR` | **Available** | Planned |
+| **Indonesian** | Bahasa Indonesia | `id-ID` | **Available** | Planned |
+| **Persian** | فارسی | `fa-IR` | **Available (RTL)** | Planned |
+| **Ukrainian** | Українська | `uk-UA` | **Available** | Planned |
+| **Czech** | Čeština | `cs-CZ` | **Available** | Planned |
+| **Romanian** | Română | `ro-RO` | **Available** | Planned |
+| **Thai** | ไทย | `th-TH` | **Available** | Planned |
+| **Swedish** | Svenska | `sv-SE` | **Available** | Planned |
+| **Greek** | Ελληνικά | `el-GR` | **Available** | Planned |
+
+<br>
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/readme/radium-main-window.png" alt="Radium Download Manager Main Window showing active segmented downloads, transfer speeds, and category filters" width="100%">
+  <br>
+  <sub><b>Main Application Window:</b> High-density download dashboard with live multi-connection segment visualizers, real-time bandwidth telemetry, and category navigation.</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/readme/radium-new-download-dialog.jpg" alt="Radium New Download Dialog" width="100%">
+      <br>
+      <sub><b>Pre-Flight Probing:</b> Server range verification, real-time disk space calculation, and category routing.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/readme/radium-add-torrent-dialog.jpg" alt="Radium Add Torrent Dialog" width="100%">
+      <br>
+      <sub><b>BitTorrent Management:</b> Selective file hierarchy tree, metadata inspection, and piece verification.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      <img src="docs/images/readme/radium-settings-dialog.jpg" alt="Radium Settings Center showing language selection and theme configuration" width="100%">
+      <br>
+      <sub><b>Settings Center:</b> Language selection with native writing systems, Light/Dark appearance preferences, connection limits, and network routing.</sub>
+    </td>
+  </tr>
+</table>
 
 <br>
 
@@ -316,7 +439,7 @@ Radium includes a clean, lightweight Manifest V3 extension compatible with Googl
 ┌───────────────▼─────────────────┐
 │ radium-nmh.exe (Native Host)      │
 └───────────────┬─────────────────┘
-                │ Named Pipe: \\.\pipe\Flux_IPC_<UserSID>
+                │ Named Pipe: \\.\pipe\Radium_IPC_<UserSID> (legacy: Flux_IPC_*)
 ┌───────────────▼─────────────────┐
 │ radium.exe (Desktop Engine)     │
 │  ├── Native Win32 / GDI Desktop │
@@ -326,7 +449,7 @@ Radium includes a clean, lightweight Manifest V3 extension compatible with Googl
 ```
 
 - **Dual-Origin Security:** The Chromium native host manifest authorizes both store IDs and development keys, preventing native messaging connection failures when running unpacked.
-- **Zero Localhost Exposure:** Unlike legacy download managers that open an unauthenticated HTTP port on `localhost` (exposing users to drive-by website requests), Radium communicates exclusively via Native Messaging bridged to a local, user-ACL-restricted Windows Named Pipe (`\\.\pipe\Flux_IPC_<UserSID>`, retained for extension compatibility).
+- **Zero Localhost Exposure:** Unlike legacy download managers that open an unauthenticated HTTP port on `localhost` (exposing users to drive-by website requests), Radium communicates exclusively via Native Messaging bridged to a local, user-ACL-restricted Windows Named Pipe (`\\.\pipe\Radium_IPC_<UserSID>`, with `Flux_IPC_<UserSID>` retained as a compatibility fallback).
 - **Media Detection:** Sniffs `.mp4`, `.webm`, `.m3u8`, and `.mpd` URLs from network requests, deduplicates master and variant playlists, and ignores individual `.ts` and `.m4s` segment requests to prevent UI flooding.
 - **Reliable Fallback & Gesture Safety:** Link clicks retain user gesture context without destructive cancellation. In Chromium browsers, `onDeterminingFilename` holds the save prompt while querying the desktop; if Radium is offline or rejects, the browser download automatically resumes with zero data loss. Client-side generated files (`blob:`, `data:` URLs, ChatGPT exports) are safely preserved for native browser handling without DOM monkey-patching.
 
@@ -339,7 +462,7 @@ See [`docs/BROWSER_EXTENSION.md`](docs/BROWSER_EXTENSION.md) and [`docs/NATIVE_M
 ```mermaid
 flowchart TD
     Ext["Browser Extension<br><i>(Manifest V3)</i>"] -->|stdio| NMH["Native Messaging Host<br><code>radium-nmh.exe</code>"]
-    NMH -->|Named Pipe<br><code>Flux_IPC_&lt;SID&gt;</code>| IPC["IPC Server<br><i>(JSON-RPC 2.0)</i>"]
+    NMH -->|Named Pipe<br><code>Radium_IPC_&lt;SID&gt;</code>| IPC["IPC Server<br><i>(JSON-RPC 2.0)</i>"]
 
     CLI["Command-Line Interface<br>selected executable modes"] --> Ctrl
     IPC --> Ctrl["Download Controller<br><i>(Core Orchestrator)</i>"]

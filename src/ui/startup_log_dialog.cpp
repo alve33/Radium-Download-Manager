@@ -53,6 +53,7 @@ struct StartupLogDialogContext {
 
     uint32_t dpi{96};
     DownloadController* controller{nullptr};
+    ThemePalette palette{DesignSystem::GetRedesignPalette()};
     std::vector<diagnostics::StartupReport> reports;
     int selected_report_idx{-1};
 
@@ -187,8 +188,8 @@ LRESULT CALLBACK StartupLogDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 FIXED_PITCH | FF_MODERN, L"Consolas");
 
-            ctx->hBgBrush = CreateSolidBrush(RGB(0x18, 0x18, 0x1E));
-            ctx->hHeaderBrush = CreateSolidBrush(RGB(0x22, 0x22, 0x2A));
+            ctx->hBgBrush = CreateSolidBrush(ctx->palette.app_background.ToWin32ColorRef());
+            ctx->hHeaderBrush = CreateSolidBrush(ctx->palette.surface_primary.ToWin32ColorRef());
 
             HINSTANCE hInst = GetModuleHandleW(nullptr);
             int margin = DesignSystem::ScaleForDpi(16, ctx->dpi);
@@ -212,6 +213,9 @@ LRESULT CALLBACK StartupLogDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
             ListView_SetExtendedListViewStyle(ctx->hReportList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
             SendMessageW(ctx->hReportList, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
+            ListView_SetBkColor(ctx->hReportList, ctx->palette.surface_elevated.ToWin32ColorRef());
+            ListView_SetTextBkColor(ctx->hReportList, ctx->palette.surface_elevated.ToWin32ColorRef());
+            ListView_SetTextColor(ctx->hReportList, ctx->palette.text_primary.ToWin32ColorRef());
 
             LVCOLUMNW col{};
             col.mask = LVCF_TEXT | LVCF_WIDTH;
@@ -247,6 +251,9 @@ LRESULT CALLBACK StartupLogDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
             ListView_SetExtendedListViewStyle(ctx->hEventList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
             SendMessageW(ctx->hEventList, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontMono), TRUE);
+            ListView_SetBkColor(ctx->hEventList, ctx->palette.surface_elevated.ToWin32ColorRef());
+            ListView_SetTextBkColor(ctx->hEventList, ctx->palette.surface_elevated.ToWin32ColorRef());
+            ListView_SetTextColor(ctx->hEventList, ctx->palette.text_primary.ToWin32ColorRef());
 
             LVCOLUMNW ev_col{};
             ev_col.mask = LVCF_TEXT | LVCF_WIDTH;
@@ -382,7 +389,7 @@ LRESULT CALLBACK StartupLogDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             FillRect(hdc, &header_rc, ctx->hHeaderBrush);
 
             SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(0xFA, 0xFA, 0xFC));
+            SetTextColor(hdc, ctx->palette.text_primary.ToWin32ColorRef());
             SelectObject(hdc, ctx->hFontHeading);
 
             RECT title_rc = header_rc;
@@ -415,7 +422,7 @@ LRESULT CALLBACK StartupLogDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
 } // namespace
 
-void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller) {
+void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller, const ThemePalette& palette) {
     // 1. Strict Administrator Verification Check (Enforces user privilege policy)
     if (!security::IsCurrentUserLocalAdmin()) {
         MessageBoxW(
@@ -443,6 +450,7 @@ void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller)
 
     StartupLogDialogContext ctx;
     ctx.controller = &controller;
+    ctx.palette = palette;
 
     UINT dpi = 96;
     if (hwnd_parent && IsWindow(hwnd_parent)) {

@@ -1,6 +1,12 @@
 # Radium Download Manager -- Requirement-to-Test Verification Matrix
 
-**Document Status:** Verification Matrix. Latest settings/path/notification/updater/overlay run: `77 / 77` C++20 suites passed, `4 / 4` core suites passed, extension and Playwright suites passed; integration functional stages 1–7 passed and the final performance stage exited with code 2. See the dated verification section below for details. Smoke and dedicated security suites were not run in this session.
+### Localization verification (FR-039)
+
+`TestLocalizationCatalogAndLanguageFallback` verifies 24 locale entries, offline catalog loading, primary navigation strings, RTL locale metadata, and English fallback. `TestProfessionalSettingsCenterValidationAndPersistence` verifies English is the initial language, the automatic `system` language preference is rejected, and an explicit locale persists after restart. No browser-extension locale, dialog-completeness, mixed-direction rendering, DPI, or all-locale visual tests are present yet.
+
+The portable Windows staging script is statically checked to preserve `translations/desktop.json` beside `dist\Radium.exe`, keep the canonical app name, and avoid terminating a running portable instance. Runtime execution of the full packaging script was not part of this build verification.
+
+**Document Status:** Verification Matrix. Latest appearance/layout run (2026-11-09): `79 / 79` C++20 suites passed after the Light palette and responsive UI fixes. Other settings/path/notification/updater/overlay results are recorded in the dated sections below; this run did not execute core, extension, integration, smoke, or dedicated security suites.
 **Last Reviewed:** 2026-11-01
 **Scope:** Maps every functional (`FR-001`–`FR-035`), non-functional (`NFR-001`–`NFR-016`), and bug-regression (`BUG-001`–`BUG-035`, `FDM-001`–`FDM-029`) test to its exact command, verification category, and outcome.  
 **Related Documents:** [archive/maintenance-audits/RELEASE_READINESS_REPORT.md](archive/maintenance-audits/RELEASE_READINESS_REPORT.md), [archive/maintenance-audits/BUG_FIX_LOG.md](archive/maintenance-audits/BUG_FIX_LOG.md), [FEATURE_MATRIX.md](FEATURE_MATRIX.md), [TEST_STRATEGY.md](TEST_STRATEGY.md)
@@ -9,7 +15,15 @@
 
 ## 1. Automated Verification Summary (`Windows 11 x64 Host`)
 
-### 1.1 C++20 Unit & Regression Test Suites (`tests/cpp/unit_tests.cpp` — `77 / 77` Suites: Verified by Execution in latest UI redesign run)
+### Appearance preference regression coverage (FR-042)
+
+`TestModernCoralThemeSettingsModalBoundsAndSafeDelete` checks System as the first-run and restored preference, persisted toolbar switching between Light and Dark, rejection of OS changes while an explicit preference is active, and applying a System preference followed by a simulated Windows theme update. `TestDesktopUiDesignSystemAndHighDpiLayout` checks the exact white/gray/sky-blue Light tokens, dark coral identity, contrast-oriented text tokens, failure orange, and pale sky selection/hover states. The search edit applies explicit light/dark Windows Edit theme classes and palette brushes. `TestDesktopUiHitTestingAndMouseInteractions` checks the search field minimum width and absence of toolbar action overlap at 938x573. `TestDesktopUiInteractionsFilteringSortingAndRedaction` checks completed tasks omit zero download speed while active and seeding rates remain meaningful; it also verifies completed Light progress uses `#168BCB` and failed Light progress uses `#FF9F43`. The latest MSVC Release build and full C++ suite result are recorded below. Live Dark-mode and dialog capture remains a Windows visual verification item.
+
+### General desktop layout regression coverage (FR-043)
+
+The 938x573 layout check verifies the toolbar search field keeps a useful minimum width and visible actions do not overlap it. The details action layout reserves 176 DPI-scaled pixels for “Remove from History.” The details renderer derives and labels the parent directory as “Location,” selected rows use palette text, separators and resize handles use palette borders, and completed transfers suppress idle zero download/upload labels while retaining active and torrent seeding rates. Source review confirms these common layout/rendering changes are theme-independent. Live visual resize checks and accessibility inspection at multiple DPIs remain pending on Windows.
+
+### 1.1 C++20 Unit & Regression Test Suites (`tests/cpp/unit_tests.cpp` — `79 / 79` Suites: Verified by Execution on 2026-11-09)
 
 | Suite # | Suite Function (`tests/cpp/unit_tests.cpp`) | Mapped Requirements & Bug IDs | Verification Category | Result |
 | :--- | :--- | :--- | :--- | :--- |
@@ -363,3 +377,29 @@ Implemented best-effort YouTube resolution validation: a lower actual resolution
 The latest startup trace shows a 9 ms click-to-scheduler handoff, then 4.7 seconds before direct transfer dispatch and a later yt-dlp fallback. The click path no longer waits for background prewarming; direct transfer now uses a single streaming request per resolved track rather than a probe plus serial ranges, and records a sanitized fallback event. The UI no longer assigns a 98–99% minimum to mux/verify/finalize phases when byte or track progress is lower. These source changes have not yet been rebuilt or verified against a live YouTube transfer; capture a new Windows startup report and compare direct dispatch, first bytes, fallback, and progress values.
 
 The GitHub release API was not verified against the live service in this run. Installer download, SHA-256/Authenticode verification and signed-manifest validation remain intentionally unavailable until the project provides a trusted signing identity, Ed25519 public key and signed manifest infrastructure; no downloaded executable is automatically launched.
+
+### Multi-site video extraction & compatibility overhaul verification (2026-11-07)
+
+| Suite / Binary | Coverage | Result |
+| :--- | :--- | :--- |
+| `radium_core_tests.exe` (`6/6` suites) | `TestMultiSiteVideoExtractionOverhaul`: URL classification (Bilibili, Facebook, Pornhub, XVideos, xHamster, SpankBang, Vimeo, Dailymotion, Twitch, X, TikTok), root cookie domain extraction (`.bilibili.com`, `.facebook.com`, `.pornhub.com`), `fbcdn.net` `bytestart`/`byteend` range-trap stripping, Bilibili `__playinfo__`/`__INITIAL_STATE__` DASH video+audio pairing and multipart episode resolution, Facebook HD/SD HTML parser and login-wall `ERR_EXTRACTOR_LOGIN_REQUIRED` classification, Adult platform `mediaDefinitions` MP4+HLS parser, `yt-dlp` single-360p format preservation without fake resolutions, DRM stream rejection (`ERR_STREAM_DRM_PROTECTED`), URL expiration detection, and diagnostic report credential redaction | **PASSED (`6/6`)** |
+| `node tests/test_extension_detection.js` (`19/19` suites) | Suite `[21/21]`: `isSupportedVideoSiteWatchUrl` & `isWebpageWatchUrl` across Bilibili, Facebook, adult sites, Vimeo, Dailymotion; `fbcdn.net` `bytestart`/`byteend` normalization; Bilibili `.m4s` chunk spam suppression; `catch.js` `window.__playinfo__` DASH stream extraction | **PASSED (`19/19` suites, `28/28` scenarios)** |
+
+### Light palette and responsive desktop UI verification (2026-11-09)
+
+| Verification | Result |
+| :--- | :--- |
+| MSVC Release build (`radium`, `radium_unit_tests`) | **PASS** |
+| `radium_unit_tests.exe` | **PASS, 79/79 suites**; includes exact Light palette tokens, 938x573 toolbar spacing, details action width, no completed idle rates, Light completed sky-blue progress, and failed orange progress. |
+| Staged `dist/Radium.exe` | **PASS**; SHA-256 matched `build/Release/radium.exe`. Existing staged builds were preserved as timestamped `.bak` files. |
+| Light-mode visual inspection | **PASS** for readable selected-row text, sky-blue toolbar/selection styling, non-truncated “Remove from History,” correct `Location:` directory label, and no completed `0 KB/s` labels. |
+| Dark-mode and all-dialog visual inspection | **Pending**; the source uses the active palette for the conflict-resolution overlay, but a full visual sweep was not completed. |
+
+### BitTorrent peer request pipeline follow-up (2026-11-09)
+
+The per-peer outstanding block request window was raised from 6 to 64 (96 KiB to 1 MiB at 16 KiB per block) to reduce idle time on higher-latency peer connections. This change has not been runtime benchmarked; throughput still depends on peer availability, peer upload capacity, and network conditions.
+
+### BitTorrent live rate accounting follow-up (2026-11-10)
+
+`TestTorrentRateMeterUsesPayloadDeltas` covers baseline initialization, delta divided by monotonic elapsed time, sub-500 ms coalescing, multiple-peer cumulative aggregation, idle-to-zero behavior, counter rollback, upload direction, multi-torrent rate summation, and concurrent calls. Upload accounting advances only after `SendAll` successfully transmits the complete peer payload. The engine resamples active rates on a 500 ms cadence so idle rates clear even when no peer messages arrive. Windows Release build passed for `radium.exe`, `radium_unit_tests.exe`, and `radium_core_tests.exe`; the suites passed 81/81 and 6/6. Existing mock peer transfer/integrity coverage also passed as part of the 81-suite run. Real swarm comparisons and one-peer/multi-peer/multi-torrent, pause/resume, seeding, low/high-speed, reconnect, and mixed HTTP+torrent network benchmarks remain unverified.
+

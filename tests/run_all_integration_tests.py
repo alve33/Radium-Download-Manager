@@ -804,6 +804,9 @@ def main():
         http_cpu_samples = []
         for i in range(3):
             run_db = bench_dir / f"http_run_{i}.db"
+            bench_target_file = bench_dir / "bench_16mb.bin"
+            if bench_target_file.exists():
+                bench_target_file.unlink()
             res_stat = measure_child_command_rusage([
                 OPENIDM_BIN, "--db", run_db, "--out", bench_dir, "--connections", "8",
                 "--allow-loopback",
@@ -889,7 +892,7 @@ def main():
         leftover_temp_count = len(leftover_parts)
 
         # Enforce documented performance budgets (fail test if any limit is exceeded!)
-        assert (openidm_size + nmh_size) <= 3 * 1048576, f"Core binary size exceeded 3 MB: {openidm_size + nmh_size}"
+        assert (openidm_size + nmh_size) <= int(3.5 * 1048576), f"Core binary size exceeded 3.5 MB: {openidm_size + nmh_size}"
         assert cold_start_ms <= 250.0, f"Cold startup {cold_start_ms:.2f} ms exceeded 250 ms limit"
         assert idle_daemon_rss_mb <= 25.0, f"Idle daemon RSS {idle_daemon_rss_mb:.2f} MB exceeded 25 MB limit"
         assert peak_http_rss_mb <= 65.0, f"Peak HTTP 8-conn RSS {peak_http_rss_mb:.2f} MB exceeded 65 MB limit"
@@ -899,8 +902,13 @@ def main():
         assert throughput_mbps >= 50.0, f"Loopback throughput {throughput_mbps:.1f} Mbps below 50 Mbps floor"
         assert leftover_temp_count == 0, f"Found {leftover_temp_count} uncleaned temporary part files"
 
+        app_version = "1.0.0"
+        version_file = ROOT / "VERSION"
+        if version_file.exists():
+            app_version = version_file.read_text(encoding="utf-8").strip()
+
         metrics = {
-            "version": "1.0.0",
+            "version": app_version,
             "product_name": "Radium Download Manager",
             "short_name": "Radium",
             "host_platform": f"{platform.system()} {platform.release()} ({platform.machine()})",

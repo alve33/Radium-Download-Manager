@@ -137,6 +137,7 @@ Name: "autostart"; Description: "Start Radium minimized in system tray on Window
 ; Core application binaries
 Source: "{#SourceDir}\{#MyAppExeName}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Components: core; Flags: ignoreversion
 Source: "{#SourceDir}\{#MyAppNmhName}"; DestDir: "{app}"; DestName: "{#MyAppNmhName}"; Components: core; Flags: ignoreversion
+Source: "..\translations\desktop.json"; DestDir: "{app}\translations"; Components: core; Flags: ignoreversion
 
 #ifndef CoreOnly
 ; Stream extraction workers (N_m3u8DL-RE, FFmpeg, and yt-dlp) - installed exclusively to tools\win-x64

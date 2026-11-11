@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# Flux Download Manager — Competitor Benchmark Runner & Analysis Harness
+# Flux / Radium Download Manager — Competitor Benchmark Runner & Analysis Harness
 # Executes controlled, repeatable performance comparisons on Windows runner against:
-#   1. Flux Download Manager (8 connections)
-#   2. Flux Download Manager (32 connections)
+#   1. Radium Download Manager (8 connections)
+#   2. Radium Download Manager (32 connections)
 #   3. aria2 1.37.0 (16 connections)
 #   4. Internet Download Manager (IDM 6.42 Build 64)
 #   5. Free Download Manager (FDM 6.34.4)
@@ -1126,10 +1126,10 @@ class BenchmarkHarness:
     def _build_markdown_report(self, report_data: dict, suite_results: dict, specs: dict) -> str:
         lines = []
         if self.mode == "local":
-            lines.append("# Flux Download Manager — Verified Local Competitor Benchmark Report\n")
+            lines.append("# Radium Download Manager — Verified Local Competitor Benchmark Report\n")
             lines.append(f"**Execution Environment:** `Local Developer Workstation (Windows 11)`  ")
         else:
-            lines.append("# Flux Download Manager — Automated Competitor Benchmark Report\n")
+            lines.append("# Radium Download Manager — Automated Competitor Benchmark Report\n")
             lines.append(f"**Execution Environment:** `GitHub Actions Hosted Windows Runner`  ")
 
         lines.append(f"**Execution Timestamp (UTC):** `{specs.get('timestamp_utc', '2026-10-20')}`  ")
@@ -1142,9 +1142,9 @@ class BenchmarkHarness:
 
         lines.append("## 1. Executive Summary & Tool Testability Status\n")
         if self.mode == "local":
-            lines.append("This local benchmark suite executes a controlled, repeatable performance and resource comparison between **Flux Download Manager**, **aria2 1.37.0**, authentic licensed **Internet Download Manager (IDM 6.43.15)**, and **Free Download Manager (FDM 6.33.1.6648)** directly on the developer's workstation.\n")
+            lines.append("This local benchmark suite executes a controlled, repeatable performance and resource comparison between **Radium Download Manager**, **aria2 1.37.0**, authentic licensed **Internet Download Manager (IDM 6.43.15)**, and **Free Download Manager (FDM 6.33.1.6648)** directly on the developer's workstation.\n")
         else:
-            lines.append("This automated benchmark suite executes a controlled, repeatable performance and resource comparison between **Flux Download Manager** and major industry download engines on a dedicated Windows runner.\n")
+            lines.append("This automated benchmark suite executes a controlled, repeatable performance and resource comparison between **Radium Download Manager** and major industry download engines on a dedicated Windows runner.\n")
 
         lines.append("| Candidate Tool | Tested Configuration | Acquisition / Test Status | Technical Details & Transparency Notes |")
         lines.append("| :--- | :--- | :--- | :--- |")
@@ -1193,8 +1193,8 @@ class BenchmarkHarness:
         lines.append("---\n")
         lines.append("## 3. Analysis of Multi-Connection Work-Stealing Efficiency\n")
         lines.append("In **Scenario B** (throttled at 1 MiB/s per connection), the download engine's ability to spawn and saturate parallel connections is directly measured:\n")
-        lines.append("1. **Flux (32 connections)** dynamically scales connections up to the configured limit, providing maximum throughput on rate-limited CDN endpoints.")
-        lines.append("2. **Flux (8 connections)** saturates exactly 8 connections with minimal CPU and working set memory footprint.")
+        lines.append("1. **Radium (32 connections)** dynamically scales connections up to the configured limit, providing maximum throughput on rate-limited CDN endpoints.")
+        lines.append("2. **Radium (8 connections)** saturates exactly 8 connections with minimal CPU and working set memory footprint.")
         lines.append("3. **Brisk Work-Stealing Algorithm:** Splits remaining segments dynamically without blocking or leaving unmerged chunk files.")
         lines.append("4. **Zero Leftover Temporary Files:** All temporary files are cleanly renamed upon completion, leaving 0 orphan files.\n")
 
@@ -1202,9 +1202,9 @@ class BenchmarkHarness:
         lines.append("## 4. Benchmark Methodology & Reproducibility\n")
         lines.append("To reproduce this exact benchmark suite locally or on a private CI runner:\n")
         lines.append("```powershell")
-        lines.append("# 1. Build Flux Release binary")
+        lines.append("# 1. Build Radium Release binary")
         lines.append("cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release")
-        lines.append("cmake --build build --config Release --target flux")
+        lines.append("cmake --build build --config Release --target radium")
         lines.append("")
         lines.append("# 2. Execute benchmark comparison suite")
         lines.append("python scripts/run-competitor-benchmarks.py --mode local")
@@ -1214,7 +1214,7 @@ class BenchmarkHarness:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Flux Competitor Benchmark Harness")
+    parser = argparse.ArgumentParser(description="Radium Competitor Benchmark Harness")
     parser.add_argument("--out-dir", type=str, default=None, help="Output directory for reports (default: benchmarks/)")
     parser.add_argument("--extended", action="store_true", help="Run 5 trials instead of 3")
     parser.add_argument("--radium-bin", "--flux-bin", dest="radium_bin", type=str, default=None, help="Path to radium.exe (or legacy flux.exe)")

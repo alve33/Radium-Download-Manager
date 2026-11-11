@@ -418,7 +418,7 @@ function initPopupUI() {
             videoFilter: chosenQ ? (chosenQ.videoFilter || chosenQ.resolution) : "best",
             selectedQuality: chosenQ,
             url,
-            autoStart: true,
+            autoStart: false,
             clickTime: Date.now(),
             tabId: currentTabId,
             tabUrl: currentTabUrl
@@ -745,7 +745,7 @@ function initPopupUI() {
             videoFilter: chosenQ ? (chosenQ.videoFilter || chosenQ.resolution) : "best",
             selectedQuality: chosenQ,
             url: item.url,
-            autoStart: true,
+            autoStart: false,
             clickTime: Date.now(),
             tabId: currentTabId,
             tabUrl: currentTabUrl

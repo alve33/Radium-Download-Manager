@@ -24,7 +24,7 @@ FFMPEG_URL="https://ffmpeg.org/releases/${FFMPEG_TARBALL}"
 FFMPEG_EXPECTED_SHA256="40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6"
 
 echo "================================================================="
-echo "   Flux Download Manager -- Minimal FFmpeg Cross-Compilation    "
+echo "   Radium Download Manager -- Minimal FFmpeg Cross-Compilation  "
 echo "================================================================="
 echo "Configuration: ${CONFIG_FILE}"
 echo "Work Dir     : ${WORK_DIR}"

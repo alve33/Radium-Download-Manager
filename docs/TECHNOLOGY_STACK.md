@@ -1,5 +1,9 @@
 # Technology Stack & Desktop Framework Evaluation
 
+## Localization implementation note
+
+The current desktop UI is custom Win32/GDI rather than Qt. Localization uses an offline UTF-8 JSON catalog (`translations/desktop.json`) with English source-string fallback and a native C++ locale manager; no localization dependency was added. The catalog currently covers only selected common UI strings. Complete translation coverage, locale-aware formatting/plurals, and Windows font fallback verification remain open work.
+
 **Document Status:** Proposed & Accepted Stack Specification  
 **Last Reviewed:** 2026-10-16  
 **Scope:** Comparative evaluation of the 7 candidate desktop frameworks required by Section 4 of the Master Prompt, and the approved stack for all OpenIDM components.  

@@ -110,6 +110,22 @@ std::vector<std::string> SiteGrabber::ExtractUrlsFromHtml(std::string_view html,
     std::vector<std::string> urls;
     std::set<std::string> seen;
 
+    std::string effective_base(base_url);
+
+    // Look for <base href="...">
+    static const std::regex kBaseRegex(
+        R"(<base\s+[^>]*href\s*=\s*["']([^"']+)["'])",
+        std::regex::icase | std::regex::optimize);
+
+    std::string s(html);
+    std::smatch base_match;
+    if (std::regex_search(s, base_match, kBaseRegex) && base_match.size() >= 2) {
+        std::string candidate_base = ResolveUrl(base_url, base_match[1].str());
+        if (!candidate_base.empty()) {
+            effective_base = candidate_base;
+        }
+    }
+
     static const std::regex kHrefSrcRegex(
         R"((?:href|src|data-src|data-url|action|poster)\s*=\s*["']([^"'#\s>]+)["'])",
         std::regex::icase | std::regex::optimize);
@@ -118,7 +134,9 @@ std::vector<std::string> SiteGrabber::ExtractUrlsFromHtml(std::string_view html,
         R"(url\(\s*["']?([^"')#\s]+)["']?\s*\))",
         std::regex::icase | std::regex::optimize);
 
-    std::string s(html);
+    static const std::regex kSrcsetRegex(
+        R"(srcset\s*=\s*["']([^"']+)["'])",
+        std::regex::icase | std::regex::optimize);
 
     auto scan_regex = [&](const std::regex& re) {
         auto begin = std::sregex_iterator(s.begin(), s.end(), re);
@@ -127,7 +145,7 @@ std::vector<std::string> SiteGrabber::ExtractUrlsFromHtml(std::string_view html,
             std::smatch match = *it;
             if (match.size() >= 2) {
                 std::string raw = match[1].str();
-                std::string resolved = ResolveUrl(base_url, raw);
+                std::string resolved = ResolveUrl(effective_base, raw);
                 if (!resolved.empty() && !seen.count(resolved)) {
                     seen.insert(resolved);
                     urls.push_back(resolved);
@@ -138,6 +156,33 @@ std::vector<std::string> SiteGrabber::ExtractUrlsFromHtml(std::string_view html,
 
     scan_regex(kHrefSrcRegex);
     scan_regex(kCssUrlRegex);
+
+    // Parse srcset candidates (e.g. "image-320w.jpg 320w, image-480w.jpg 480w")
+    auto begin_ss = std::sregex_iterator(s.begin(), s.end(), kSrcsetRegex);
+    auto end_ss = std::sregex_iterator();
+    for (std::sregex_iterator it = begin_ss; it != end_ss; ++it) {
+        std::smatch match = *it;
+        if (match.size() >= 2) {
+            std::string srcset_content = match[1].str();
+            std::stringstream ss(srcset_content);
+            std::string part;
+            while (std::getline(ss, part, ',')) {
+                // Trim whitespace
+                size_t start = part.find_first_not_of(" \t\r\n");
+                if (start == std::string::npos) continue;
+                size_t end = part.find_last_not_of(" \t\r\n");
+                std::string token = part.substr(start, end - start + 1);
+                // The URL is the first component before space/descriptor
+                size_t space_pos = token.find_first_of(" \t");
+                std::string raw_url = (space_pos != std::string::npos) ? token.substr(0, space_pos) : token;
+                std::string resolved = ResolveUrl(effective_base, raw_url);
+                if (!resolved.empty() && !seen.count(resolved)) {
+                    seen.insert(resolved);
+                    urls.push_back(resolved);
+                }
+            }
+        }
+    }
 
     return urls;
 }
@@ -218,8 +263,8 @@ Result<std::vector<GrabbedItem>> SiteGrabber::Crawl(
         auto res = brisk::HttpClient::PerformGet(
             current.url,
             headers,
-            0,
-            4194304, // First 4MB of page
+            std::nullopt,
+            std::nullopt, // Send standard non-ranged GET to avoid HTTP 416 on dynamic servers
             cfg.timeout_ms,
             cfg.allow_loopback,
             req_cancel,

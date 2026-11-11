@@ -91,7 +91,7 @@ function Assert-Pe64Executable([string]$FilePath) {
 }
 
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host "   Flux Download Manager -- Minimal FFmpeg Build Pipeline        " -ForegroundColor Cyan
+Write-Host "   Radium Download Manager -- Minimal FFmpeg Build Pipeline      " -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "Configuration : $ConfigPath" -ForegroundColor White
 Write-Host "Work Directory: $WorkDir" -ForegroundColor White

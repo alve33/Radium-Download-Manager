@@ -215,13 +215,10 @@ std::shared_ptr<LiveSegment> SegmentScheduler::AcquireNextOrStealSegment(bool al
     std::shared_ptr<LiveSegment> best_victim = nullptr;
     uint64_t max_remaining = 0;
 
-    // Adaptive Range Splitting:
-    // When initial concurrency is ramping up (active_count < m_max_connections), allow fine-grained
-    // bisection (>= 256 KiB) so small or fast downloads scale out to all configured connections instantly.
-    // Once all connections have ramped up (active_count == m_max_connections), subsequent work-stealing
-    // requires a coarser split threshold (>= 1 MiB) to prevent late-stage micro-splits, connection churn,
-    // and cancellation slippage near completion.
-    uint64_t floor_bytes = (active_count + 1 < m_max_connections) ? 262144ULL : 1048576ULL;
+    // Dynamic Range Splitting (Adaptive High-Velocity Bisection):
+    // Ramps up connections aggressively down to 64 KiB so all workers immediately saturate available bandwidth.
+    // In steady state, allows bisecting down to 128 KiB to eradicate the straggler problem near completion.
+    uint64_t floor_bytes = (active_count + 1 < m_max_connections) ? 65536ULL : 131072ULL;
     uint64_t min_separation = (std::max<uint64_t>)(m_min_split_bytes, floor_bytes);
 
     // Pass 1: candidate segments without split_pending

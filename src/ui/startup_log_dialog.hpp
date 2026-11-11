@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include "core/download_controller.hpp"
+#include "ui/design_system.hpp"
 
 namespace openidm::ui {
 
@@ -14,7 +15,7 @@ namespace openidm::ui {
  * Displays the Admin-Only Download Startup Log & Performance Report modal dialog.
  * If user is not an administrator, access is denied.
  */
-void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller);
+void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller, const ThemePalette& palette);
 
 } // namespace openidm::ui
 #endif

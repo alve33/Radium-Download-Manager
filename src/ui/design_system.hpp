@@ -305,28 +305,28 @@ public:
     static ThemePalette GetLightPalette() {
         ThemePalette p = GetDarkPalette();
         p.mode = ThemeMode::kLight;
-        p.app_background   = {0xF8, 0xFA, 0xFC, 255};
+        p.app_background   = {0xFF, 0xFF, 0xFF, 255}; // #FFFFFF Main canvas
         p.surface_primary  = {0xFF, 0xFF, 0xFF, 255};
-        p.surface_elevated = {0xF1, 0xF5, 0xF9, 255};
-        p.surface_hover    = {0xE2, 0xE8, 0xF0, 255};
-        p.surface_selected = {0x30, 0x23, 0x28, 255};
-        p.surface_pressed  = {0xC8, 0xD4, 0xEE, 255};
-        p.border_subtle    = {0xCB, 0xD5, 0xE1, 255};
-        p.border_focus     = {0xFF, 0x47, 0x57, 255};
-        p.text_primary     = {0x0F, 0x17, 0x2A, 255};
-        p.text_secondary   = {0x47, 0x55, 0x69, 255};
-        p.text_muted       = {0x94, 0xA3, 0xB8, 255};
-        p.accent_primary   = {0xFF, 0x47, 0x57, 255};
-        p.accent_hover     = {0xFF, 0x5F, 0x6A, 255};
+        p.surface_elevated = {0xF5, 0xF7, 0xF9, 255}; // #F5F7F9 Secondary surface
+        p.surface_hover    = {0xF1, 0xF8, 0xFC, 255}; // #F1F8FC
+        p.surface_selected = {0xE3, 0xF3, 0xFC, 255}; // #E3F3FC
+        p.surface_pressed  = {0xD1, 0xEC, 0xFA, 255};
+        p.border_subtle    = {0xE1, 0xE8, 0xED, 255}; // #E1E8ED
+        p.border_focus     = {0x16, 0x8B, 0xCB, 255}; // #168BCB
+        p.text_primary     = {0x20, 0x21, 0x24, 255}; // #202124
+        p.text_secondary   = {0x65, 0x6B, 0x73, 255}; // #656B73
+        p.text_muted       = {0x76, 0x7D, 0x85, 255};
+        p.accent_primary   = {0x16, 0x8B, 0xCB, 255}; // #168BCB Sky Blue
+        p.accent_hover     = {0x12, 0x76, 0xAE, 255};
         p.badge_stream     = {0x7C, 0x3A, 0xED, 255};
-        p.badge_file       = {0xFF, 0x47, 0x57, 255};
+        p.badge_file       = {0x16, 0x8B, 0xCB, 255};
         p.status_success   = {0x7D, 0x8A, 0x99, 255};
         p.status_warning   = {0xD9, 0x77, 0x06, 255};
-        p.status_danger    = {0xD9, 0x7A, 0x24, 255};
-        p.progress_track   = {0xE2, 0xE8, 0xF0, 255};
+        p.status_danger    = {0xFF, 0x9F, 0x43, 255}; // #FF9F43
+        p.progress_track   = {0xE1, 0xE8, 0xED, 255};
         p.glass_surface    = {0xFA, 0xFA, 0xFC, 225};
         p.glass_elevated   = {0xFF, 0xFF, 0xFF, 240};
-        p.glass_border     = {0xCB, 0xD5, 0xE1, 160};
+        p.glass_border     = {0xE1, 0xE8, 0xED, 160};
         p.glass_highlight  = {0xFF, 0xFF, 0xFF, 120};
         return p;
     }
