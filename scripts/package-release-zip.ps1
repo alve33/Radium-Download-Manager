@@ -165,8 +165,13 @@ $Nm3u8dlExe = $null
 $FfmpegExe = $null
 $YtDlpExe = $null
 
-# Check standardized tools\win-x64 directory first for uniform worker selection
-$toolsWinDir = Join-Path $RepoRoot "tools\win-x64"
+# Check architecture-specific tools directory first, then fallback to win-x64
+$toolsArchName = if ($Architecture -eq "ARM64") { "win-arm64" } else { "win-x64" }
+$toolsWinDir = Join-Path $RepoRoot "tools\$toolsArchName"
+if (-not (Test-Path $toolsWinDir)) {
+    $toolsWinDir = Join-Path $RepoRoot "tools\win-x64"
+}
+
 if (Test-Path $toolsWinDir) {
     $stagedNm = Join-Path $toolsWinDir "N_m3u8DL-RE.exe"
     if (Test-Path $stagedNm) { $Nm3u8dlExe = (Resolve-Path $stagedNm).Path }
@@ -178,7 +183,7 @@ if (Test-Path $toolsWinDir) {
     if (Test-Path $stagedYt) { $YtDlpExe = (Resolve-Path $stagedYt).Path }
 }
 
-# If N_m3u8DL-RE not in tools\win-x64, search build directories
+# If N_m3u8DL-RE not in tools\$toolsArchName, search build directories
 if (-not $Nm3u8dlExe) {
     $nativeWorkerCandidates = @()
     if ($BuildDir) {
@@ -186,9 +191,12 @@ if (-not $Nm3u8dlExe) {
         $nativeWorkerCandidates += (Join-Path $BuildDir "Release\N_m3u8DL-RE.exe")
     }
     $nativeWorkerCandidates += @(
+        (Join-Path $RepoRoot "build\win-$Architecture\Release\N_m3u8DL-RE.exe"),
+        (Join-Path $RepoRoot "build\win-$Architecture\N_m3u8DL-RE.exe"),
         (Join-Path $RepoRoot "build\win-x64\Release\N_m3u8DL-RE.exe"),
         (Join-Path $RepoRoot "build\win-x64\N_m3u8DL-RE.exe"),
         (Join-Path $RepoRoot "build\Release\N_m3u8DL-RE.exe"),
+        (Join-Path $RepoRoot "dist\tools\$toolsArchName\N_m3u8DL-RE.exe"),
         (Join-Path $RepoRoot "dist\tools\win-x64\N_m3u8DL-RE.exe")
     )
     foreach ($nw in $nativeWorkerCandidates) {
@@ -203,7 +211,9 @@ if (-not $Nm3u8dlExe) {
 }
 
 $toolsCandidates = @(
+    (Join-Path $RepoRoot "tools\$toolsArchName"),
     (Join-Path $RepoRoot "tools"),
+    (Join-Path $RepoRoot "dist\tools\$toolsArchName"),
     (Join-Path $RepoRoot "dist\tools\win-x64"),
     (Join-Path $RepoRoot "dist\tools")
 )
@@ -355,8 +365,9 @@ No installation or administrative privileges required.
         [System.IO.File]::WriteAllText((Join-Path $stageDir "README.txt"), $portableReadme, [System.Text.Encoding]::UTF8)
         $components += "README.txt"
 
-        # Stream Workers Handling - single standard location tools\win-x64
-        $toolsDest = Join-Path $stageDir "tools\win-x64"
+        # Stream Workers Handling - architecture-specific tools directory
+        $toolsStageSubdir = if ($Architecture -eq "ARM64") { "tools\win-arm64" } else { "tools\win-x64" }
+        $toolsDest = Join-Path $stageDir $toolsStageSubdir
         New-Item -ItemType Directory -Force -Path $toolsDest | Out-Null
 
         $components = @("radium.exe", "radium-nmh.exe", "translations/desktop.json", "extension", "manifests")
@@ -364,15 +375,15 @@ No installation or administrative privileges required.
         if ($Type -eq "Full") {
             if ($Nm3u8dlExe -and (Test-Path $Nm3u8dlExe)) {
                 Copy-Item -Path $Nm3u8dlExe -Destination (Join-Path $toolsDest "N_m3u8DL-RE.exe") -Force
-                $components += "tools/win-x64/N_m3u8DL-RE.exe"
+                $components += "$toolsStageSubdir/N_m3u8DL-RE.exe"
             }
             if ($FfmpegExe -and (Test-Path $FfmpegExe)) {
                 Copy-Item -Path $FfmpegExe -Destination (Join-Path $toolsDest "ffmpeg.exe") -Force
-                $components += "tools/win-x64/ffmpeg.exe"
+                $components += "$toolsStageSubdir/ffmpeg.exe"
             }
             if ($YtDlpExe -and (Test-Path $YtDlpExe)) {
                 Copy-Item -Path $YtDlpExe -Destination (Join-Path $toolsDest "yt-dlp.exe") -Force
-                $components += "tools/win-x64/yt-dlp.exe"
+                $components += "$toolsStageSubdir/yt-dlp.exe"
             }
         } else {
             # Core Package: Write helpful instructions for stream workers
@@ -384,16 +395,16 @@ and browser Native Messaging Host.
 
 Stream Extraction Notice:
 To enable HLS, DASH, and video stream downloading:
-1. Place 'N_m3u8DL-RE.exe' and 'ffmpeg.exe' inside this 'tools\win-x64\' folder, OR
+1. Place 'N_m3u8DL-RE.exe' and 'ffmpeg.exe' inside this '$toolsStageSubdir\' folder, OR
 2. Ensure FFmpeg is accessible in your system PATH environment variable, OR
-3. Download the full offline release (Radium-v$Version-Windows-x64-Full.zip).
+3. Download the full offline release (Radium-Download-Manager-v$Version-Windows-$Architecture-Portable.zip).
 
 Official Upstream Projects:
 - N_m3u8DL-RE : https://github.com/nilaoda/N_m3u8DL-RE
 - FFmpeg      : https://ffmpeg.org/
 "@
             [System.IO.File]::WriteAllText((Join-Path $toolsDest "README.txt"), $coreReadme, [System.Text.Encoding]::UTF8)
-            $components += "tools/win-x64/README.txt"
+            $components += "$toolsStageSubdir/README.txt"
         }
 
         # Calculate uncompressed installed disk footprint before archiving

@@ -39,7 +39,8 @@ if (-not $ScriptDir -or -not (Test-Path $ScriptDir)) {
 }
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 if (-not $TargetDir) {
-    $TargetDir = Join-Path $RepoRoot "tools\win-x64"
+    $archSubdir = if ($Architecture -eq "ARM64") { "win-arm64" } else { "win-x64" }
+    $TargetDir = Join-Path $RepoRoot "tools\$archSubdir"
 }
 $TargetDir = [System.IO.Path]::GetFullPath($TargetDir)
 
@@ -173,8 +174,8 @@ try {
             $FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
             Write-Warning "[LARGE FALLBACK] Explicitly using monolithic upstream FFmpeg (161+ MiB). Package size will exceed 20 MB budget."
         } else {
-            # Pinned minimal FFmpeg 7.1 Windows x64 build from verified release
-            $FfmpegUrl = "https://github.com/sayedalve/Radium-Download-Manager/releases/download/stream-tools-v1/ffmpeg-minimal-7.1-win-x64.zip"
+            # Pinned minimal FFmpeg 7.1 Windows build hosted in GitLab Generic Package Registry
+            $FfmpegUrl = "https://gitlab.com/api/v4/projects/88625465/packages/generic/stream-tools/v1/ffmpeg-minimal-7.1-win-x64.zip"
             if (-not $FfmpegExpectedSha256) {
                 $FfmpegExpectedSha256 = "CBCC7523D458E84309893719C96FFD3EF7ADCE490616CF5FD26B680FB80DF5CF"
             }

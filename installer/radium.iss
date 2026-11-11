@@ -63,8 +63,8 @@
 ; Resolve N_m3u8DL-RE worker: prioritize target arch build output from SourceDir
 #if FileExists(SourceDir + "\N_m3u8DL-RE.exe")
   #define Nm3u8dlSource SourceDir + "\N_m3u8DL-RE.exe"
-#elif FileExists("..\tools\win-" + MyAppArch + "\N_m3u8DL-RE.exe")
-  #define Nm3u8dlSource "..\tools\win-" + MyAppArch + "\N_m3u8DL-RE.exe"
+#elif FileExists("..\tools\win-" + TargetArch + "\N_m3u8DL-RE.exe")
+  #define Nm3u8dlSource "..\tools\win-" + TargetArch + "\N_m3u8DL-RE.exe"
 #elif FileExists("..\tools\win-x64\N_m3u8DL-RE.exe")
   #define Nm3u8dlSource "..\tools\win-x64\N_m3u8DL-RE.exe"
 #elif FileExists("..\build\win-x64\Release\N_m3u8DL-RE.exe")
@@ -75,6 +75,12 @@
   #define Nm3u8dlSource "..\dist\tools\win-x64\N_m3u8DL-RE.exe"
 #else
   #define Nm3u8dlSource "..\tools\win-x64\N_m3u8DL-RE.exe"
+#endif
+
+#if TargetArch == "ARM64"
+  #define ToolsDirName "tools\win-arm64"
+#else
+  #define ToolsDirName "tools\win-x64"
 #endif
 
 [Setup]
@@ -148,10 +154,14 @@ Source: "{#SourceDir}\{#MyAppNmhName}"; DestDir: "{app}"; DestName: "{#MyAppNmhN
 Source: "..\translations\desktop.json"; DestDir: "{app}\translations"; Components: core; Flags: ignoreversion
 
 #ifndef CoreOnly
-; Stream extraction workers (N_m3u8DL-RE, FFmpeg, and yt-dlp) - installed exclusively to tools\win-x64
-Source: "{#Nm3u8dlSource}"; DestDir: "{app}\tools\win-x64"; DestName: "N_m3u8DL-RE.exe"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\tools\win-x64\ffmpeg.exe"; DestDir: "{app}\tools\win-x64"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
-Source: "..\tools\win-x64\yt-dlp.exe"; DestDir: "{app}\tools\win-x64"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
+; Stream extraction workers (N_m3u8DL-RE, FFmpeg, and yt-dlp) - installed to architecture-specific tools directory
+Source: "{#Nm3u8dlSource}"; DestDir: "{app}\{#ToolsDirName}"; DestName: "N_m3u8DL-RE.exe"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
+#if TargetArch == "ARM64"
+Source: "..\tools\win-arm64\ffmpeg.exe"; DestDir: "{app}\{#ToolsDirName}"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\tools\win-arm64\yt-dlp.exe"; DestDir: "{app}\{#ToolsDirName}"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
+#endif
+Source: "..\tools\win-x64\ffmpeg.exe"; DestDir: "{app}\{#ToolsDirName}"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\tools\win-x64\yt-dlp.exe"; DestDir: "{app}\{#ToolsDirName}"; Components: stream_workers; Flags: ignoreversion skipifsourcedoesntexist
 #endif
 
 ; Browser extension, manifests, and documentation (excludes development/test files)

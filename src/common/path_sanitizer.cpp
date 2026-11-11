@@ -782,14 +782,20 @@ std::filesystem::path PathSanitizer::FindWorkerBinary(
 #endif
 
     // 1. Search bundled and local tools directories.
-    // Prioritize tools/win-x64 as the single standard location, followed by tools/
-    // for backward compatibility with existing installations.
+    // Prioritize architecture-specific tools directory (tools/win-arm64 or tools/win-x64),
+    // followed by tools/win-x64 and tools/ for compatibility.
     std::vector<std::filesystem::path> search_dirs;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    search_dirs.push_back(exe_dir / "tools" / "win-arm64");
+#endif
     search_dirs.push_back(exe_dir / "tools" / "win-x64");
     search_dirs.push_back(exe_dir / "tools");
 
     // Check AppData tools directories (for portable or user-level stream workers)
     auto app_data_dir = GetDefaultAppDataDir();
+#if defined(_M_ARM64) || defined(__aarch64__)
+    search_dirs.push_back(app_data_dir / "tools" / "win-arm64");
+#endif
     search_dirs.push_back(app_data_dir / "tools" / "win-x64");
     search_dirs.push_back(app_data_dir / "tools");
 
@@ -797,21 +803,30 @@ std::filesystem::path PathSanitizer::FindWorkerBinary(
     if (const char* local_app_data = std::getenv("LOCALAPPDATA")) {
         if (local_app_data[0] != '\0') {
             std::filesystem::path legacy_dir = std::filesystem::path(local_app_data) / "OpenIDM" / "tools";
+#if defined(_M_ARM64) || defined(__aarch64__)
+            search_dirs.push_back(legacy_dir / "win-arm64");
+#endif
             search_dirs.push_back(legacy_dir / "win-x64");
             search_dirs.push_back(legacy_dir);
         }
     }
 #endif
 
-    // Search parent directories up to 3 levels (for test and development builds in build/win-x64/Release/)
+    // Search parent directories up to 3 levels (for test and development builds in build/win-*/Release/)
     std::filesystem::path cur = exe_dir;
     for (int depth = 0; depth < 3; ++depth) {
         if (!cur.has_parent_path()) break;
         cur = cur.parent_path();
+#if defined(_M_ARM64) || defined(__aarch64__)
+        search_dirs.push_back(cur / "tools" / "win-arm64");
+#endif
         search_dirs.push_back(cur / "tools" / "win-x64");
         search_dirs.push_back(cur / "tools");
     }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    search_dirs.push_back(std::filesystem::current_path(ec) / "tools" / "win-arm64");
+#endif
     search_dirs.push_back(std::filesystem::current_path(ec) / "tools" / "win-x64");
     search_dirs.push_back(std::filesystem::current_path(ec) / "tools");
     search_dirs.push_back(exe_dir);

@@ -57,25 +57,63 @@ build:windows-x64:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   variables:
     ErrorActionPreference: "Stop"
-  before_script:
-    - Write-Host "Setting up MSVC toolchain for Windows x64..."
-    - |
-      $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-      $vsInst = & $vsWhere -latest -property installationPath
-      if (-not $vsInst) { throw "Visual Studio installation not found via vswhere." }
-      $vcvars = Join-Path $vsInst "VC\Auxiliary\Build\vcvars64.bat"
-      Write-Host "Found vcvars64 at: $vcvars"
   script:
     - |
-      cmd.exe /c "call `"${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe`" -latest -property installationPath > vs_path.txt"
-      $vsPath = (Get-Content vs_path.txt).Trim()
-      $vcvars64 = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-      
-      cmd.exe /c "call `"$vcvars64`" && cmake -B build/win-x64 -A x64 -DCMAKE_BUILD_TYPE=Release && cmake --build build/win-x64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
-      if ($LASTEXITCODE -ne 0) { throw "CMake build failed for Windows x64" }
+      # 1. Reliable Visual Studio / MSVC Detection
+      $vsInst = $null
+      $vswherePaths = @(
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
+      )
+      $vsWhere = $vswherePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-      # Provision stream workers
-      powershell -ExecutionPolicy Bypass -File scripts/fetch-workers.ps1 -TargetDir tools/win-x64
+      if ($vsWhere) {
+        Write-Host "Running vswhere from: $vsWhere"
+        $candidates = & $vsWhere -latest -products "*" -property installationPath
+        if ($candidates) {
+          $firstCandidate = ($candidates -split "`r?`n")[0].Trim()
+          if ($firstCandidate -and (Test-Path $firstCandidate)) {
+            $vsInst = $firstCandidate
+          }
+        }
+      }
+
+      if (-not $vsInst) {
+        $wellKnownVsPaths = @(
+          "C:\Program Files\Microsoft Visual Studio\18\Community",
+          "C:\Program Files\Microsoft Visual Studio\18\Enterprise",
+          "C:\Program Files\Microsoft Visual Studio\18\Professional",
+          "C:\Program Files\Microsoft Visual Studio\2022\Community",
+          "C:\Program Files\Microsoft Visual Studio\2022\Enterprise",
+          "C:\Program Files\Microsoft Visual Studio\2022\Professional",
+          "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools",
+          "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools",
+          "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise"
+        )
+        foreach ($wp in $wellKnownVsPaths) {
+          if (Test-Path $wp) {
+            $vsInst = $wp
+            break
+          }
+        }
+      }
+
+      if (-not $vsInst) {
+        throw "Visual Studio installation not found via vswhere or standard search paths."
+      }
+
+      Write-Host "Detected Visual Studio installation: $vsInst"
+      $vcvars64 = Join-Path $vsInst "VC\Auxiliary\Build\vcvars64.bat"
+      if (-not (Test-Path $vcvars64)) {
+        throw "vcvars64.bat not found at expected path: $vcvars64"
+      }
+
+      # 2. Configure and Build x64 Targets
+      cmd.exe /c "call `"$vcvars64`" && cmake -B build/win-x64 -A x64 -DCMAKE_BUILD_TYPE=Release && cmake --build build/win-x64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
+      if ($LASTEXITCODE -ne 0) { throw "CMake build failed for Windows x64 with exit code $LASTEXITCODE" }
+
+      # 3. Provision Stream Workers
+      powershell -ExecutionPolicy Bypass -File scripts/fetch-workers.ps1 -TargetDir tools/win-x64 -Architecture x64
   artifacts:
     name: radium-binaries-x64-$CI_COMMIT_REF_SLUG
     expire_in: 1 day
@@ -94,20 +132,67 @@ build:windows-arm64:
     ErrorActionPreference: "Stop"
   script:
     - |
-      cmd.exe /c "call `"${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe`" -latest -property installationPath > vs_path.txt"
-      $vsPath = (Get-Content vs_path.txt).Trim()
-      $vcvars_cross = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsamd64_arm64.bat"
-      
-      cmd.exe /c "call `"$vcvars_cross`" && cmake -B build/win-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
-      if ($LASTEXITCODE -ne 0) { throw "CMake build failed for Windows ARM64" }
+      # 1. Reliable Visual Studio / MSVC Detection
+      $vsInst = $null
+      $vswherePaths = @(
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe"
+      )
+      $vsWhere = $vswherePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-      powershell -ExecutionPolicy Bypass -File scripts/fetch-workers.ps1 -TargetDir tools/win-x64 -Architecture ARM64
+      if ($vsWhere) {
+        Write-Host "Running vswhere from: $vsWhere"
+        $candidates = & $vsWhere -latest -products "*" -property installationPath
+        if ($candidates) {
+          $firstCandidate = ($candidates -split "`r?`n")[0].Trim()
+          if ($firstCandidate -and (Test-Path $firstCandidate)) {
+            $vsInst = $firstCandidate
+          }
+        }
+      }
+
+      if (-not $vsInst) {
+        $wellKnownVsPaths = @(
+          "C:\Program Files\Microsoft Visual Studio\18\Community",
+          "C:\Program Files\Microsoft Visual Studio\18\Enterprise",
+          "C:\Program Files\Microsoft Visual Studio\18\Professional",
+          "C:\Program Files\Microsoft Visual Studio\2022\Community",
+          "C:\Program Files\Microsoft Visual Studio\2022\Enterprise",
+          "C:\Program Files\Microsoft Visual Studio\2022\Professional",
+          "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools",
+          "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools",
+          "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise"
+        )
+        foreach ($wp in $wellKnownVsPaths) {
+          if (Test-Path $wp) {
+            $vsInst = $wp
+            break
+          }
+        }
+      }
+
+      if (-not $vsInst) {
+        throw "Visual Studio installation not found via vswhere or standard search paths."
+      }
+
+      Write-Host "Detected Visual Studio installation: $vsInst"
+      $vcvars_cross = Join-Path $vsInst "VC\Auxiliary\Build\vcvarsamd64_arm64.bat"
+      if (-not (Test-Path $vcvars_cross)) {
+        throw "ARM64 cross-compiler batch file not found: $vcvars_cross"
+      }
+
+      # 2. Configure and Cross-Compile ARM64 Targets
+      cmd.exe /c "call `"$vcvars_cross`" && cmake -B build/win-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
+      if ($LASTEXITCODE -ne 0) { throw "CMake build failed for Windows ARM64 with exit code $LASTEXITCODE" }
+
+      # 3. Provision Architecture-Specific Stream Workers
+      powershell -ExecutionPolicy Bypass -File scripts/fetch-workers.ps1 -TargetDir tools/win-arm64 -Architecture ARM64
   artifacts:
     name: radium-binaries-arm64-$CI_COMMIT_REF_SLUG
     expire_in: 1 day
     paths:
       - build/win-arm64/Release/
-      - tools/win-x64/
+      - tools/win-arm64/
 
 # =============================================================================
 # STAGE: test
