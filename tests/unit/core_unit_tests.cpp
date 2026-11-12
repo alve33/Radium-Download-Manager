@@ -223,8 +223,15 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     openidm::DownloadController ctrl(cfg);
     TEST_ASSERT(ctrl.Initialize().ok(), "Initialize DownloadController");
 
+    // Explicitly disable auto_start_downloads so the test does not trigger worker execution
+    auto ctrl_settings = ctrl.GetSettings();
+    ctrl_settings.auto_start_downloads = false;
+    auto set_res = ctrl.UpdateSettings(ctrl_settings);
+    TEST_ASSERT(set_res.ok(), "Disable automatic downloads for IPC test");
+
     openidm::ipc::IpcServer ipc_server(ctrl);
-    ipc_server.SetHeadlessDaemonMode(true);
+    // Do NOT enable headless daemon mode here, as that forces auto_start to true.
+    ipc_server.SetHeadlessDaemonMode(false);
 
     auto& recorder = StartupDiagnosticRecorder::Instance();
     recorder.ClearReports();
@@ -241,8 +248,8 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     offer_req_obj["id"] = 101;
     offer_req_obj["method"] = "download.offer";
     json::Value offer_params = json::Object{};
-    offer_params["url"] = "https://sg-lg.regxa.com/500MB.test";
-    offer_params["filename"] = "500MB.test";
+    offer_params["url"] = "http://127.0.0.1:9/mock_test_file.bin";
+    offer_params["filename"] = "mock_test_file.bin";
     offer_params["correlationId"] = offer_corr_id;
     offer_params["clientClickTime"] = static_cast<int64_t>(offer_click_ms);
     offer_params["autoStart"] = false;
@@ -275,6 +282,7 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     stream_params["autoStart"] = false;
     stream_params["filename"] = "youtube_empirical.mp4";
     stream_params["qualityId"] = "1080p";
+    stream_params["cachedManifestBody"] = "{\"radiumType\":\"YOUTUBE_STREAM\",\"videoUrl\":\"http://127.0.0.1:9/v.mp4\",\"audioUrl\":\"http://127.0.0.1:9/a.mp4\"}";
     stream_req_obj["params"] = std::move(stream_params);
 
     std::string stream_resp_raw = ipc_server.HandleJsonRpcMessage(stream_req_obj.dump());
@@ -405,8 +413,8 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     no_click_obj["id"] = 103;
     no_click_obj["method"] = "download.offer";
     json::Value nc_params = json::Object{};
-    nc_params["url"] = "https://example.com/no_click.zip";
-    nc_params["filename"] = "no_click.zip";
+    nc_params["url"] = "http://127.0.0.1:9/mock_no_click.zip";
+    nc_params["filename"] = "mock_no_click.zip";
     nc_params["correlationId"] = "corr-no-click-test";
     nc_params["clientClickTime"] = 0;
     nc_params["autoStart"] = false;
@@ -438,8 +446,8 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     future_click_obj["id"] = 104;
     future_click_obj["method"] = "download.offer";
     json::Value fc_params = json::Object{};
-    fc_params["url"] = "https://example.com/future.zip";
-    fc_params["filename"] = "future.zip";
+    fc_params["url"] = "http://127.0.0.1:9/mock_future.zip";
+    fc_params["filename"] = "mock_future.zip";
     fc_params["correlationId"] = "corr-future-click-test";
     fc_params["clientClickTime"] = static_cast<int64_t>(future_click_ms);
     fc_params["autoStart"] = false;
@@ -462,7 +470,7 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
 
     // 3c. First-byte deduplication verification
     std::string dedupe_task = "dedupe-session-test";
-    recorder.StartSession(dedupe_task, "dedupe-corr", "", "https://example.com/dedupe.bin", "dedupe.bin", "HTTP", "", 1024, 100);
+    recorder.StartSession(dedupe_task, "dedupe-corr", "", "http://127.0.0.1:9/mock_dedupe.bin", "mock_dedupe.bin", "HTTP", "", 1024, 100);
     recorder.RecordEvent(dedupe_task, "First data bytes received", "Worker 0");
     recorder.RecordEvent(dedupe_task, "First data bytes received", "Worker 1 duplicate");
     recorder.RecordEvent(dedupe_task, "First data bytes received", "Worker 2 duplicate");
@@ -487,8 +495,8 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     spec_obj["id"] = 105;
     spec_obj["method"] = "download.offer";
     json::Value spec_params = json::Object{};
-    spec_params["url"] = "https://example.com/spec.zip";
-    spec_params["filename"] = "spec.zip";
+    spec_params["url"] = "http://127.0.0.1:9/mock_spec.zip";
+    spec_params["filename"] = "mock_spec.zip";
     spec_params["correlationId"] = special_corr_id;
     spec_params["clientClickTime"] = static_cast<int64_t>(offer_click_ms);
     spec_params["autoStart"] = false;
@@ -730,10 +738,18 @@ int main() {
 
     auto run_test = [&](const char* name, bool (*fn)()) {
         std::cout << "[RUN] " << name << "..." << std::endl;
-        if (fn()) {
-            std::cout << "  -> PASS\n";
-            ++passed;
-        } else {
+        try {
+            if (fn()) {
+                std::cout << "  -> PASS\n";
+                ++passed;
+            } else {
+                std::cout << "  -> FAIL\n";
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "  -> EXCEPTION: " << e.what() << "\n";
+            std::cout << "  -> FAIL\n";
+        } catch (...) {
+            std::cerr << "  -> UNKNOWN EXCEPTION\n";
             std::cout << "  -> FAIL\n";
         }
     };

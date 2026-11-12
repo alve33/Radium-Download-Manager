@@ -14,6 +14,8 @@ variables:
   GIT_DEPTH: "20"
   RADIUM_AUTHORITATIVE_VERSION: "1.0.0"
   GLAB_ENABLE_CI_AUTOLOGIN: "true"
+  GCM_PROVIDER: "generic"
+  GCM_CREDENTIAL_STORE: "cache"
 
 default:
   interruptible: true
@@ -194,38 +196,48 @@ build:windows-arm64:
         }
       }
 
+      # Re-verify ARM64 cross-compiler presence
+      if ($vsWhere) {
+        $arm64Cl = & $vsWhere -latest -products "*" -find "**\bin\Host*\arm64\cl.exe"
+      }
+      if ($arm64Cl) {
+        Write-Host "Confirmed ARM64 cross-compiler: $arm64Cl" -ForegroundColor Green
+      } else {
+        Write-Host "Notice: ARM64 cl.exe not registered in vswhere output; checking vcvarsall resolution..." -ForegroundColor Yellow
+      }
+
       $vcvars_cross = Join-Path $vsInst "VC\Auxiliary\Build\vcvarsamd64_arm64.bat"
       $vcvars_cmd = if (Test-Path $vcvars_cross) { "`"$vcvars_cross`"" } else { "`"$(Join-Path $vsInst 'VC\Auxiliary\Build\vcvarsall.bat')`" x64_arm64" }
 
-      # Ensure MSBuild ARM64 platform targets exist if missing in current VS Build Tools layout
-      $vcPlatformsDir = Join-Path $vsInst "MSBuild\Microsoft\VC\v170\Platforms"
-      if (Test-Path $vcPlatformsDir) {
-        $arm64Platform = Join-Path $vcPlatformsDir "ARM64"
-        $x64Platform = Join-Path $vcPlatformsDir "x64"
-        if ((-not (Test-Path $arm64Platform)) -and (Test-Path $x64Platform)) {
-          Write-Host "Creating ARM64 MSBuild platform definition from x64 template..." -ForegroundColor Yellow
-          Copy-Item -Path $x64Platform -Destination $arm64Platform -Recurse -Force
-          $propsFile = Join-Path $arm64Platform "Platform.Common.props"
-          if (Test-Path $propsFile) {
-            (Get-Content $propsFile) -replace "MachineX64", "MachineARM64" -replace "X64", "ARM64" | Set-Content $propsFile
-          }
-          $defaultProps = Join-Path $arm64Platform "Platform.Default.props"
-          if (Test-Path $defaultProps) {
-            (Get-Content $defaultProps) -replace "x64", "ARM64" -replace "x86_64", "aarch64" | Set-Content $defaultProps
-          }
-          $toolsetProps = Join-Path $arm64Platform "PlatformToolsets\v143\Toolset.props"
-          if (Test-Path $toolsetProps) {
-            (Get-Content $toolsetProps) -replace "Toolset.x64.props", "Toolset.ARM64.props" | Set-Content $toolsetProps
-          }
-        }
+      # 3. Configure and Cross-Compile ARM64 Targets
+      cmd.exe /c "call $vcvars_cmd && cmake -B build/win-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release"
+      if ($LASTEXITCODE -ne 0) {
+        throw "CMake configuration failed for Windows ARM64 with exit code $LASTEXITCODE"
       }
 
-      # 3. Configure and Cross-Compile ARM64 Targets
-      cmd.exe /c "call $vcvars_cmd && cmake -B build/win-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
-      if ($LASTEXITCODE -ne 0) { throw "CMake build failed for Windows ARM64 with exit code $LASTEXITCODE" }
+      cmd.exe /c "call $vcvars_cmd && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
+      if ($LASTEXITCODE -ne 0) {
+        throw "CMake build failed for Windows ARM64 with exit code $LASTEXITCODE"
+      }
 
-      # 4. Provision Architecture-Specific Stream Workers
+      # 4. Mandatory Verification: All Required ARM64 Executables Must Exist
+      $expectedArm64Bins = @(
+        "build/win-arm64/Release/radium.exe",
+        "build/win-arm64/Release/radium-nmh.exe",
+        "build/win-arm64/Release/radium_unit_tests.exe"
+      )
+      foreach ($b in $expectedArm64Bins) {
+        if (-not (Test-Path $b)) {
+          throw "Required ARM64 binary missing after build: $b"
+        }
+        Write-Host "Confirmed ARM64 binary: $b" -ForegroundColor Green
+      }
+
+      # 5. Provision Architecture-Specific Stream Workers
       powershell -ExecutionPolicy Bypass -File scripts/fetch-workers.ps1 -TargetDir tools/win-arm64 -Architecture ARM64
+      if ($LASTEXITCODE -ne 0) {
+        throw "Worker provisioning failed for Windows ARM64 with exit code $LASTEXITCODE"
+      }
   artifacts:
     name: radium-binaries-arm64-$CI_COMMIT_REF_SLUG
     expire_in: 1 day
