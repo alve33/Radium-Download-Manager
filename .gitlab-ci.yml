@@ -14,8 +14,6 @@ variables:
   GIT_DEPTH: "20"
   RADIUM_AUTHORITATIVE_VERSION: "1.0.0"
   GLAB_ENABLE_CI_AUTOLOGIN: "true"
-  GCM_PROVIDER: "generic"
-  GCM_CREDENTIAL_STORE: "cache"
 
 default:
   interruptible: true
@@ -180,44 +178,65 @@ build:windows-arm64:
       Write-Host "Detected Visual Studio installation: $vsInst"
 
       # 2. Verify or Install MSVC ARM64 Build Tools
+      $msvcRoot = Join-Path $vsInst "VC\Tools\MSVC"
       $arm64Cl = $null
-      if ($vsWhere) {
-        $arm64Cl = & $vsWhere -latest -products "*" -find "**\bin\Host*\arm64\cl.exe"
+      if (Test-Path $msvcRoot) {
+        $arm64Cl = Get-ChildItem $msvcRoot -Directory | ForEach-Object {
+          Join-Path $_.FullName "bin\Hostx64\arm64\cl.exe"
+        } | Where-Object { Test-Path $_ } | Select-Object -First 1
       }
+
       if (-not $arm64Cl) {
-        Write-Host "ARM64 C++ tools not found. Downloading vs_BuildTools bootstrapper to install Microsoft.VisualStudio.Component.VC.Tools.ARM64..." -ForegroundColor Yellow
+        Write-Host "ARM64 C++ tools not found in $vsInst. Downloading vs_BuildTools bootstrapper..." -ForegroundColor Yellow
         $btUrl = "https://aka.ms/vs/17/release/vs_BuildTools.exe"
         $btPath = "$env:TEMP\vs_BuildTools.exe"
         & curl.exe -sSL -o $btPath $btUrl
         if (Test-Path $btPath) {
-          $installArgs = @("--quiet", "--wait", "--norestart", "--nocache", "--installPath", "$vsInst", "--add", "Microsoft.VisualStudio.Workload.VCTools", "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64")
+          $installArgs = '--quiet --wait --norestart --nocache ' +
+            '--installPath "' + $vsInst + '" ' +
+            '--add Microsoft.VisualStudio.Workload.VCTools ' +
+            '--add Microsoft.VisualStudio.Component.VC.Tools.ARM64'
           $process = Start-Process -FilePath $btPath -ArgumentList $installArgs -Wait -PassThru
           Write-Host "vs_BuildTools installer completed with exit code: $($process.ExitCode)"
+          if ($process.ExitCode -ne 0) {
+            Write-Error "ARM64 Visual Studio installation failed with exit code: $($process.ExitCode)"
+            exit $process.ExitCode
+          }
         }
       }
 
-      # Re-verify ARM64 cross-compiler presence
-      if ($vsWhere) {
-        $arm64Cl = & $vsWhere -latest -products "*" -find "**\bin\Host*\arm64\cl.exe"
+      # Re-verify ARM64 cross-compiler presence specifically within the selected Visual Studio instance
+      if (Test-Path $msvcRoot) {
+        $arm64Cl = Get-ChildItem $msvcRoot -Directory | ForEach-Object {
+          Join-Path $_.FullName "bin\Hostx64\arm64\cl.exe"
+        } | Where-Object { Test-Path $_ } | Select-Object -First 1
       }
-      if ($arm64Cl) {
-        Write-Host "Confirmed ARM64 cross-compiler: $arm64Cl" -ForegroundColor Green
-      } else {
-        Write-Host "Notice: ARM64 cl.exe not registered in vswhere output; checking vcvarsall resolution..." -ForegroundColor Yellow
+      if (-not $arm64Cl) {
+        Write-Error "ARM64 compiler not installed in selected Visual Studio instance: $vsInst"
+        exit 1
       }
+      Write-Host "Verified compiler: $arm64Cl" -ForegroundColor Green
+      Write-Host "Verified installation: $vsInst" -ForegroundColor Green
 
       $vcvars_cross = Join-Path $vsInst "VC\Auxiliary\Build\vcvarsamd64_arm64.bat"
       $vcvars_cmd = if (Test-Path $vcvars_cross) { "`"$vcvars_cross`"" } else { "`"$(Join-Path $vsInst 'VC\Auxiliary\Build\vcvarsall.bat')`" x64_arm64" }
 
+      # Clean any stale ARM64 build directory before configuration
+      Remove-Item "build/win-arm64" -Recurse -Force -ErrorAction SilentlyContinue
+
       # 3. Configure and Cross-Compile ARM64 Targets
-      cmd.exe /c "call $vcvars_cmd && cmake -B build/win-arm64 -A ARM64 -DCMAKE_BUILD_TYPE=Release"
-      if ($LASTEXITCODE -ne 0) {
-        throw "CMake configuration failed for Windows ARM64 with exit code $LASTEXITCODE"
+      cmd.exe /c "call `"$vcvars_cmd`" && cmake -S . -B build/win-arm64 -G `"Visual Studio 17 2022`" -A ARM64 -DCMAKE_GENERATOR_INSTANCE=`"$vsInst`" -DCMAKE_BUILD_TYPE=Release"
+      $configureExit = $LASTEXITCODE
+      if ($configureExit -ne 0) {
+        Write-Error "ARM64 CMake configuration failed with exit code: $configureExit"
+        exit $configureExit
       }
 
-      cmd.exe /c "call $vcvars_cmd && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
-      if ($LASTEXITCODE -ne 0) {
-        throw "CMake build failed for Windows ARM64 with exit code $LASTEXITCODE"
+      cmd.exe /c "call `"$vcvars_cmd`" && cmake --build build/win-arm64 --config Release --target radium radium-nmh radium_unit_tests radium_core_tests N_m3u8DL-RE"
+      $buildExit = $LASTEXITCODE
+      if ($buildExit -ne 0) {
+        Write-Error "ARM64 compilation failed with exit code: $buildExit"
+        exit $buildExit
       }
 
       # 4. Mandatory Verification: All Required ARM64 Executables Must Exist
