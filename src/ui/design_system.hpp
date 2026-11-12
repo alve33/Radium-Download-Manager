@@ -150,13 +150,13 @@ struct LayoutMetrics {
     int min_window_width{900};
     int min_window_height{560};
     int compact_width_threshold{1024};
-    int toolbar_height{56};
-    int sidebar_width{192};
-    int table_header_height{38};
-    int table_row_height{52};
-    int details_panel_height{142};
+    int toolbar_height{60};
+    int sidebar_width{248};
+    int table_header_height{42};
+    int table_row_height{50};
+    int details_panel_height{126};
     int status_bar_height{28};
-    int button_height{32};
+    int button_height{36};
     int progress_bar_height{6};
     int corner_radius{6};
     int focus_ring_width{2};
@@ -211,22 +211,6 @@ struct UiAnimationState {
         return window_visible && !window_minimized && !reduced_motion;
     }
 
-    bool HasRunningAnimations() const {
-        if (!IsActive()) return false;
-        uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
-        if (toolbar_hover_start_ms > 0 && (now - toolbar_hover_start_ms) < 200) return true;
-        if (row_hover_start_ms > 0 && (now - row_hover_start_ms) < 200) return true;
-        if (row_select_start_ms > 0 && (now - row_select_start_ms) < 200) return true;
-        if (category_transition_start_ms > 0 && (now - category_transition_start_ms) < 200) return true;
-        if (settings_open_start_ms > 0 && (now - settings_open_start_ms) < 200) return true;
-        if (add_dialog_open_start_ms > 0 && (now - add_dialog_open_start_ms) < 200) return true;
-        for (const auto& [id, pulse] : icon_pulses) {
-            if (pulse.start_ms > 0 && (now - pulse.start_ms) < 250) return true;
-        }
-        return false;
-    }
-
     float ComputeTransitionProgress(uint64_t start_ms, uint64_t duration_ms = 150) const {
         if (!IsActive() || start_ms == 0) return 1.0f;
         uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -261,13 +245,13 @@ public:
         m.min_window_width = ScaleForDpi(900, dpi);
         m.min_window_height = ScaleForDpi(560, dpi);
         m.compact_width_threshold = ScaleForDpi(1024, dpi);
-        m.toolbar_height = ScaleForDpi(56, dpi);
-        m.sidebar_width = ScaleForDpi(192, dpi);
-        m.table_header_height = ScaleForDpi(38, dpi);
-        m.table_row_height = ScaleForDpi(52, dpi);
-        m.details_panel_height = ScaleForDpi(142, dpi);
+        m.toolbar_height = ScaleForDpi(60, dpi);
+        m.sidebar_width = ScaleForDpi(248, dpi);
+        m.table_header_height = ScaleForDpi(42, dpi);
+        m.table_row_height = ScaleForDpi(50, dpi);
+        m.details_panel_height = ScaleForDpi(126, dpi);
         m.status_bar_height = ScaleForDpi(28, dpi);
-        m.button_height = ScaleForDpi(32, dpi);
+        m.button_height = ScaleForDpi(36, dpi);
         m.progress_bar_height = ScaleForDpi(6, dpi);
         m.corner_radius = ScaleForDpi(6, dpi);
         m.focus_ring_width = std::max(1, ScaleForDpi(2, dpi));
