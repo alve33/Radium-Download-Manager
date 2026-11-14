@@ -36,7 +36,6 @@
   <a href="#key-features"><b>Features</b></a> ·
   <a href="#light-and-dark-themes"><b>Themes</b></a> ·
   <a href="#multilingual-interface"><b>Languages</b></a> ·
-  <a href="#screenshots"><b>Screenshots</b></a> ·
   <a href="#performance-benchmarks"><b>Benchmarks vs IDM</b></a> ·
   <a href="#high-performance-download-engine"><b>Download Engine</b></a> ·
   <a href="#bittorrent-downloads"><b>BitTorrent</b></a> ·
@@ -181,6 +180,12 @@ Cryptographic checksums for published release binaries are available in [SHA256S
 
 Radium is tailored for Windows 11 with comprehensive first-class support for both light and dark visual aesthetics. Whether working in bright daytime ambient environments or low-light workspaces, the entire user interface—from table grids and progress indicators to configuration modals—adapts cleanly.
 
+<p align="center">
+  <img src="docs/images/readme/radium-main-window-light.png" alt="Radium Download Manager Main Window (Light Mode) showing clean light appearance with native Win32 styling" width="100%">
+  <br>
+  <sub><b>Light Mode Interface:</b> Crisp, daylight-friendly appearance with adaptive contrast, rounded controls, and instant theme switching.</sub>
+</p>
+
 <table>
   <tr>
     <td width="50%" valign="top">
@@ -258,44 +263,6 @@ The table below reflects the actual status of language catalogs in the Radium de
 | **Thai** | ไทย | `th-TH` | **Available** | Planned |
 | **Swedish** | Svenska | `sv-SE` | **Available** | Planned |
 | **Greek** | Ελληνικά | `el-GR` | **Available** | Planned |
-
-<br>
-
-## Screenshots
-
-<p align="center">
-  <img src="docs/images/readme/radium-main-window.png" alt="Radium Download Manager Main Window (Dark Mode) showing active downloads, transfer speeds, and category filters" width="100%">
-  <br>
-  <sub><b>Main Application Window (Dark Mode):</b> High-density download dashboard with live multi-connection segment visualizers, real-time bandwidth telemetry, and category navigation.</sub>
-</p>
-
-<p align="center">
-  <img src="docs/images/readme/radium-main-window-light.png" alt="Radium Download Manager Main Window (Light Mode) showing clean light appearance with native Win32 styling" width="100%">
-  <br>
-  <sub><b>Main Application Window (Light Mode):</b> Crisp, daylight-friendly appearance with adaptive contrast, rounded controls, and instant theme switching.</sub>
-</p>
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="docs/images/readme/radium-new-download-dialog.png" alt="Radium New Download Dialog" width="100%">
-      <br>
-      <sub><b>Pre-Flight Probing:</b> Server range verification, real-time disk space calculation, and category routing.</sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="docs/images/readme/radium-add-torrent-dialog.png" alt="Radium Add Torrent Dialog" width="100%">
-      <br>
-      <sub><b>BitTorrent Management:</b> Selective file hierarchy tree, metadata inspection, and piece verification.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" valign="top">
-      <img src="docs/images/readme/radium-settings-dialog.png" alt="Radium Settings Center showing language selection and theme configuration" width="100%">
-      <br>
-      <sub><b>Settings Center:</b> Language selection with native writing systems, Light/Dark appearance preferences, connection limits, and network routing.</sub>
-    </td>
-  </tr>
-</table>
 
 <br>
 
