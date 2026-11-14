@@ -403,31 +403,38 @@ async function sendNativeRpc(method, params = {}, customTransport = null) {
     const callingExtId = (chrome.runtime && chrome.runtime.id) ? chrome.runtime.id : "unknown";
     let lastErrorMsg = "Native Messaging runtime unavailable";
 
-    for (const hostName of hostsToTry) {
-      if (!hostName) continue;
-      try {
-        const res = await sendNativePortRequest(hostName, payload);
-        logPipelineStage(correlationId, "NATIVE_RPC_RESULT", {
-          method,
-          hostName,
-          extensionId: callingExtId,
-          accepted: res ? Boolean(res.accepted !== false) : true,
-          taskId: res ? (res.taskId || "") : ""
-        });
-        return res;
-      } catch (err) {
-        if (err && err.isRpcError) {
-          logPipelineStage(correlationId, "NATIVE_RPC_ERROR", { method, hostName, error: err.message, code: err.code });
-          throw err;
+    for (let attempt = 1; attempt <= 3; ++attempt) {
+      for (const hostName of hostsToTry) {
+        if (!hostName) continue;
+        try {
+          const res = await sendNativePortRequest(hostName, payload);
+          logPipelineStage(correlationId, "NATIVE_RPC_RESULT", {
+            method,
+            hostName,
+            extensionId: callingExtId,
+            attempt,
+            accepted: res ? Boolean(res.accepted !== false) : true,
+            taskId: res ? (res.taskId || "") : ""
+          });
+          return res;
+        } catch (err) {
+          if (err && err.isRpcError) {
+            logPipelineStage(correlationId, "NATIVE_RPC_ERROR", { method, hostName, error: err.message, code: err.code });
+            throw err;
+          }
+          lastErrorMsg = err ? err.message : String(err);
+          const errType = categorizeNativeError(lastErrorMsg);
+          logPipelineStage(correlationId, "NATIVE_HOST_ATTEMPT_FAILED", {
+            hostName,
+            extensionId: callingExtId,
+            attempt,
+            error: lastErrorMsg,
+            errorCategory: errType
+          });
         }
-        lastErrorMsg = err ? err.message : String(err);
-        const errType = categorizeNativeError(lastErrorMsg);
-        logPipelineStage(correlationId, "NATIVE_HOST_ATTEMPT_FAILED", {
-          hostName,
-          extensionId: callingExtId,
-          error: lastErrorMsg,
-          errorCategory: errType
-        });
+      }
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
       }
     }
     const finalCategory = categorizeNativeError(lastErrorMsg);
@@ -1083,7 +1090,7 @@ async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationI
       throw new Error((completeRes && completeRes.error) || "Complete chunked transfer failed");
     }
 
-    return { success: true, taskId: effectiveTaskId, filename: completeRes.fileName || filename };
+    return { accepted: true, success: true, taskId: effectiveTaskId, fileName: completeRes.fileName || filename, filename: completeRes.fileName || filename };
   }
 
   let resolvedTabId = Number(tabId) || 0;

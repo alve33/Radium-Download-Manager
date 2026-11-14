@@ -3966,7 +3966,8 @@ bool TryShowExistingConflictInsteadOfNewDownload(
     DownloadController& controller,
     const std::string& url,
     const std::string& suggested_filename,
-    const std::string& requested_save_dir) {
+    const std::string& requested_save_dir,
+    const std::string& existing_task_id = "") {
     if (!main_hwnd || !IsWindow(main_hwnd) || url.empty() ||
         controller.GetSettings().conflict_policy != ConflictPolicy::kPrompt) return false;
 
@@ -3981,8 +3982,46 @@ bool TryShowExistingConflictInsteadOfNewDownload(
     if (filename.empty()) return false;
     std::string save_dir = requested_save_dir.empty()
         ? controller.GetSettings().default_download_dir : requested_save_dir;
+
+    auto normalize_cmp = [](std::string s) {
+        const size_t hash_pos = s.find('#');
+        if (hash_pos != std::string::npos) s.resize(hash_pos);
+        for (char& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return s;
+    };
+    const std::string norm_url = normalize_cmp(url);
+    const std::string norm_target_path = normalize_cmp(
+        PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(save_dir) / PathSanitizer::Utf8ToPath(filename)));
+
+    bool exists_in_queue = false;
+    for (const auto& existing : controller.ListTasks()) {
+        if (!existing_task_id.empty() && existing.task_id == existing_task_id) continue;
+        if (normalize_cmp(existing.url) == norm_url) {
+            exists_in_queue = true;
+            break;
+        }
+        const std::string existing_path = normalize_cmp(
+            PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(existing.save_dir) / PathSanitizer::Utf8ToPath(existing.file_name)));
+        if (!existing_path.empty() && existing_path == norm_target_path) {
+            exists_in_queue = true;
+            break;
+        }
+    }
+
     auto destination = PathSanitizer::ResolveSafeOutputPath(save_dir, filename, ConflictPolicy::kPrompt);
-    if (destination.ok() || destination.error->code != "ERR_FILE_EXISTS") return false;
+    const bool exists_on_disk = (!destination.ok() && destination.error->code == "ERR_FILE_EXISTS");
+    if (!exists_on_disk && !exists_in_queue) return false;
+
+    if (!existing_task_id.empty()) {
+        auto offer_task = controller.GetTask(existing_task_id);
+        if (offer_task.has_value()) {
+            offer_task->file_name = filename;
+            offer_task->save_dir = save_dir;
+            if (!MarkTaskAsFileConflict(controller, *offer_task)) return false;
+            SendMessageW(main_hwnd, WM_OPENIDM_SHOW_CONFLICT, 0, 0);
+            return true;
+        }
+    }
 
     TaskModel task;
     task.url = url;
@@ -4099,22 +4138,46 @@ LRESULT CALLBACK ModernEditSubclassProc(
         }
         case WM_PAINT: {
             LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-            // Draw modern border over non-client / border region
+            // Draw modern rounded border over non-client / border region
             HDC hdc = GetWindowDC(hWnd);
             if (hdc) {
                 RECT wr{};
                 GetWindowRect(hWnd, &wr);
-                RECT rc{0, 0, wr.right - wr.left, wr.bottom - wr.top};
+                int w = wr.right - wr.left;
+                int h = wr.bottom - wr.top;
                 bool is_enabled = IsWindowEnabled(hWnd) != FALSE;
-                
-                COLORREF border_clr = !is_enabled ? data->palette.border_subtle.ToWin32ColorRef()
-                                      : (data->is_focused ? data->palette.accent_primary.ToWin32ColorRef()
-                                      : (data->is_hovered ? data->palette.border_focus.ToWin32ColorRef()
-                                                          : data->palette.border_subtle.ToWin32ColorRef()));
-                
-                HBRUSH hBorderBrush = CreateSolidBrush(border_clr);
-                FrameRect(hdc, &rc, hBorderBrush);
-                DeleteObject(hBorderBrush);
+
+                ColorRgba border_rgba = !is_enabled ? data->palette.border_subtle
+                                        : (data->is_focused ? data->palette.accent_primary
+                                        : (data->is_hovered ? data->palette.border_focus
+                                                            : data->palette.border_subtle));
+
+                Gdiplus::Graphics g(hdc);
+                g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                float r = static_cast<float>(std::max(2, data->radius));
+                auto make_rrect = [&](float inset) {
+                    auto path = std::make_unique<Gdiplus::GraphicsPath>();
+                    float x = inset;
+                    float y = inset;
+                    float rw = std::max(1.0f, static_cast<float>(w) - 1.0f - inset * 2.0f);
+                    float rh = std::max(1.0f, static_cast<float>(h) - 1.0f - inset * 2.0f);
+                    float d = std::min(r * 2.0f, std::min(rw, rh));
+                    path->AddArc(x, y, d, d, 180.0f, 90.0f);
+                    path->AddArc(x + rw - d, y, d, d, 270.0f, 90.0f);
+                    path->AddArc(x + rw - d, y + rh - d, d, d, 0.0f, 90.0f);
+                    path->AddArc(x, y + rh - d, d, d, 90.0f, 90.0f);
+                    path->CloseFigure();
+                    return path;
+                };
+
+                if (data->is_focused && is_enabled) {
+                    auto glow_path = make_rrect(0.5f);
+                    Gdiplus::Pen glow_pen(Gdiplus::Color(60, border_rgba.r, border_rgba.g, border_rgba.b), 3.0f);
+                    g.DrawPath(&glow_pen, glow_path.get());
+                }
+                auto border_path = make_rrect(0.75f);
+                Gdiplus::Pen border_pen(Gdiplus::Color(255, border_rgba.r, border_rgba.g, border_rgba.b), 1.5f);
+                g.DrawPath(&border_pen, border_path.get());
 
                 ReleaseDC(hWnd, hdc);
             }
@@ -4142,6 +4205,319 @@ void InstallModernEditControl(HWND hEdit, uint32_t dpi, const ThemePalette& pale
 
     auto* data = new ModernEditData{false, false, pad_x, pad_y, r, palette};
     SetWindowSubclass(hEdit, ModernEditSubclassProc, SUBCLASS_MODERN_EDIT_ID, reinterpret_cast<DWORD_PTR>(data));
+}
+
+// Modern ComboBox Subclass: custom dark rounded box + crisp Gdiplus chevron (replaces classic Windows dropdown arrow)
+constexpr UINT_PTR SUBCLASS_MODERN_COMBO_ID = 9002;
+
+struct ModernComboData {
+    bool is_focused{false};
+    bool is_hovered{false};
+    uint32_t dpi{96};
+    int radius{6};
+    ThemePalette palette{DesignSystem::GetRedesignPalette()};
+    ColorRgba parent_bg{DesignSystem::GetRedesignPalette().app_background};
+};
+
+LRESULT CALLBACK ModernComboSubclassProc(
+    HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    auto* data = reinterpret_cast<ModernComboData*>(dwRefData);
+    if (!data) return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+
+    switch (uMsg) {
+        case WM_SETFOCUS:
+            data->is_focused = true;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        case WM_KILLFOCUS:
+            data->is_focused = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        case WM_MOUSEMOVE:
+            if (!data->is_hovered) {
+                data->is_hovered = true;
+                TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hWnd, 0};
+                TrackMouseEvent(&tme);
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+            break;
+        case WM_MOUSELEAVE:
+            data->is_hovered = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        case CB_SETCURSEL: {
+            LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return res;
+        }
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_NCPAINT:
+            return 0;
+        case WM_PAINT: {
+            PAINTSTRUCT ps{};
+            HDC hdc = BeginPaint(hWnd, &ps);
+            RECT rc{};
+            GetClientRect(hWnd, &rc);
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+            if (w > 0 && h > 0) {
+                HDC memDC = CreateCompatibleDC(hdc);
+                HBITMAP hBmp = CreateCompatibleBitmap(hdc, w, h);
+                HGDIOBJ oldBmp = SelectObject(memDC, hBmp);
+
+                HBRUSH hParentBr = CreateSolidBrush(data->parent_bg.ToWin32ColorRef());
+                FillRect(memDC, &rc, hParentBr);
+                DeleteObject(hParentBr);
+
+                bool is_enabled = IsWindowEnabled(hWnd) != FALSE;
+                ColorRgba fill_rgba = data->palette.surface_elevated;
+                ColorRgba border_rgba = !is_enabled ? data->palette.border_subtle
+                                        : (data->is_focused ? data->palette.accent_primary
+                                        : (data->is_hovered ? data->palette.border_focus
+                                                            : data->palette.border_subtle));
+
+                {
+                    Gdiplus::Graphics g(memDC);
+                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                    float r = static_cast<float>(std::max(2, data->radius));
+                    float inset = 1.0f;
+                    float rw = std::max(1.0f, static_cast<float>(w) - 1.0f - inset * 2.0f);
+                    float rh = std::max(1.0f, static_cast<float>(h) - 1.0f - inset * 2.0f);
+                    float d = std::min(r * 2.0f, std::min(rw, rh));
+
+                    Gdiplus::GraphicsPath path;
+                    path.AddArc(inset, inset, d, d, 180.0f, 90.0f);
+                    path.AddArc(inset + rw - d, inset, d, d, 270.0f, 90.0f);
+                    path.AddArc(inset + rw - d, inset + rh - d, d, d, 0.0f, 90.0f);
+                    path.AddArc(inset, inset + rh - d, d, d, 90.0f, 90.0f);
+                    path.CloseFigure();
+
+                    Gdiplus::SolidBrush fill_brush(Gdiplus::Color(255, fill_rgba.r, fill_rgba.g, fill_rgba.b));
+                    g.FillPath(&fill_brush, &path);
+
+                    if (data->is_focused && is_enabled) {
+                        Gdiplus::Pen glow_pen(Gdiplus::Color(55, border_rgba.r, border_rgba.g, border_rgba.b), 3.0f);
+                        g.DrawPath(&glow_pen, &path);
+                    }
+                    Gdiplus::Pen border_pen(Gdiplus::Color(255, border_rgba.r, border_rgba.g, border_rgba.b), 1.3f);
+                    g.DrawPath(&border_pen, &path);
+
+                    // Draw downward chevron on right
+                    float cx = static_cast<float>(w - DesignSystem::ScaleForDpi(14, data->dpi));
+                    float cy = static_cast<float>(h) * 0.5f;
+                    float arm = static_cast<float>(DesignSystem::ScaleForDpi(4, data->dpi));
+                    ColorRgba chev_col = is_enabled ? data->palette.text_secondary : data->palette.text_muted;
+                    Gdiplus::Pen chev_pen(Gdiplus::Color(255, chev_col.r, chev_col.g, chev_col.b), 1.6f);
+                    chev_pen.SetStartCap(Gdiplus::LineCapRound);
+                    chev_pen.SetEndCap(Gdiplus::LineCapRound);
+                    chev_pen.SetLineJoin(Gdiplus::LineJoinRound);
+                    Gdiplus::PointF pts[3] = {
+                        {cx - arm, cy - arm * 0.45f},
+                        {cx,       cy + arm * 0.55f},
+                        {cx + arm, cy - arm * 0.45f}
+                    };
+                    g.DrawLines(&chev_pen, pts, 3);
+                }
+
+                int sel = static_cast<int>(SendMessageW(hWnd, CB_GETCURSEL, 0, 0));
+                if (sel >= 0) {
+                    int len = static_cast<int>(SendMessageW(hWnd, CB_GETLBTEXTLEN, sel, 0));
+                    if (len > 0) {
+                        std::wstring text(static_cast<size_t>(len) + 1, L'\0');
+                        SendMessageW(hWnd, CB_GETLBTEXT, sel, reinterpret_cast<LPARAM>(text.data()));
+                        text.resize(wcslen(text.c_str()));
+
+                        HFONT hFont = reinterpret_cast<HFONT>(SendMessageW(hWnd, WM_GETFONT, 0, 0));
+                        HGDIOBJ oldFont = hFont ? SelectObject(memDC, hFont) : nullptr;
+                        SetBkMode(memDC, TRANSPARENT);
+                        SetTextColor(memDC, (is_enabled ? data->palette.text_primary : data->palette.text_muted).ToWin32ColorRef());
+                        RECT text_rc{
+                            DesignSystem::ScaleForDpi(10, data->dpi), 0,
+                            std::max(DesignSystem::ScaleForDpi(12, data->dpi), w - DesignSystem::ScaleForDpi(26, data->dpi)), h
+                        };
+                        DrawTextW(memDC, text.c_str(), -1, &text_rc,
+                                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                        if (oldFont) SelectObject(memDC, oldFont);
+                    }
+                }
+
+                BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+                SelectObject(memDC, oldBmp);
+                DeleteObject(hBmp);
+                DeleteDC(memDC);
+            }
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        case WM_NCDESTROY:
+            RemoveWindowSubclass(hWnd, ModernComboSubclassProc, uIdSubclass);
+            delete data;
+            break;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+void InstallModernComboBox(HWND hCombo, uint32_t dpi, const ThemePalette& palette, ColorRgba parent_bg) {
+    if (!hCombo) return;
+    int r = DesignSystem::ScaleForDpi(6, dpi);
+    auto* data = new ModernComboData{false, false, dpi, r, palette, parent_bg};
+    SetWindowSubclass(hCombo, ModernComboSubclassProc, SUBCLASS_MODERN_COMBO_ID, reinterpret_cast<DWORD_PTR>(data));
+}
+
+// Modern CheckBox Subclass: custom 16x16 rounded box + Gdiplus checkmark + transparent parent_bg fill
+constexpr UINT_PTR SUBCLASS_MODERN_CHECKBOX_ID = 9003;
+
+struct ModernCheckBoxData {
+    bool is_hovered{false};
+    bool is_focused{false};
+    uint32_t dpi{96};
+    ThemePalette palette{DesignSystem::GetRedesignPalette()};
+    ColorRgba parent_bg{DesignSystem::GetRedesignPalette().app_background};
+};
+
+LRESULT CALLBACK ModernCheckBoxSubclassProc(
+    HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    auto* data = reinterpret_cast<ModernCheckBoxData*>(dwRefData);
+    if (!data) return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+
+    switch (uMsg) {
+        case WM_SETFOCUS:
+            data->is_focused = true;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        case WM_KILLFOCUS:
+            data->is_focused = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        case WM_MOUSEMOVE:
+            if (!data->is_hovered) {
+                data->is_hovered = true;
+                TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hWnd, 0};
+                TrackMouseEvent(&tme);
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+            break;
+        case WM_MOUSELEAVE:
+            data->is_hovered = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            break;
+        case BM_SETCHECK: {
+            LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return res;
+        }
+        case WM_LBUTTONUP: {
+            LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            InvalidateRect(hWnd, nullptr, FALSE);
+            return res;
+        }
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps{};
+            HDC hdc = BeginPaint(hWnd, &ps);
+            RECT rc{};
+            GetClientRect(hWnd, &rc);
+            int w = rc.right - rc.left;
+            int h = rc.bottom - rc.top;
+            if (w > 0 && h > 0) {
+                HDC memDC = CreateCompatibleDC(hdc);
+                HBITMAP hBmp = CreateCompatibleBitmap(hdc, w, h);
+                HGDIOBJ oldBmp = SelectObject(memDC, hBmp);
+
+                HBRUSH hParentBr = CreateSolidBrush(data->parent_bg.ToWin32ColorRef());
+                FillRect(memDC, &rc, hParentBr);
+                DeleteObject(hParentBr);
+
+                bool checked = (SendMessageW(hWnd, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                bool is_enabled = IsWindowEnabled(hWnd) != FALSE;
+
+                int box_sz = DesignSystem::ScaleForDpi(16, data->dpi);
+                float bx = 1.0f;
+                float by = (static_cast<float>(h) - static_cast<float>(box_sz)) * 0.5f;
+                float bw = static_cast<float>(box_sz);
+                float br = static_cast<float>(DesignSystem::ScaleForDpi(4, data->dpi));
+
+                {
+                    Gdiplus::Graphics g(memDC);
+                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+                    Gdiplus::GraphicsPath path;
+                    float d = br * 2.0f;
+                    path.AddArc(bx, by, d, d, 180.0f, 90.0f);
+                    path.AddArc(bx + bw - d, by, d, d, 270.0f, 90.0f);
+                    path.AddArc(bx + bw - d, by + bw - d, d, d, 0.0f, 90.0f);
+                    path.AddArc(bx, by + bw - d, d, d, 90.0f, 90.0f);
+                    path.CloseFigure();
+
+                    if (checked) {
+                        ColorRgba acc = data->palette.accent_primary;
+                        Gdiplus::SolidBrush fill_b(Gdiplus::Color(is_enabled ? 255 : 140, acc.r, acc.g, acc.b));
+                        g.FillPath(&fill_b, &path);
+
+                        Gdiplus::Pen chk_pen(Gdiplus::Color(255, 255, 255, 255), 1.8f);
+                        chk_pen.SetStartCap(Gdiplus::LineCapRound);
+                        chk_pen.SetEndCap(Gdiplus::LineCapRound);
+                        chk_pen.SetLineJoin(Gdiplus::LineJoinRound);
+                        Gdiplus::PointF pts[3] = {
+                            {bx + bw * 0.24f, by + bw * 0.52f},
+                            {bx + bw * 0.44f, by + bw * 0.72f},
+                            {bx + bw * 0.78f, by + bw * 0.30f}
+                        };
+                        g.DrawLines(&chk_pen, pts, 3);
+                    } else {
+                        ColorRgba bg = data->palette.surface_elevated;
+                        ColorRgba brd = data->is_hovered ? data->palette.border_focus : data->palette.border_subtle;
+                        Gdiplus::SolidBrush fill_b(Gdiplus::Color(255, bg.r, bg.g, bg.b));
+                        g.FillPath(&fill_b, &path);
+                        Gdiplus::Pen brd_pen(Gdiplus::Color(255, brd.r, brd.g, brd.b), 1.3f);
+                        g.DrawPath(&brd_pen, &path);
+                    }
+
+                    if (data->is_focused && is_enabled) {
+                        ColorRgba acc = data->palette.accent_primary;
+                        Gdiplus::Pen focus_pen(Gdiplus::Color(90, acc.r, acc.g, acc.b), 1.5f);
+                        g.DrawPath(&focus_pen, &path);
+                    }
+                }
+
+                wchar_t buf[256]{};
+                int tlen = GetWindowTextW(hWnd, buf, 255);
+                if (tlen > 0) {
+                    HFONT hFont = reinterpret_cast<HFONT>(SendMessageW(hWnd, WM_GETFONT, 0, 0));
+                    HGDIOBJ oldFont = hFont ? SelectObject(memDC, hFont) : nullptr;
+                    SetBkMode(memDC, TRANSPARENT);
+                    SetTextColor(memDC, (is_enabled ? data->palette.text_primary : data->palette.text_muted).ToWin32ColorRef());
+                    RECT text_rc{
+                        static_cast<LONG>(bx + bw) + DesignSystem::ScaleForDpi(8, data->dpi), 0, w, h
+                    };
+                    DrawTextW(memDC, buf, tlen, &text_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    if (oldFont) SelectObject(memDC, oldFont);
+                }
+
+                BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+                SelectObject(memDC, oldBmp);
+                DeleteObject(hBmp);
+                DeleteDC(memDC);
+            }
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        case WM_NCDESTROY:
+            RemoveWindowSubclass(hWnd, ModernCheckBoxSubclassProc, uIdSubclass);
+            delete data;
+            break;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+void InstallModernCheckBox(HWND hCheck, uint32_t dpi, const ThemePalette& palette, ColorRgba parent_bg) {
+    if (!hCheck) return;
+    auto* data = new ModernCheckBoxData{false, false, dpi, palette, parent_bg};
+    SetWindowSubclass(hCheck, ModernCheckBoxSubclassProc, SUBCLASS_MODERN_CHECKBOX_ID, reinterpret_cast<DWORD_PTR>(data));
 }
 
 bool SyncTaskbarProgress(HWND hwnd, ITaskbarList3* pTaskbar, const DesktopView& view, Win32WindowContext* ctx) {
@@ -4252,6 +4628,10 @@ void ApplyWindowGlassBackdropWin32(HWND hwnd, const ThemePalette& palette, bool 
     // 2. Windows 11 rounded corners (DWMWA_WINDOW_CORNER_PREFERENCE = 33, 2 = DWMWCP_ROUND)
     int corner_pref = 2;
     DwmSetWindowAttribute(hwnd, 33, &corner_pref, sizeof(corner_pref));
+    if (use_dark) {
+        COLORREF border_col = RGB(0x2E, 0x2E, 0x36);
+        DwmSetWindowAttribute(hwnd, 34, &border_col, sizeof(border_col));
+    }
 
     // 3. Titlebar styling
     COLORREF titlebar_col = palette.app_background.ToWin32ColorRef();
@@ -4558,6 +4938,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
                 pad_x, y_q, q_w, DesignSystem::ScaleForDpi(180, dpi), hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5005)), hInst, nullptr);
             SendMessageW(ctx->hQualityCombo, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
+            InstallModernComboBox(ctx->hQualityCombo, dpi, ctx->view->GetPalette(), ctx->view->GetPalette().app_background);
             bool is_video_stream = false;
             std::optional<TaskModel> existing_task;
             if (!ctx->existing_task_id.empty()) {
@@ -4716,16 +5097,18 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5007)), hInst, nullptr);
             SendMessageW(ctx->hStartChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hStartChk, BM_SETCHECK, s.auto_start_downloads ? BST_CHECKED : BST_UNCHECKED, 0);
+            InstallModernCheckBox(ctx->hStartChk, dpi, ctx->view->GetPalette(), ctx->view->GetPalette().app_background);
 
             // Schedule Checkbox & Time Edit
             int y_sched = DesignSystem::ScaleForDpi(NewDownloadDialogLayout::kScheduleChkTop, dpi);
             int sched_w = DesignSystem::ScaleForDpi(130, dpi);
             int sched_x = pad_x + start_w + DesignSystem::ScaleForDpi(8, dpi);
-            ctx->hScheduleChk = CreateWindowExW(0, L"BUTTON", L"Schedule at:",
+            ctx->hScheduleChk = CreateWindowExW(0, L"BUTTON", L"Schedule at",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                 sched_x, y_sched, sched_w, DesignSystem::ScaleForDpi(24, dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(5010)), hInst, nullptr);
             SendMessageW(ctx->hScheduleChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
+            InstallModernCheckBox(ctx->hScheduleChk, dpi, ctx->view->GetPalette(), ctx->view->GetPalette().app_background);
 
             ctx->hScheduleTimeEdit = CreateWindowExW(0, L"EDIT", L"23:00",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | WS_DISABLED,
@@ -4869,6 +5252,14 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             SetBkColor(hdcEdit, palette.surface_elevated.ToWin32ColorRef());
             return reinterpret_cast<LRESULT>(ctx->hEditBrush);
         }
+        case WM_CTLCOLORLISTBOX: {
+            HDC hdcList = reinterpret_cast<HDC>(wParam);
+            const auto& palette = ctx->view->GetPalette();
+            SetBkMode(hdcList, OPAQUE);
+            SetBkColor(hdcList, palette.surface_primary.ToWin32ColorRef());
+            SetTextColor(hdcList, palette.text_primary.ToWin32ColorRef());
+            return reinterpret_cast<LRESULT>(ctx->hBgBrush);
+        }
         case WM_CTLCOLORSTATIC: {
             HDC hdcStatic = reinterpret_cast<HDC>(wParam);
             HWND hCtl = reinterpret_cast<HWND>(lParam);
@@ -4881,7 +5272,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             } else if (hCtl == ctx->hSpaceLabel) {
                 SetTextColor(hdcStatic, ctx->view->GetPalette().text_muted.ToWin32ColorRef());
             } else if (hCtl == ctx->hFileSizeLabel) {
-                SetTextColor(hdcStatic, ctx->view->GetPalette().accent_cyan.ToWin32ColorRef());
+                SetTextColor(hdcStatic, ctx->view->GetPalette().text_secondary.ToWin32ColorRef());
             } else {
                 SetTextColor(hdcStatic, ctx->view->GetPalette().text_secondary.ToWin32ColorRef());
             }
@@ -4914,24 +5305,35 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::kHeaderSubtitleTop, dpi),
                      L"Configure download source, file name and destination folder", 59);
 
-            // Subtle divider line
+            // Clean 1px hairline divider
+            ColorRgba hairline = (pal.mode == ThemeMode::kLight)
+                ? pal.border_subtle : ColorRgba{0xFF, 0xFF, 0xFF, 18};
             RECT div_rc{
                 pad_x,
                 DesignSystem::ScaleForDpi(NewDownloadDialogLayout::kDividerTop, dpi),
                 rc.right - pad_x,
                 DesignSystem::ScaleForDpi(NewDownloadDialogLayout::kDividerTop + 1, dpi)
             };
-            FillRectSolid(hdc, div_rc, pal.border_subtle);
-            RECT accent_div{div_rc.left, div_rc.top, div_rc.left + DesignSystem::ScaleForDpi(44, dpi), div_rc.bottom};
-            FillRectSolid(hdc, accent_div, pal.accent_primary);
+            FillRectSolid(hdc, div_rc, hairline);
 
             // Field labels: separate non-overlapping rows above each control
             SelectObject(hdc, ctx->hFontBold);
             SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(0), dpi), L"Download URL:", 13);
-            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(1), dpi), L"File Name:", 10);
-            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(2), dpi), L"Save Location:", 14);
-            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(3), dpi), L"Quality / Format:", 17);
+            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(0), dpi), L"Download URL", 12);
+            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(1), dpi), L"File Name", 9);
+            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(2), dpi), L"Save Location", 13);
+            TextOutW(hdc, pad_x, DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(3), dpi), L"Quality / Format", 16);
+
+            // Dedicated bottom footer bar with 1px top hairline
+            int footer_top = DesignSystem::ScaleForDpi(NewDownloadDialogLayout::kButtonsTop - 10, dpi);
+            if (footer_top < rc.bottom) {
+                ColorRgba footer_bg = (pal.mode == ThemeMode::kLight)
+                    ? pal.surface_primary : ColorRgba{0x14, 0x14, 0x17, 255};
+                RECT footer_rc{0, footer_top, rc.right, rc.bottom};
+                FillRectSolid(hdc, footer_rc, footer_bg);
+                RECT footer_line{0, footer_top, rc.right, footer_top + 1};
+                FillRectSolid(hdc, footer_line, hairline);
+            }
 
             EndPaint(hwnd, &ps);
             return 0;
@@ -5565,8 +5967,8 @@ void ShowNewDownloadDialogWin32(
         }
     }
 
-    if (existing_task_id.empty() && TryShowExistingConflictInsteadOfNewDownload(
-            hwnd_parent, controller, candidate_url, suggested_filename, save_dir)) {
+    if (TryShowExistingConflictInsteadOfNewDownload(
+            hwnd_parent, controller, candidate_url, suggested_filename, save_dir, existing_task_id)) {
         return;
     }
 
@@ -6610,42 +7012,66 @@ void DrawRoundedBoxGdi(HDC hdc, const RECT& rc, int radius, ColorRgba bg, ColorR
 
 void DrawCheckboxGdi(HDC hdc, const RECT& rc, bool checked, const ThemePalette& pal) {
     const bool is_light = (pal.mode == ThemeMode::kLight);
-    ColorRgba actual_bg = checked ? pal.accent_primary : (is_light ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : ColorRgba{0x16, 0x16, 0x18, 255});
-    ColorRgba actual_border = checked ? pal.accent_primary : (is_light ? ColorRgba{0x94, 0xA3, 0xB8, 255} : ColorRgba{0x71, 0x71, 0x7A, 255});
+    ColorRgba actual_bg = checked ? pal.accent_primary : (is_light ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : pal.surface_elevated);
+    ColorRgba actual_border = checked ? pal.accent_primary : (is_light ? ColorRgba{0x94, 0xA3, 0xB8, 255} : ColorRgba{0x52, 0x52, 0x5E, 255});
 
-    DrawRoundedBoxGdi(hdc, rc, 4, actual_bg, actual_border, 1);
-    if (checked) {
-        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-        HGDIOBJ oldPen = SelectObject(hdc, hPen);
-        POINT pts[3] = {
-            {rc.left + 4, rc.top + (rc.bottom - rc.top) / 2},
-            {rc.left + (rc.right - rc.left) / 2 - 1, rc.bottom - 5},
-            {rc.right - 4, rc.top + 5}
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float x = static_cast<float>(rc.left);
+    float y = static_cast<float>(rc.top);
+    float w = static_cast<float>(std::max<LONG>(4, rc.right - rc.left));
+    float h = static_cast<float>(std::max<LONG>(4, rc.bottom - rc.top));
+    float r = std::min(4.0f, std::min(w, h) * 0.3f);
+    float d = r * 2.0f;
+
+    Gdiplus::GraphicsPath path;
+    path.AddArc(x, y, d, d, 180.0f, 90.0f);
+    path.AddArc(x + w - d, y, d, d, 270.0f, 90.0f);
+    path.AddArc(x + w - d, y + h - d, d, d, 0.0f, 90.0f);
+    path.AddArc(x, y + h - d, d, d, 90.0f, 90.0f);
+    path.CloseFigure();
+
+    Gdiplus::SolidBrush fill_b(Gdiplus::Color(255, actual_bg.r, actual_bg.g, actual_bg.b));
+    g.FillPath(&fill_b, &path);
+
+    if (!checked) {
+        Gdiplus::Pen brd_pen(Gdiplus::Color(255, actual_border.r, actual_border.g, actual_border.b), 1.2f);
+        g.DrawPath(&brd_pen, &path);
+    } else {
+        Gdiplus::Pen chk_pen(Gdiplus::Color(255, 255, 255, 255), 1.8f);
+        chk_pen.SetStartCap(Gdiplus::LineCapRound);
+        chk_pen.SetEndCap(Gdiplus::LineCapRound);
+        chk_pen.SetLineJoin(Gdiplus::LineJoinRound);
+        Gdiplus::PointF pts[3] = {
+            {x + w * 0.23f, y + h * 0.52f},
+            {x + w * 0.43f, y + h * 0.72f},
+            {x + w * 0.78f, y + h * 0.29f}
         };
-        Polyline(hdc, pts, 3);
-        SelectObject(hdc, oldPen);
-        DeleteObject(hPen);
+        g.DrawLines(&chk_pen, pts, 3);
     }
 }
 
 void DrawCheckboxGdi(HDC hdc, const RECT& rc, bool checked, ColorRgba bg, ColorRgba border, ColorRgba check_col) {
-    (void)bg;
-    (void)border;
-    const bool is_light = (check_col.r == 0x02 && check_col.g == 0x84) || (bg.r >= 0xEE && bg.g >= 0xEE);
-    ColorRgba actual_bg = checked ? check_col : (is_light ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : ColorRgba{0x16, 0x16, 0x18, 255});
-    ColorRgba actual_border = checked ? check_col : (is_light ? ColorRgba{0x94, 0xA3, 0xB8, 255} : ColorRgba{0x71, 0x71, 0x7A, 255});
+    ColorRgba actual_bg = checked ? border : bg;
+    ColorRgba actual_border = border;
     DrawRoundedBoxGdi(hdc, rc, 4, actual_bg, actual_border, 1);
     if (checked) {
-        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
-        HGDIOBJ oldPen = SelectObject(hdc, hPen);
-        POINT pts[3] = {
-            {rc.left + 4, rc.top + (rc.bottom - rc.top) / 2},
-            {rc.left + (rc.right - rc.left) / 2 - 1, rc.bottom - 5},
-            {rc.right - 4, rc.top + 5}
+        Gdiplus::Graphics g(hdc);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        float x = static_cast<float>(rc.left);
+        float y = static_cast<float>(rc.top);
+        float w = static_cast<float>(std::max<LONG>(4, rc.right - rc.left));
+        float h = static_cast<float>(std::max<LONG>(4, rc.bottom - rc.top));
+        Gdiplus::Pen chk_pen(Gdiplus::Color(255, check_col.r, check_col.g, check_col.b), 1.8f);
+        chk_pen.SetStartCap(Gdiplus::LineCapRound);
+        chk_pen.SetEndCap(Gdiplus::LineCapRound);
+        chk_pen.SetLineJoin(Gdiplus::LineJoinRound);
+        Gdiplus::PointF pts[3] = {
+            {x + w * 0.23f, y + h * 0.52f},
+            {x + w * 0.43f, y + h * 0.72f},
+            {x + w * 0.78f, y + h * 0.29f}
         };
-        Polyline(hdc, pts, 3);
-        SelectObject(hdc, oldPen);
-        DeleteObject(hPen);
+        g.DrawLines(&chk_pen, pts, 3);
     }
 }
 
@@ -7589,54 +8015,54 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             int combo_h = DesignSystem::ScaleForDpi(200, ctx->dpi);
 
             // --- LEFT PANE CONTROLS ---
-            int cur_y = DesignSystem::ScaleForDpi(18, ctx->dpi);
+            int left_x = margin + DesignSystem::ScaleForDpi(12, ctx->dpi);
+            int left_ctrl_w = left_w - DesignSystem::ScaleForDpi(24, ctx->dpi);
 
-            // Torrent Management Mode
-            cur_y += DesignSystem::ScaleForDpi(20, ctx->dpi);
+            // 1. Management Mode (label at 24, combo at 42)
             ctx->hModeCombo = CreateWindowExW(0, L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), combo_h,
+                left_x, DesignSystem::ScaleForDpi(42, ctx->dpi), left_ctrl_w, combo_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorModeCombo)), hInst, nullptr);
             SendMessageW(ctx->hModeCombo, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hModeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Manual"));
             SendMessageW(ctx->hModeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Automatic"));
             SendMessageW(ctx->hModeCombo, CB_SETCURSEL, 0, 0);
+            InstallModernComboBox(ctx->hModeCombo, ctx->dpi, palette, palette.surface_primary);
 
-            // Save at
-            cur_y += DesignSystem::ScaleForDpi(46, ctx->dpi);
-            int edit_w = left_w - DesignSystem::ScaleForDpi(62, ctx->dpi);
+            // 2. Save Path (label at 78, edit at 96, checkboxes at 128, 150)
+            int y_save = DesignSystem::ScaleForDpi(96, ctx->dpi);
+            int edit_w = left_ctrl_w - DesignSystem::ScaleForDpi(34, ctx->dpi);
             ctx->hSaveDirEdit = CreateWindowExW(0, L"EDIT", Utf8ToW(ctx->target_save_dir).c_str(),
                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, edit_w, ctrl_h,
+                left_x, y_save, edit_w, ctrl_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorSaveDirEdit)), hInst, nullptr);
             SendMessageW(ctx->hSaveDirEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
-            InstallModernEditControl(ctx->hSaveDirEdit, ctx->dpi, ctx->view->GetPalette());
+            InstallModernEditControl(ctx->hSaveDirEdit, ctx->dpi, palette);
 
             ctx->hBrowseBtn = CreateWindowExW(0, L"BUTTON", L"...",
                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(14, ctx->dpi) + edit_w, cur_y, DesignSystem::ScaleForDpi(28, ctx->dpi), ctrl_h,
+                left_x + edit_w + DesignSystem::ScaleForDpi(6, ctx->dpi), y_save, DesignSystem::ScaleForDpi(28, ctx->dpi), ctrl_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorBrowseBtn)), hInst, nullptr);
 
-            cur_y += DesignSystem::ScaleForDpi(32, ctx->dpi);
             ctx->hIncompleteChk = CreateWindowExW(0, L"BUTTON", L"Use another path for incomplete torrent",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(128, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorIncompleteChk)), hInst, nullptr);
             SendMessageW(ctx->hIncompleteChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
+            InstallModernCheckBox(ctx->hIncompleteChk, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(24, ctx->dpi);
             ctx->hRememberPathChk = CreateWindowExW(0, L"BUTTON", L"Remember last used save path",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(150, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorRememberPathChk)), hInst, nullptr);
             SendMessageW(ctx->hRememberPathChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
             SendMessageW(ctx->hRememberPathChk, BM_SETCHECK, BST_CHECKED, 0);
+            InstallModernCheckBox(ctx->hRememberPathChk, ctx->dpi, palette, palette.surface_primary);
 
-            // Category & Tags
-            cur_y += DesignSystem::ScaleForDpi(40, ctx->dpi);
+            // 3. Category (label at 180, combo at 198, chk at 230)
             ctx->hCategoryCombo = CreateWindowExW(0, L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), combo_h,
+                left_x, DesignSystem::ScaleForDpi(198, ctx->dpi), left_ctrl_w, combo_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorCategoryCombo)), hInst, nullptr);
             SendMessageW(ctx->hCategoryCombo, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hCategoryCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"(None)"));
@@ -7645,92 +8071,99 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             SendMessageW(ctx->hCategoryCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Music"));
             SendMessageW(ctx->hCategoryCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Software"));
             SendMessageW(ctx->hCategoryCombo, CB_SETCURSEL, 1, 0);
+            InstallModernComboBox(ctx->hCategoryCombo, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(30, ctx->dpi);
             ctx->hDefaultCatChk = CreateWindowExW(0, L"BUTTON", L"Set as default category",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(230, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorDefaultCatChk)), hInst, nullptr);
             SendMessageW(ctx->hDefaultCatChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
+            InstallModernCheckBox(ctx->hDefaultCatChk, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(40, ctx->dpi);
+            // 4. Tags (label at 260, edit at 278)
             ctx->hTagsEdit = CreateWindowExW(0, L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), ctrl_h,
+                left_x, DesignSystem::ScaleForDpi(278, ctx->dpi), left_ctrl_w, ctrl_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorTagsEdit)), hInst, nullptr);
             SendMessageW(ctx->hTagsEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
-            InstallModernEditControl(ctx->hTagsEdit, ctx->dpi, ctx->view->GetPalette());
+            SendMessageW(ctx->hTagsEdit, 0x1501 /* EM_SETCUEBANNER */, TRUE, reinterpret_cast<LPARAM>(L"e.g., anime, 1080p, season-1"));
+            InstallModernEditControl(ctx->hTagsEdit, ctx->dpi, palette);
 
-            // Torrent Options
-            cur_y += DesignSystem::ScaleForDpi(42, ctx->dpi);
+            // 5. Transfer & Queue (label at 314, start chk at 332)
             ctx->hStartChk = CreateWindowExW(0, L"BUTTON", L"Start torrent",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(332, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorStartChk)), hInst, nullptr);
             SendMessageW(ctx->hStartChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBold), TRUE);
             SendMessageW(ctx->hStartChk, BM_SETCHECK, ctx->start_immediately ? BST_CHECKED : BST_UNCHECKED, 0);
+            InstallModernCheckBox(ctx->hStartChk, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(36, ctx->dpi);
+            // 6. Stop Condition (label at 360, combo at 378, checkboxes at 410..476)
             ctx->hStopCondCombo = CreateWindowExW(0, L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), combo_h,
+                left_x, DesignSystem::ScaleForDpi(378, ctx->dpi), left_ctrl_w, combo_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorStopCondCombo)), hInst, nullptr);
             SendMessageW(ctx->hStopCondCombo, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hStopCondCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"None"));
             SendMessageW(ctx->hStopCondCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Metadata received"));
             SendMessageW(ctx->hStopCondCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Files checked"));
             SendMessageW(ctx->hStopCondCombo, CB_SETCURSEL, 0, 0);
+            InstallModernComboBox(ctx->hStopCondCombo, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(28, ctx->dpi);
             ctx->hQueueTopChk = CreateWindowExW(0, L"BUTTON", L"Add to top of queue",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(410, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorQueueTopChk)), hInst, nullptr);
             SendMessageW(ctx->hQueueTopChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
+            InstallModernCheckBox(ctx->hQueueTopChk, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(22, ctx->dpi);
             ctx->hSkipHashChk = CreateWindowExW(0, L"BUTTON", L"Skip hash check",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(432, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorSkipHashChk)), hInst, nullptr);
             SendMessageW(ctx->hSkipHashChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
+            InstallModernCheckBox(ctx->hSkipHashChk, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(22, ctx->dpi);
             ctx->hSequentialChk = CreateWindowExW(0, L"BUTTON", L"Download in sequential order",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(454, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorSequentialChk)), hInst, nullptr);
             SendMessageW(ctx->hSequentialChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
+            InstallModernCheckBox(ctx->hSequentialChk, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(22, ctx->dpi);
             ctx->hFirstLastChk = CreateWindowExW(0, L"BUTTON", L"Download first and last pieces first",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), DesignSystem::ScaleForDpi(20, ctx->dpi),
+                left_x, DesignSystem::ScaleForDpi(476, ctx->dpi), left_ctrl_w, DesignSystem::ScaleForDpi(20, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorFirstLastChk)), hInst, nullptr);
             SendMessageW(ctx->hFirstLastChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
+            InstallModernCheckBox(ctx->hFirstLastChk, ctx->dpi, palette, palette.surface_primary);
 
-            cur_y += DesignSystem::ScaleForDpi(36, ctx->dpi);
+            // 7. Content Layout (label at 504, combo at 522)
             ctx->hLayoutCombo = CreateWindowExW(0, L"COMBOBOX", L"",
                 WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), cur_y, left_w - DesignSystem::ScaleForDpi(20, ctx->dpi), combo_h,
+                left_x, DesignSystem::ScaleForDpi(522, ctx->dpi), left_ctrl_w, combo_h,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorLayoutCombo)), hInst, nullptr);
             SendMessageW(ctx->hLayoutCombo, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
             SendMessageW(ctx->hLayoutCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Original"));
             SendMessageW(ctx->hLayoutCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Create subfolder"));
             SendMessageW(ctx->hLayoutCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Don't create subfolder"));
             SendMessageW(ctx->hLayoutCombo, CB_SETCURSEL, 0, 0);
+            InstallModernComboBox(ctx->hLayoutCombo, ctx->dpi, palette, palette.surface_primary);
 
-            // Bottom left
-            int bot_y = h - DesignSystem::ScaleForDpi(50, ctx->dpi);
+            // Bottom left (inside 56px footer bar)
+            ColorRgba footer_bg = (palette.mode == ThemeMode::kLight)
+                ? palette.surface_primary : ColorRgba{0x14, 0x14, 0x17, 255};
+            int bot_y = h - DesignSystem::ScaleForDpi(45, ctx->dpi);
             ctx->hNeverShowChk = CreateWindowExW(0, L"BUTTON", L"Never show again",
                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(10, ctx->dpi), bot_y + DesignSystem::ScaleForDpi(4, ctx->dpi), DesignSystem::ScaleForDpi(140, ctx->dpi), DesignSystem::ScaleForDpi(22, ctx->dpi),
+                margin, bot_y + DesignSystem::ScaleForDpi(6, ctx->dpi), DesignSystem::ScaleForDpi(140, ctx->dpi), DesignSystem::ScaleForDpi(22, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorNeverShowChk)), hInst, nullptr);
             SendMessageW(ctx->hNeverShowChk, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontSmall), TRUE);
+            InstallModernCheckBox(ctx->hNeverShowChk, ctx->dpi, palette, footer_bg);
 
             ctx->hSaveTorrentBtn = CreateWindowExW(0, L"BUTTON", L"Save .torrent...",
                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_OWNERDRAW | WS_TABSTOP,
-                margin + DesignSystem::ScaleForDpi(160, ctx->dpi), bot_y, DesignSystem::ScaleForDpi(130, ctx->dpi), DesignSystem::ScaleForDpi(30, ctx->dpi),
+                margin + DesignSystem::ScaleForDpi(150, ctx->dpi), bot_y, DesignSystem::ScaleForDpi(130, ctx->dpi), DesignSystem::ScaleForDpi(34, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorSaveTorrentBtn)), hInst, nullptr);
 
             // --- RIGHT PANE CONTROLS ---
@@ -7756,6 +8189,7 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 filter_x, r_top, filter_w, DesignSystem::ScaleForDpi(28, ctx->dpi),
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAddTorFilterEdit)), hInst, nullptr);
             SendMessageW(ctx->hFilterEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hFontBody), TRUE);
+            SendMessageW(ctx->hFilterEdit, 0x1501 /* EM_SETCUEBANNER */, TRUE, reinterpret_cast<LPARAM>(L"Filter files in torrent..."));
             InstallModernEditControl(ctx->hFilterEdit, ctx->dpi, ctx->view->GetPalette());
 
             // File list
@@ -7860,12 +8294,16 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             int sum_y = list_top + list_h + DesignSystem::ScaleForDpi(8, dpi);
             SetWindowPos(ctx->hSummaryStatic, nullptr, right_x, sum_y, right_w, DesignSystem::ScaleForDpi(20, dpi), SWP_NOZORDER | SWP_NOACTIVATE);
 
+            int bot_y = h - DesignSystem::ScaleForDpi(45, dpi);
+            SetWindowPos(ctx->hNeverShowChk, nullptr, margin, bot_y + DesignSystem::ScaleForDpi(6, dpi), DesignSystem::ScaleForDpi(140, dpi), DesignSystem::ScaleForDpi(22, dpi), SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(ctx->hSaveTorrentBtn, nullptr, margin + DesignSystem::ScaleForDpi(150, dpi), bot_y, DesignSystem::ScaleForDpi(130, dpi), DesignSystem::ScaleForDpi(34, dpi), SWP_NOZORDER | SWP_NOACTIVATE);
+
             int btn_h = DesignSystem::ScaleForDpi(34, dpi);
             int ok_w = DesignSystem::ScaleForDpi(130, dpi);
             int can_w = DesignSystem::ScaleForDpi(100, dpi);
             int can_x = right_x + right_w - can_w;
             int ok_x = can_x - ok_w - DesignSystem::ScaleForDpi(10, dpi);
-            int action_y = h - DesignSystem::ScaleForDpi(46, dpi);
+            int action_y = h - DesignSystem::ScaleForDpi(45, dpi);
             SetWindowPos(ctx->hCancelBtn, nullptr, can_x, action_y, can_w, btn_h, SWP_NOZORDER | SWP_NOACTIVATE);
             SetWindowPos(ctx->hOkBtn, nullptr, ok_x, action_y, ok_w, btn_h, SWP_NOZORDER | SWP_NOACTIVATE);
 
@@ -7892,29 +8330,27 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             const auto& pal = ctx->view ? ctx->view->GetPalette() : DesignSystem::GetRedesignPalette();
             int left_w = DesignSystem::ScaleForDpi(330, ctx->dpi);
             int margin = DesignSystem::ScaleForDpi(14, ctx->dpi);
+            int footer_h = DesignSystem::ScaleForDpi(56, ctx->dpi);
+            int footer_top = rcClient.bottom - footer_h;
 
-            // Left pane card
-            RECT left_card{margin, margin, margin + left_w, rcClient.bottom - margin};
+            // Left pane card (clean rounded surface above the footer bar)
+            RECT left_card{margin, margin, margin + left_w, std::max(margin + 20, footer_top - margin)};
             DrawRoundedBoxGdi(hdc, left_card, DesignSystem::ScaleForDpi(10, ctx->dpi),
                               pal.surface_primary, pal.border_subtle, 1);
-            RECT accent_rule{left_card.left + DesignSystem::ScaleForDpi(12, ctx->dpi), left_card.top,
-                             left_card.right - DesignSystem::ScaleForDpi(12, ctx->dpi), left_card.top + DesignSystem::ScaleForDpi(2, ctx->dpi)};
-            FillRectSolid(hdc, accent_rule, pal.accent_primary);
 
-            // Group labels on left pane
+            // Group labels on left pane (exact match to WM_CREATE control positions)
             SelectObject(hdc, ctx->hFontBold);
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
 
-            TextOutW(hdc, margin + DesignSystem::ScaleForDpi(10, ctx->dpi), DesignSystem::ScaleForDpi(8, ctx->dpi), L"Torrent Management Mode:", 24);
-            // Labels are placed one full text line above controls so GDI text metrics and
-            // the native edit/combo borders cannot collide at non-100% DPI.
-            TextOutW(hdc, margin + DesignSystem::ScaleForDpi(10, ctx->dpi), DesignSystem::ScaleForDpi(48, ctx->dpi), L"Save at:", 8);
-            TextOutW(hdc, margin + DesignSystem::ScaleForDpi(10, ctx->dpi), DesignSystem::ScaleForDpi(144, ctx->dpi), L"Category:", 9);
-            TextOutW(hdc, margin + DesignSystem::ScaleForDpi(10, ctx->dpi), DesignSystem::ScaleForDpi(214, ctx->dpi), L"Tags:", 5);
-            TextOutW(hdc, margin + DesignSystem::ScaleForDpi(10, ctx->dpi), DesignSystem::ScaleForDpi(256, ctx->dpi), L"Torrent Options:", 16);
-            TextOutW(hdc, margin + DesignSystem::ScaleForDpi(10, ctx->dpi), DesignSystem::ScaleForDpi(292, ctx->dpi), L"Stop condition:", 15);
-            TextOutW(hdc, margin + DesignSystem::ScaleForDpi(10, ctx->dpi), DesignSystem::ScaleForDpi(422, ctx->dpi), L"Content layout:", 15);
+            int lbl_x = margin + DesignSystem::ScaleForDpi(12, ctx->dpi);
+            TextOutW(hdc, lbl_x, DesignSystem::ScaleForDpi(24, ctx->dpi), L"Management Mode", 15);
+            TextOutW(hdc, lbl_x, DesignSystem::ScaleForDpi(78, ctx->dpi), L"Save Path", 9);
+            TextOutW(hdc, lbl_x, DesignSystem::ScaleForDpi(180, ctx->dpi), L"Category", 8);
+            TextOutW(hdc, lbl_x, DesignSystem::ScaleForDpi(260, ctx->dpi), L"Tags", 4);
+            TextOutW(hdc, lbl_x, DesignSystem::ScaleForDpi(314, ctx->dpi), L"Transfer & Queue", 16);
+            TextOutW(hdc, lbl_x, DesignSystem::ScaleForDpi(360, ctx->dpi), L"Stop Condition", 14);
+            TextOutW(hdc, lbl_x, DesignSystem::ScaleForDpi(504, ctx->dpi), L"Content Layout", 14);
 
             // Header for file list on right pane
             int right_x = margin + left_w + DesignSystem::ScaleForDpi(12, ctx->dpi);
@@ -7924,8 +8360,18 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             RECT hdr_rc{right_x, hdr_y, right_x + right_w, hdr_y + hdr_h};
             DrawRoundedBoxGdi(hdc, hdr_rc, DesignSystem::ScaleForDpi(4, ctx->dpi),
                               pal.surface_elevated, pal.border_subtle, 1);
-            RECT hdr_accent{hdr_rc.left, hdr_rc.top, hdr_rc.left + DesignSystem::ScaleForDpi(40, ctx->dpi), hdr_rc.top + DesignSystem::ScaleForDpi(2, ctx->dpi)};
-            FillRectSolid(hdc, hdr_accent, pal.accent_primary);
+
+            // Dedicated full-width bottom footer bar with 1px top hairline
+            if (footer_top < rcClient.bottom) {
+                ColorRgba footer_bg = (pal.mode == ThemeMode::kLight)
+                    ? pal.surface_primary : ColorRgba{0x14, 0x14, 0x17, 255};
+                ColorRgba hairline = (pal.mode == ThemeMode::kLight)
+                    ? pal.border_subtle : ColorRgba{0xFF, 0xFF, 0xFF, 18};
+                RECT footer_rc{0, footer_top, rcClient.right, rcClient.bottom};
+                FillRectSolid(hdc, footer_rc, footer_bg);
+                RECT footer_line{0, footer_top, rcClient.right, footer_top + 1};
+                FillRectSolid(hdc, footer_line, hairline);
+            }
 
             SelectObject(hdc, ctx->hFontBold);
             SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
@@ -7982,13 +8428,13 @@ LRESULT CALLBACK AddTorrentDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                             rc.left + indent + DesignSystem::ScaleForDpi(14, ctx->dpi), rc.top + (rc.bottom - rc.top) / 2 + DesignSystem::ScaleForDpi(7, ctx->dpi)};
 
                 if (node.check_state == 1) {
-                    DrawCheckboxGdi(hdcItem, chk_rc, true, pal.accent_primary, pal.accent_primary, ColorRgba{255, 255, 255, 255});
+                    DrawCheckboxGdi(hdcItem, chk_rc, true, pal);
                 } else if (node.check_state == 2) { // Partial
-                    DrawRoundedBoxGdi(hdcItem, chk_rc, 4, ColorRgba{pal.accent_primary.r, pal.accent_primary.g, pal.accent_primary.b, 180}, pal.accent_primary, 1);
+                    DrawRoundedBoxGdi(hdcItem, chk_rc, 4, ColorRgba{pal.accent_primary.r, pal.accent_primary.g, pal.accent_primary.b, 200}, pal.accent_primary, 1);
                     RECT bar{chk_rc.left + 3, chk_rc.top + (chk_rc.bottom - chk_rc.top) / 2 - 1, chk_rc.right - 3, chk_rc.top + (chk_rc.bottom - chk_rc.top) / 2 + 1};
                     FillRectSolid(hdcItem, bar, ColorRgba{255, 255, 255, 255});
                 } else {
-                    DrawCheckboxGdi(hdcItem, chk_rc, false, pal.surface_primary, pal.border_subtle, pal.text_primary);
+                    DrawCheckboxGdi(hdcItem, chk_rc, false, pal);
                 }
 
                 // Icon
@@ -10821,6 +11267,8 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     ShowWindow(hwnd, SW_RESTORE);
                 }
                 ctx->view->SetWindowVisibility(true, false);
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                 SetForegroundWindow(hwnd);
                 BringWindowToTop(hwnd);
                 PostMessageW(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);

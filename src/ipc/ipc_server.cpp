@@ -594,14 +594,13 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         }
 
         // For browser intercepted downloads in GUI mode (desktop app running with a UI):
-        // the task must be queued without starting network transfer until the user confirms
-        // choices in the Win32 New Download dialog.
+        // NEVER auto-start; always route to the Win32 conflict / New Download sub-window.
         // In headless daemon / automated test mode (m_is_headless == true), start automatically.
         const auto& settings = m_controller.GetSettings();
         if (t.save_dir.empty()) {
             t.save_dir = settings.default_download_dir.empty() ? m_controller.GetConfig().default_download_dir.string() : settings.default_download_dir;
         }
-        bool auto_start = m_is_headless.load() || params["autoStart"].as_bool(false) || settings.auto_start_downloads;
+        bool auto_start = m_is_headless.load();
         uint64_t client_click_ms = static_cast<uint64_t>(params["clientClickTime"].as_int64(0));
         std::string correlation_id = t.correlation_id;
         std::string raw_url = t.url;

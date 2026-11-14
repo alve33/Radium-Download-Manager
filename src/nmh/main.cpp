@@ -175,7 +175,7 @@ HANDLE ConnectToDesktopPipe(const std::string& pipe_path, const std::filesystem:
             CloseHandle(pi.hProcess);
         }
 
-        for (int attempt = 0; attempt < 50; ++attempt) {
+        for (int attempt = 0; attempt < 100; ++attempt) {
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
             h = try_connect();
             if (h != INVALID_HANDLE_VALUE) break;

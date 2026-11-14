@@ -217,14 +217,19 @@ function isDownloadEligible(params = {}) {
   const isWebBlob = targetUrl.startsWith("blob:http://") || targetUrl.startsWith("blob:https://");
   if (!targetUrl) return { eligible: false, reason: "EMPTY_URL" };
 
-  const isAiWebBlob = isWebBlob && (
-    targetUrl.includes("chatgpt.com") ||
-    targetUrl.includes("oaistatic.com") ||
-    targetUrl.includes("oaiusercontent.com") ||
-    targetUrl.includes("claude.ai") ||
-    targetUrl.includes("anthropic.com") ||
-    (tabUrl && (tabUrl.includes("chatgpt.com") || tabUrl.includes("claude.ai") || tabUrl.includes("oaiusercontent.com")))
-  );
+  const isAiWebHost = (u) => Boolean(u && (
+    u.includes("chatgpt.com") ||
+    u.includes("oaistatic.com") ||
+    u.includes("oaiusercontent.com") ||
+    u.includes("claude.ai") ||
+    u.includes("anthropic.com") ||
+    u.includes("gemini.google.com") ||
+    u.includes("bard.google.com") ||
+    u.includes("aistudio.google.com") ||
+    u.includes("googleusercontent.com")
+  ));
+  const isAiWebBlob = isWebBlob && (isAiWebHost(targetUrl) || isAiWebHost(tabUrl));
+  const isAiWebData = targetUrl.startsWith("data:") && isAiWebHost(tabUrl);
 
   // 1. Exclude browser extension/internal schemes
   if (targetUrl.startsWith("chrome:") || targetUrl.startsWith("chrome-extension:") ||
@@ -255,7 +260,7 @@ function isDownloadEligible(params = {}) {
 
   // Handle data: URLs (RFC 2397 base64 or encoded payloads, e.g. generated text/csv/pdf/images)
   if (targetUrl.startsWith("data:")) {
-    if (wasExplicitLinkClick || hasDownloadAttr) {
+    if (wasExplicitLinkClick || hasDownloadAttr || isAiWebData) {
       return { eligible: true, reason: "DATA_URL_DOWNLOAD", ext, mime: cleanMime, filename: cleanFilename, isData: true };
     }
     return { eligible: false, reason: "BROWSER_INTERNAL_OR_BLOB" };
