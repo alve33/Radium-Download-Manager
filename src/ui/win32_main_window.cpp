@@ -141,6 +141,7 @@ void ApplyNativeEditTheme(HWND hwnd, bool use_dark) {
 }
 
 void SetWindowRightToLeft(HWND hwnd, bool /*right_to_left*/) {
+    SetProcessDefaultLayout(0);
     if (!hwnd || !IsWindow(hwnd)) return;
     LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     const LONG_PTR rtl_flags = static_cast<LONG_PTR>(WS_EX_LAYOUTRTL) |
