@@ -193,21 +193,29 @@ DownloadController::~DownloadController() {
 }
 
 Result<void> DownloadController::Initialize() {
+    OPENIDM_LOG_INFO("Controller", "Initialize: Creating directories");
     std::error_code ec;
     std::filesystem::create_directories(m_cfg.default_download_dir, ec);
     std::filesystem::create_directories(m_cfg.temp_root_dir, ec);
 
+    OPENIDM_LOG_INFO("Controller", "Initialize: Opening store at " + m_cfg.state_db_path.string());
     auto open_res = m_store.Open(m_cfg.state_db_path);
-    if (!open_res.ok()) return open_res;
+    if (!open_res.ok()) {
+        OPENIDM_LOG_ERROR("Controller", "Initialize: m_store.Open failed: " + open_res.error->message);
+        return open_res;
+    }
 
+    OPENIDM_LOG_INFO("Controller", "Initialize: Initializing startup diagnostics");
     // Initialize startup diagnostic storage directory
     diagnostics::StartupDiagnosticRecorder::Instance().InitializeStorage(m_cfg.state_db_path.parent_path());
 
+    OPENIDM_LOG_INFO("Controller", "Initialize: Recovering interrupted tasks");
     auto rec_res = m_store.RecoverInterruptedTasks(65536);
     if (rec_res.ok() && *rec_res.value > 0) {
         OPENIDM_LOG_INFO("Controller", "Recovered " + std::to_string(*rec_res.value) + " interrupted tasks from SQLite WAL");
     }
 
+    OPENIDM_LOG_INFO("Controller", "Initialize: Listing tasks from store");
     auto loaded = m_store.ListTasks();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -241,6 +249,7 @@ Result<void> DownloadController::Initialize() {
                 m_tasks[t.task_id] = std::move(t);
             }
         }
+        OPENIDM_LOG_INFO("Controller", "Initialize: Loading persisted settings");
         LoadPersistedSettingsLocked();
     }
 
@@ -248,7 +257,9 @@ Result<void> DownloadController::Initialize() {
 #ifdef _WIN32
     timeBeginPeriod(1);
 #endif
+    OPENIDM_LOG_INFO("Controller", "Initialize: Starting scheduler thread");
     m_scheduler_thread = std::thread(&DownloadController::ScheduleLoop, this);
+    OPENIDM_LOG_INFO("Controller", "Initialize: Complete");
     return Result<void>::Ok();
 }
 

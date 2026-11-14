@@ -128,6 +128,7 @@ int main(int argc, char* argv[]) {
     }
 
     openidm::Logger::Instance().SetLogFile(cfg.state_db_path.parent_path() / "radium.log");
+    RADIUM_LOG_INFO("App", "Radium Download Manager v" + std::string(RADIUM_VERSION_STRING) + " initialized on Windows");
 
 #ifdef _WIN32
     std::wstring wpipe(ipc_socket_path.begin(), ipc_socket_path.end());
@@ -136,6 +137,9 @@ int main(int argc, char* argv[]) {
     if (mode.empty() || mode == "minimized") {
         HWND existing_hwnd = FindWindowW(L"Radium_MainWindowClass", nullptr);
         if (existing_hwnd) {
+            DWORD existing_pid = 0;
+            GetWindowThreadProcessId(existing_hwnd, &existing_pid);
+            RADIUM_LOG_INFO("App", "Found existing Radium window hwnd=" + std::to_string(reinterpret_cast<uintptr_t>(existing_hwnd)) + " pid=" + std::to_string(existing_pid));
             if (mode.empty()) {
                 ShowWindow(existing_hwnd, SW_SHOW);
                 ShowWindow(existing_hwnd, SW_RESTORE);
@@ -148,6 +152,7 @@ int main(int argc, char* argv[]) {
         // If a background daemon is running, signal it to exit so the user's interactive GUI can take over the pipe & database
         HANDLE hDaemonShutdown = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, L"Local\\Radium_Daemon_Shutdown_Event");
         if (hDaemonShutdown) {
+            RADIUM_LOG_INFO("App", "Signaling background daemon shutdown");
             SetEvent(hDaemonShutdown);
             CloseHandle(hDaemonShutdown);
             for (int i = 0; i < 30; ++i) {
@@ -178,23 +183,30 @@ int main(int argc, char* argv[]) {
 #endif
 
     openidm::DownloadController controller(cfg);
+    RADIUM_LOG_INFO("App", "Calling controller.Initialize()");
     auto init_res = controller.Initialize();
     if (!init_res.ok()) {
+        RADIUM_LOG_INFO("App", "ERROR: controller.Initialize failed: " + init_res.error->message);
         WriteConsoleOutput("ERROR: Failed to initialize Radium controller: " + init_res.error->message + "\n", true);
         return 1;
     }
+    RADIUM_LOG_INFO("App", "controller.Initialize() succeeded, mode=" + mode);
 
     // Default launch path: Launch the Desktop GUI Application + IPC Server (BUG-002 Fix)
     if (mode.empty() || mode == "minimized") {
+        RADIUM_LOG_INFO("App", "Starting IpcServer on pipe=" + ipc_socket_path);
         openidm::ipc::IpcServer server(controller, ipc_socket_path);
         server.Start();
+        RADIUM_LOG_INFO("App", "Creating DesktopView");
         openidm::ui::DesktopView view(controller, &server);
         if (mode == "minimized") {
             view.SetStartVisible(false);
         } else {
             view.SetStartVisible(true);
         }
+        RADIUM_LOG_INFO("App", "Entering RunApplicationLoop");
         int rc = view.RunApplicationLoop(false);
+        RADIUM_LOG_INFO("App", "Exited RunApplicationLoop with rc=" + std::to_string(rc));
         server.Stop();
         controller.Shutdown();
         return rc;

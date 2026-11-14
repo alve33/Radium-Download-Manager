@@ -346,6 +346,15 @@ public:
         m_active_sessions.erase(it);
     }
 
+    void AddHistoricalReport(const StartupReport& rep) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stored_reports.push_back(rep);
+        if (m_stored_reports.size() > 500) {
+            m_stored_reports.erase(m_stored_reports.begin());
+        }
+        SaveReportsToDiskInternal();
+    }
+
     std::vector<StartupReport> GetReports() {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::vector<StartupReport> all = m_stored_reports;

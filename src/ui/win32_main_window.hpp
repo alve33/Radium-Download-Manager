@@ -259,6 +259,7 @@ struct TaskDetailsViewModel {
     bool has_selection{false};
     std::string task_id;
     std::string file_name;
+    std::string category;
     std::string redacted_source_url;
     std::string redacted_page_url;
     std::string destination_path;

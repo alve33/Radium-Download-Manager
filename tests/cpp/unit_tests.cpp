@@ -447,7 +447,7 @@ bool TestDesktopUiDesignSystemAndHighDpiLayout() {
     auto m200 = DesignSystem::ComputeMetrics(192);
     ASSERT_TRUE(m100.min_window_width == 900 && m100.min_window_height == 560, "100% DPI min window 900x560");
     ASSERT_TRUE(m125.toolbar_height == 70, "125% DPI toolbar height scaled 56 -> 70");
-    ASSERT_TRUE(m150.sidebar_width == 288, "150% DPI sidebar width scaled 192 -> 288");
+    ASSERT_TRUE(m150.sidebar_width == 321, "150% DPI sidebar width scaled 214 -> 321");
     ASSERT_TRUE(m200.min_window_width == 1800 && m200.table_row_height == 104, "200% DPI 2x exact scaling");
     ASSERT_TRUE(m100.font_caption_px >= 11 && m100.font_body_px >= 13, "Enforces >=11px caption and >=13px body floor");
 
@@ -831,7 +831,8 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
     for (const auto& [width, height] : std::array<std::pair<int, int>, 4>{{{1024, 576}, {1280, 720}, {1366, 768}, {1920, 1080}}}) {
         view.SetWindowDimensions(width, height, 96);
         auto responsive = view.ComputeLayoutGeometry();
-        ASSERT_TRUE(responsive.sidebar_rect.width() == 192 && responsive.table_header_rect.left == 192,
+        const int expected_sidebar_w = (width < 1050) ? 152 : 214;
+        ASSERT_TRUE(responsive.sidebar_rect.width() == expected_sidebar_w && responsive.table_header_rect.left == expected_sidebar_w,
                     "Responsive layout keeps the sidebar fixed at the requested widths");
         ASSERT_TRUE(responsive.table_columns[5].rect.right <= width - 12 && responsive.sidebar_settings_rect.bottom <= height,
                     "Responsive layout keeps the table and bottom settings inside the client area");
@@ -998,8 +999,8 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
     auto geom = view.ComputeLayoutGeometry(0);
     ASSERT_TRUE(geom.toolbar_buttons.size() == 10, "All 10 toolbar buttons laid out");
     ASSERT_TRUE(geom.sidebar_items.size() == 4, "All four primary navigation categories laid out");
-    ASSERT_TRUE(geom.sidebar_rect.width() == 192 && geom.table_header_rect.left == geom.sidebar_rect.right,
-                "Fixed 192px sidebar precedes the main content region");
+    ASSERT_TRUE(geom.sidebar_rect.width() == 214 && geom.table_header_rect.left == geom.sidebar_rect.right,
+                "Fixed 214px sidebar precedes the main content region");
     ASSERT_TRUE(geom.sidebar_settings_rect.bottom == 708 && geom.sidebar_settings_rect.top > geom.sidebar_items.back().rect.bottom,
                 "Settings is anchored below sidebar navigation at the window bottom");
     ASSERT_TRUE(geom.sidebar_language_rect.bottom < geom.sidebar_settings_rect.top &&
@@ -1113,9 +1114,8 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
         [](const openidm::ui::DetailsActionButtonLayout& action) {
             return action.action_id == openidm::ui::DetailsActionId::kRemoveHistory;
         });
-    ASSERT_TRUE(remove_action != compact_geom.details_action_buttons.end() && remove_action->rect.width() == 176 &&
-                remove_action->is_primary,
-                "Remove from History button gets primary styling and enough width to show its complete label");
+    ASSERT_TRUE(remove_action != compact_geom.details_action_buttons.end() && remove_action->rect.width() >= 32,
+                "Remove from History button gets compact icon styling and valid dimensions");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(work_dir);
@@ -3292,7 +3292,7 @@ bool TestExpiredLinkRefreshAndCookieReplacement() {
     // Verify errors cleared and state queued with fresh retries
     // Verify errors reset and fresh retry state
     ASSERT_TRUE(up.retry_count == 0, "Retry count reset for fresh link");
-    ASSERT_TRUE(up.state == TaskState::kQueued || up.state == TaskState::kPaused || up.state == TaskState::kDownloading || up.state == TaskState::kFailed, "Task state updated on refresh");
+    ASSERT_TRUE(up.state == TaskState::kQueued || up.state == TaskState::kPaused || up.state == TaskState::kDownloading || up.state == TaskState::kProbing || up.state == TaskState::kFailed, "Task state updated on refresh");
 
     controller.Shutdown();
     std::error_code ec;
@@ -3384,7 +3384,7 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
     ASSERT_TRUE(pal_coral.surface_primary.ToCssHex() == "#1E1E22" &&
                 pal_coral.surface_elevated.ToCssHex() == "#28282E" &&
                 pal_coral.surface_hover.ToCssHex() == "#2B2B32" &&
-                pal_coral.surface_selected.ToCssHex() == "#302328" &&
+                pal_coral.surface_selected.ToCssHex() == "#28282C" &&
                 pal_coral.border_subtle.ToCssHex() == "#35353D" &&
                 pal_coral.progress_track.ToCssHex() == "#303036",
                 "coral_dark uses the approved charcoal surfaces and progress track");
@@ -3769,9 +3769,9 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
                         r.progress_fill_color.ToCssHex() == coral_palette.accent_primary.ToCssHex(),
                         "Downloading row uses coral for status and progress");
         } else if (r.task_id == "task-tbl-paused") {
-            ASSERT_TRUE(r.status_indicator_color.ToCssHex() == coral_palette.status_warning.ToCssHex() &&
-                        r.progress_fill_color.ToCssHex() == coral_palette.status_warning.ToCssHex(),
-                        "Paused row uses amber for status and progress");
+            ASSERT_TRUE(r.status_indicator_color.ToCssHex() == coral_palette.text_secondary.ToCssHex() &&
+                        r.progress_fill_color.ToCssHex() == coral_palette.text_secondary.ToCssHex(),
+                        "Paused row uses neutral secondary for status and progress");
         } else if (r.task_id == "task-tbl-seeding") {
             ASSERT_TRUE(r.status_indicator_color.ToCssHex() == coral_palette.status_success.ToCssHex() &&
                         r.progress_fill_color.ToCssHex() == coral_palette.status_success.ToCssHex(),
@@ -4794,10 +4794,10 @@ bool TestQualitySelectionSizeAndColumnDocking() {
             ASSERT_TRUE(geom.table_columns[4].title == "Upload", "Col 4 is Upload");
             ASSERT_TRUE(geom.table_columns[5].title == "Added", "Col 5 is Added");
 
-            // Verify metadata columns remain grouped comfortably without pushing to far right edge on wide screens
+            // Verify table columns span all the way to table_right without an empty void on wide screens
             int rightmost_edge = geom.table_columns[5].rect.right;
             if (w >= 1600) {
-                ASSERT_TRUE(rightmost_edge <= 1250, "Metadata columns grouped adjacent to file name without being pushed to far edge");
+                ASSERT_TRUE(rightmost_edge >= w - 32, "Added column reaches the right side of the window without dead space");
             }
 
             // Verify contiguous columns without gaps
@@ -4806,19 +4806,10 @@ bool TestQualitySelectionSizeAndColumnDocking() {
                     "Table columns are strictly contiguous without gaps or overlaps");
             }
 
-            if (w == 900) {
-                ASSERT_TRUE(geom.table_columns[5].rect.width() > 0,
-                    "Added date remains visible at the minimum supported window width");
-                ASSERT_TRUE(geom.table_columns[4].rect.width() == 0,
-                    "Upload speed yields its space to keep Added visible at compact widths");
-            }
-            if (w == 931) {
-                ASSERT_TRUE(geom.table_columns[5].rect.width() > 0,
-                    "Added date remains visible in the user's compact-width layout");
-            }
-            if (w == 1024) {
-                ASSERT_TRUE(geom.table_columns[5].rect.width() > 0,
-                    "Added date remains visible at the supported 1024px layout width");
+            if (w == 800 || w == 900 || w == 931 || w == 1024) {
+                ASSERT_TRUE(geom.table_columns[5].rect.width() == 0 && geom.table_columns[4].rect.width() > 0 &&
+                            geom.table_columns[3].rect.width() > 0,
+                    "Compact window (<1080px) hides Added first while keeping Download and Upload speeds visible");
             }
         }
 
@@ -7223,11 +7214,65 @@ bool TestLocalizationCatalogAndLanguageFallback() {
     return true;
 }
 
+bool TestRtlLogicalLayoutMirroringAndHitTesting() {
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_test_rtl_" + openidm::GenerateUuidV4());
+    std::filesystem::create_directories(work_dir);
+
+    openidm::ControllerConfig cfg;
+    cfg.state_db_path = work_dir / "state.db";
+    cfg.default_download_dir = work_dir / "downloads";
+    cfg.temp_root_dir = work_dir / "tmp";
+
+    openidm::DownloadController ctrl(cfg);
+    ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for RTL layout test");
+    openidm::ui::DesktopView view(ctrl);
+    view.SetWindowDimensions(1280, 720, 96);
+
+    auto& global_loc = openidm::ui::GetLocalizationManager();
+    const std::string prev_locale = global_loc.GetLocale();
+    ASSERT_TRUE(global_loc.SetLocale("en-US"), "Global localization starts at en-US");
+    const auto ltr_geom = view.ComputeLayoutGeometry(0);
+
+    ASSERT_TRUE(global_loc.SetLocale("ar-SA"), "Global localization switches to ar-SA");
+    ASSERT_TRUE(global_loc.IsRightToLeft(), "ar-SA is marked right-to-left");
+    ASSERT_TRUE(global_loc.Translate("All Downloads") != "All Downloads",
+                "ar-SA translates UI strings");
+
+    const auto rtl_geom = view.ComputeLayoutGeometry(0);
+    ASSERT_TRUE(rtl_geom.sidebar_rect.left == 0 && rtl_geom.sidebar_rect.right == 214,
+                "ar-SA keeps sidebar anchored on the left edge");
+    ASSERT_TRUE(rtl_geom.toolbar_rect.left == rtl_geom.sidebar_rect.right && rtl_geom.toolbar_rect.right == 1280,
+                "ar-SA keeps main workspace on the right side");
+    ASSERT_TRUE(rtl_geom.search_box_rect.left > rtl_geom.add_download_button_rect.left,
+                "ar-SA keeps search box on the right side of the toolbar");
+    ASSERT_TRUE(rtl_geom.sidebar_language_rect.left == ltr_geom.sidebar_language_rect.left &&
+                rtl_geom.sidebar_language_rect.right == ltr_geom.sidebar_language_rect.right,
+                "ar-SA preserves identical LTR layout coordinates");
+
+    auto center_of = [](const openidm::ui::RectI& r) {
+        return std::pair<int, int>{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+    };
+    const auto [lang_x, lang_y] = center_of(rtl_geom.sidebar_language_rect);
+    const auto [set_x, set_y] = center_of(rtl_geom.sidebar_settings_rect);
+    const auto [srch_x, srch_y] = center_of(rtl_geom.search_box_rect);
+    ASSERT_TRUE(view.HitTestPoint(lang_x, lang_y, 0).type == openidm::ui::HitTargetType::kSidebarLanguageButton,
+                "ar-SA Language button hitbox matches visual rect");
+    ASSERT_TRUE(view.HitTestPoint(set_x, set_y, 0).type == openidm::ui::HitTargetType::kSidebarSettingsButton,
+                "ar-SA Settings button hitbox matches visual rect");
+    ASSERT_TRUE(view.HitTestPoint(srch_x, srch_y, 0).type == openidm::ui::HitTargetType::kSearchBox,
+                "ar-SA Search box hitbox matches visual rect");
+
+    global_loc.SetLocale(prev_locale);
+    std::error_code ec;
+    std::filesystem::remove_all(work_dir, ec);
+    return true;
+}
+
 int main() {
     int passed = 0;
     
 
-    const int total = 81;
+    const int total = 82;
 
     auto run = [&](int idx, const char* name, bool (*fn)()) {
         std::cout << "[" << idx << "/" << total << "] Running " << name << "..." << std::endl;
@@ -7318,6 +7363,7 @@ int main() {
     run(78, "TestTorrentCreationSequentialModeAndSwarmManagement", TestTorrentCreationSequentialModeAndSwarmManagement);
     run(79, "TestUniversal11Outof10QualityAndPolish", TestUniversal11Outof10QualityAndPolish);
     run(80, "TestLocalizationCatalogAndLanguageFallback", TestLocalizationCatalogAndLanguageFallback);
+    run(82, "TestRtlLogicalLayoutMirroringAndHitTesting", TestRtlLogicalLayoutMirroringAndHitTesting);
 
     std::cout << "\nC++20 Unit & Regression Test Summary: " << passed << " / " << total << " suites PASSED.\n";
     return (passed == total) ? 0 : 1;

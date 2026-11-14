@@ -31,6 +31,8 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <objidl.h>
+#include <gdiplus.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -39,6 +41,7 @@
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "user32.lib")
@@ -126,24 +129,28 @@ AllowDarkModeForWindowFn GetAllowDarkModeForWindowFn() {
 }
 
 void ApplyNativeEditTheme(HWND hwnd, bool use_dark) {
+    (void)use_dark;
     using SetWindowThemeFn = HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR);
     static auto set_window_theme = reinterpret_cast<SetWindowThemeFn>(
         GetProcAddress(GetUxThemeModule(), "SetWindowTheme"));
     if (set_window_theme) {
-        set_window_theme(hwnd, use_dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+        set_window_theme(hwnd, L"", L"");
     }
     InvalidateRect(hwnd, nullptr, TRUE);
     UpdateWindow(hwnd);
 }
 
-void SetWindowRightToLeft(HWND hwnd, bool right_to_left) {
+void SetWindowRightToLeft(HWND hwnd, bool /*right_to_left*/) {
     if (!hwnd || !IsWindow(hwnd)) return;
     LONG_PTR ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    ex_style &= ~(static_cast<LONG_PTR>(WS_EX_LAYOUTRTL) | static_cast<LONG_PTR>(WS_EX_RTLREADING));
-    if (right_to_left) ex_style |= WS_EX_LAYOUTRTL | WS_EX_RTLREADING;
-    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style);
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    const LONG_PTR rtl_flags = static_cast<LONG_PTR>(WS_EX_LAYOUTRTL) |
+                               static_cast<LONG_PTR>(WS_EX_RTLREADING) |
+                               static_cast<LONG_PTR>(WS_EX_RIGHT);
+    if (ex_style & rtl_flags) {
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style & ~rtl_flags);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
 }
 
 BOOL CALLBACK ApplyChildRightToLeft(HWND child, LPARAM rtl_param) {
@@ -208,13 +215,55 @@ std::string FormatTimestampUtc(int64_t epoch_ms) {
     std::time_t tt = static_cast<std::time_t>(epoch_ms / 1000);
     std::tm tm_buf{};
 #ifdef _WIN32
-    gmtime_s(&tm_buf, &tt);
+    localtime_s(&tm_buf, &tt);
 #else
-    gmtime_r(&tt, &tm_buf);
+    localtime_r(&tt, &tm_buf);
 #endif
     std::ostringstream oss;
-    oss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S UTC");
-    return oss.str();
+    oss << std::put_time(&tm_buf, "%b %d, %I:%M %p");
+    std::string out = oss.str();
+    // Strip leading zero on hour ("Nov 14, 01:52 PM" -> "Nov 14, 1:52 PM")
+    auto comma_pos = out.find(", 0");
+    if (comma_pos != std::string::npos) {
+        out.erase(comma_pos + 2, 1);
+    }
+    return out;
+}
+
+std::string StripLeadingOrphanCombiningMarks(std::string_view utf8) {
+#ifdef _WIN32
+    if (utf8.empty()) return std::string(utf8);
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (wlen <= 0) return std::string(utf8);
+    std::wstring w(static_cast<size_t>(wlen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), w.data(), wlen);
+    size_t pos = 0;
+    while (pos < w.size()) {
+        wchar_t ch = w[pos];
+        if (ch == 0xFEFF || (ch >= 0x200B && ch <= 0x200F) ||
+            (ch >= 0x202A && ch <= 0x202E) || (ch >= 0x2066 && ch <= 0x2069)) {
+            ++pos;
+            continue;
+        }
+        WORD c3 = 0;
+        if (GetStringTypeW(CT_CTYPE3, &ch, 1, &c3) &&
+            (c3 & (C3_NONSPACING | C3_DIACRITIC | C3_VOWELMARK)) != 0) {
+            ++pos;
+            continue;
+        }
+        break;
+    }
+    if (pos == 0) return std::string(utf8);
+    std::wstring trimmed = w.substr(pos);
+    if (trimmed.empty()) return std::string(utf8);
+    int ulen = WideCharToMultiByte(CP_UTF8, 0, trimmed.data(), static_cast<int>(trimmed.size()), nullptr, 0, nullptr, nullptr);
+    if (ulen <= 0) return std::string(utf8);
+    std::string res(static_cast<size_t>(ulen), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, trimmed.data(), static_cast<int>(trimmed.size()), res.data(), ulen, nullptr, nullptr);
+    return res;
+#else
+    return std::string(utf8);
+#endif
 }
 
 std::string FormatConflictPolicyLabel(ConflictPolicy p) {
@@ -333,99 +382,96 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     int w = m_window_width;
     int h = m_window_height;
 
-    int sidebar_w = std::clamp((w * 163 + 500) / 1000,
-        DesignSystem::ScaleForDpi(160, m.dpi), DesignSystem::ScaleForDpi(275, m.dpi));
+    const bool compact_sidebar = w < DesignSystem::ScaleForDpi(1050, m.dpi);
+    const bool compact_toolbar = w < DesignSystem::ScaleForDpi(1050, m.dpi);
+    const bool hide_added = w < DesignSystem::ScaleForDpi(1080, m.dpi);
+    int sidebar_w = compact_sidebar
+        ? DesignSystem::ScaleForDpi(152, m.dpi)
+        : m.sidebar_width;
     int content_x = sidebar_w;
     int bar_h = m.toolbar_height;
     g.toolbar_rect = {content_x, 0, w, bar_h};
     g.sidebar_rect = {0, 0, sidebar_w, h};
-    const bool compact_toolbar = w < DesignSystem::ScaleForDpi(1240, m.dpi);
 
-    int chk_s = DesignSystem::ScaleForDpi(20, m.dpi);
-    int chk_y = (bar_h - chk_s) / 2;
-    int add_btn_w = DesignSystem::ScaleForDpi(152, m.dpi);
-    int add_btn_x = content_x + DesignSystem::ScaleForDpi(12, m.dpi);
+    int add_btn_w = DesignSystem::ScaleForDpi(compact_toolbar ? 134 : 136, m.dpi);
+    int add_btn_x = content_x + DesignSystem::ScaleForDpi(compact_toolbar ? 10 : 16, m.dpi);
     g.add_download_button_rect = {add_btn_x, (bar_h - m.button_height) / 2, add_btn_x + add_btn_w,
         (bar_h + m.button_height) / 2};
-    g.select_all_checkbox_rect = {g.add_download_button_rect.right + DesignSystem::ScaleForDpi(12, m.dpi), chk_y,
-        g.add_download_button_rect.right + DesignSystem::ScaleForDpi(12, m.dpi) + chk_s, chk_y + chk_s};
 
-    int sort_w = DesignSystem::ScaleForDpi(84, m.dpi);
-    int sort_h = DesignSystem::ScaleForDpi(36, m.dpi);
+    int sort_w = DesignSystem::ScaleForDpi(compact_toolbar ? 46 : 76, m.dpi);
+    int sort_h = m.button_height;
     int sort_y = (bar_h - sort_h) / 2;
-    g.sort_dropdown_rect = {g.select_all_checkbox_rect.right + DesignSystem::ScaleForDpi(8, m.dpi), sort_y,
-        g.select_all_checkbox_rect.right + DesignSystem::ScaleForDpi(8, m.dpi) + sort_w, sort_y + sort_h};
+    int sort_x = g.add_download_button_rect.right + DesignSystem::ScaleForDpi(compact_toolbar ? 6 : 12, m.dpi);
+    g.sort_dropdown_rect = {sort_x, sort_y, sort_x + sort_w, sort_y + sort_h};
 
-    // Keep enough room for the funnel, caret, and the longest common category
-    // label so the filter text does not touch either icon at standard DPI.
-    int filt_w = DesignSystem::ScaleForDpi(124, m.dpi);
-    int filt_x = g.sort_dropdown_rect.right + 10;
+    int filt_w = DesignSystem::ScaleForDpi(compact_toolbar ? 70 : 122, m.dpi);
+    int filt_x = g.sort_dropdown_rect.right + DesignSystem::ScaleForDpi(compact_toolbar ? 5 : 8, m.dpi);
     g.filter_dropdown_rect = {filt_x, sort_y, filt_x + filt_w, sort_y + sort_h};
-    if (compact_toolbar) {
-        g.select_all_checkbox_rect = {0, 0, 0, 0};
-        g.sort_dropdown_rect = {0, 0, 0, 0};
-        g.filter_dropdown_rect = {0, 0, 0, 0};
-    }
 
     int btn_h = m.button_height;
     int by = (bar_h - btn_h) / 2;
 
-    const int kStartAllButtonWidth = compact_toolbar ? 88 : 96;
-    const int kPauseAllButtonWidth = compact_toolbar ? 88 : 100;
-    const int kClearHistoryButtonWidth = compact_toolbar ? 104 : 120;
-    constexpr int kToolbarActionGap = 8;
+    const int kSegBtnW = compact_toolbar ? 28 : 32;
+    const int kStartAllButtonWidth = compact_toolbar ? 54 : 94;
+    const int kPauseAllButtonWidth = compact_toolbar ? 54 : 98;
+    const int kClearHistoryButtonWidth = compact_toolbar ? 62 : 114;
+    const int kToolbarActionGap = compact_toolbar ? 5 : 8;
+    const int kSegmentedClusterWidth = kSegBtnW * 3 + (compact_toolbar ? 8 : 16);
 
-    int theme_button_w = DesignSystem::ScaleForDpi(40, m.dpi);
-    g.theme_button_rect = {w - theme_button_w - DesignSystem::ScaleForDpi(12, m.dpi), by,
-        w - DesignSystem::ScaleForDpi(12, m.dpi), by + btn_h};
+    int theme_button_w = DesignSystem::ScaleForDpi(34, m.dpi);
+    g.theme_button_rect = {w - theme_button_w - DesignSystem::ScaleForDpi(compact_toolbar ? 10 : 16, m.dpi), by,
+        w - DesignSystem::ScaleForDpi(compact_toolbar ? 10 : 16, m.dpi), by + btn_h};
 
     int settings_btn_x = g.theme_button_rect.left;
     g.settings_button_rect = {0, 0, 0, 0};
     g.search_sliders_rect = {0, 0, 0, 0};
 
-        int search_max_w = DesignSystem::ScaleForDpi(260, m.dpi);
-    int essential_actions_left = (compact_toolbar ? g.add_download_button_rect.right : filt_x + filt_w) + DesignSystem::ScaleForDpi(12, m.dpi);
+    int search_max_w = DesignSystem::ScaleForDpi(220, m.dpi);
+    int search_min_w = DesignSystem::ScaleForDpi(compact_toolbar ? 90 : 120, m.dpi);
+    int essential_actions_left = g.filter_dropdown_rect.right + DesignSystem::ScaleForDpi(compact_toolbar ? 6 : 12, m.dpi);
     int essential_actions_w = DesignSystem::ScaleForDpi(
+        kSegmentedClusterWidth +
         kStartAllButtonWidth + kToolbarActionGap +
-        kPauseAllButtonWidth + kToolbarActionGap + kClearHistoryButtonWidth, m.dpi);
-    int search_w = std::min(search_max_w, std::max(DesignSystem::ScaleForDpi(112, m.dpi),
-        settings_btn_x - DesignSystem::ScaleForDpi(24, m.dpi) - essential_actions_left - essential_actions_w));
-    int search_x = settings_btn_x - search_w - 12;
+        kPauseAllButtonWidth + kToolbarActionGap + kClearHistoryButtonWidth + 12, m.dpi);
+    int avail_for_search = settings_btn_x - DesignSystem::ScaleForDpi(12, m.dpi) - essential_actions_left - essential_actions_w;
+    int search_w = std::clamp(avail_for_search, search_min_w, search_max_w);
+    int search_x = settings_btn_x - search_w - DesignSystem::ScaleForDpi(compact_toolbar ? 6 : 10, m.dpi);
     g.search_box_rect = {search_x, by, search_x + search_w, by + btn_h};
 
     auto tb = ComputeToolbarState();
     struct BtnDef { ToolbarActionId id; const char* label; bool enabled; bool primary; int base_w; };
     const BtnDef defs[] = {
-        {ToolbarActionId::kAddUrl,       "+ Add download", tb.can_add_url,       true,  152},
-        {ToolbarActionId::kStart,        "Start",          tb.can_start,         false, 40},
-        {ToolbarActionId::kPause,        "Pause",          tb.can_pause,         false, 40},
-        {ToolbarActionId::kRemove,       "Remove",         tb.can_remove,        false, 40},
-        {ToolbarActionId::kStartAll,     "Start all",      tb.can_start_all,     false, kStartAllButtonWidth},
-        {ToolbarActionId::kPauseAll,     "Pause all",      tb.can_pause_all,     false, kPauseAllButtonWidth},
+        {ToolbarActionId::kAddUrl,       "+ Add Download", tb.can_add_url,       true,  add_btn_w},
+        {ToolbarActionId::kStart,        "Start",          true,                 false, kSegBtnW},
+        {ToolbarActionId::kPause,        "Pause",          true,                 false, kSegBtnW},
+        {ToolbarActionId::kRemove,       "Remove",         true,                 false, kSegBtnW},
+        {ToolbarActionId::kStartAll,     "Start All",      tb.can_start_all,     false, kStartAllButtonWidth},
+        {ToolbarActionId::kPauseAll,     "Pause All",      tb.can_pause_all,     false, kPauseAllButtonWidth},
         {ToolbarActionId::kClearHistory, "Clear History",  tb.can_clear_history, false, kClearHistoryButtonWidth},
-        {ToolbarActionId::kResume,       "Resume",         tb.can_resume,        false, 82},
-        {ToolbarActionId::kRetry,        "Retry",          tb.can_retry,         false, 70},
-        {ToolbarActionId::kCancel,       "Cancel",         tb.can_cancel,        false, 78},
-        {ToolbarActionId::kSettings,     "Settings",       tb.can_open_settings, false, 36}
+        {ToolbarActionId::kResume,       "Resume",         tb.can_resume,        false, 0},
+        {ToolbarActionId::kRetry,        "Retry",          tb.can_retry,         false, 0},
+        {ToolbarActionId::kSettings,     "Settings",       tb.can_open_settings, false, 32}
     };
     int act_x = essential_actions_left;
-    int max_act_x = search_x - DesignSystem::ScaleForDpi(12, m.dpi);
+    int max_act_x = search_x - DesignSystem::ScaleForDpi(compact_toolbar ? 6 : 12, m.dpi);
     for (size_t i = 0; i < std::size(defs); ++i) {
         const auto& d = defs[i];
         RectI brc{0, 0, 0, 0};
         if (i == 0) {
             brc = g.add_download_button_rect;
-        } else if (i + 1 == std::size(defs)) {
-            brc = {0, 0, 0, 0};
-        } else if (compact_toolbar && (d.id == ToolbarActionId::kStart || d.id == ToolbarActionId::kPause ||
-            d.id == ToolbarActionId::kRemove || d.id == ToolbarActionId::kResume || d.id == ToolbarActionId::kRetry ||
-            d.id == ToolbarActionId::kCancel)) {
+        } else if (i + 1 == std::size(defs) || d.base_w <= 0) {
             brc = {0, 0, 0, 0};
         } else if (d.enabled) {
             int bw = DesignSystem::ScaleForDpi(d.base_w, m.dpi);
             if (act_x + bw <= max_act_x) {
                 brc = {act_x, by, act_x + bw, by + btn_h};
-                act_x += bw + DesignSystem::ScaleForDpi(kToolbarActionGap, m.dpi);
+                if (d.id == ToolbarActionId::kStart || d.id == ToolbarActionId::kPause) {
+                    act_x += bw; // No gap inside segmented control
+                } else if (d.id == ToolbarActionId::kRemove) {
+                    act_x += bw + DesignSystem::ScaleForDpi(compact_toolbar ? 8 : 16, m.dpi); // Gap after segmented group
+                } else {
+                    act_x += bw + DesignSystem::ScaleForDpi(kToolbarActionGap, m.dpi);
+                }
             }
         }
         g.toolbar_buttons.push_back({d.id, GetLocalizationManager().Translate(d.label), d.enabled, d.primary, brc});
@@ -438,115 +484,122 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
         {SidebarCategory::kCompleted, counts.completed},
         {SidebarCategory::kPaused, counts.paused}
     };
-    int nav_top = DesignSystem::ScaleForDpi(100, m.dpi);
-    int nav_h = DesignSystem::ScaleForDpi(48, m.dpi);
+    int nav_top = DesignSystem::ScaleForDpi(44, m.dpi);
+    int nav_h = DesignSystem::ScaleForDpi(compact_sidebar ? 32 : 34, m.dpi);
+    int nav_gap = DesignSystem::ScaleForDpi(4, m.dpi);
+    int nav_margin = DesignSystem::ScaleForDpi(compact_sidebar ? 6 : 10, m.dpi);
     for (size_t i = 0; i < 4; ++i) {
         const auto& [cat, cnt] = cats[i];
-        RectI crc{DesignSystem::ScaleForDpi(12, m.dpi), nav_top + static_cast<int>(i) * (nav_h + DesignSystem::ScaleForDpi(4, m.dpi)), sidebar_w - DesignSystem::ScaleForDpi(12, m.dpi), nav_top + static_cast<int>(i + 1) * nav_h + static_cast<int>(i) * DesignSystem::ScaleForDpi(4, m.dpi)};
-        g.sidebar_items.push_back({cat, CategoryToLabel(cat), cnt, cat == m_selected_category, crc});
+        int item_y = nav_top + static_cast<int>(i) * (nav_h + nav_gap);
+        RectI crc{nav_margin, item_y, sidebar_w - nav_margin, item_y + nav_h};
+        std::string item_lbl = (compact_sidebar && cat == SidebarCategory::kAllDownloads)
+            ? GetLocalizationManager().Translate("All Items")
+            : CategoryToLabel(cat);
+        g.sidebar_items.push_back({cat, item_lbl, cnt, cat == m_selected_category, crc});
     }
-    g.sidebar_settings_rect = {DesignSystem::ScaleForDpi(12, m.dpi), h - DesignSystem::ScaleForDpi(52, m.dpi), sidebar_w - DesignSystem::ScaleForDpi(12, m.dpi), h - DesignSystem::ScaleForDpi(12, m.dpi)};
     const int sidebar_action_gap = DesignSystem::ScaleForDpi(4, m.dpi);
-    const int sidebar_action_height = g.sidebar_settings_rect.height();
+    const int sidebar_action_height = DesignSystem::ScaleForDpi(compact_sidebar ? 32 : 34, m.dpi);
+    const int footer_bottom = h - DesignSystem::ScaleForDpi(12, m.dpi);
+    g.sidebar_settings_rect = {nav_margin, footer_bottom - sidebar_action_height, sidebar_w - nav_margin, footer_bottom};
     g.sidebar_language_rect = {
-        g.sidebar_settings_rect.left,
+        nav_margin,
         g.sidebar_settings_rect.top - sidebar_action_gap - sidebar_action_height,
-        g.sidebar_settings_rect.right,
+        sidebar_w - nav_margin,
         g.sidebar_settings_rect.top - sidebar_action_gap
     };
 
     int hdr_h = m.table_header_height;
     int det_h = m_selected_task_id.empty() ? 0 : std::min(m.details_panel_height, std::max(DesignSystem::ScaleForDpi(104, m.dpi), h / 4));
     const int panel_inset = DesignSystem::ScaleForDpi(16, m.dpi);
-    const int panel_gap = DesignSystem::ScaleForDpi(12, m.dpi);
-    const int table_top = bar_h + panel_gap;
-    const int table_bottom = h - det_h - (det_h > 0 ? panel_gap : panel_inset);
+    const int table_top = bar_h;
+    const int table_bottom = h - det_h;
     const int table_left = content_x + panel_inset;
     const int table_right = w - panel_inset;
-    g.table_header_rect = {table_left, table_top, table_right, table_top + hdr_h};
-    g.table_body_rect = {table_left, table_top + hdr_h, table_right, table_bottom};
-    if (compact_toolbar) {
-        const int compact_check_size = DesignSystem::ScaleForDpi(20, m.dpi);
-        g.select_all_checkbox_rect = {table_left + DesignSystem::ScaleForDpi(12, m.dpi),
-            table_top + (hdr_h - compact_check_size) / 2, table_left + DesignSystem::ScaleForDpi(12, m.dpi) + compact_check_size,
-            table_top + (hdr_h + compact_check_size) / 2};
-    }
+    g.table_header_rect = {content_x, bar_h, w, bar_h + hdr_h};
+    g.table_body_rect = {content_x, bar_h + hdr_h, w, table_bottom};
+    const int master_chk_size = DesignSystem::ScaleForDpi(16, m.dpi);
+    g.select_all_checkbox_rect = {table_left + DesignSystem::ScaleForDpi(10, m.dpi),
+        table_top + (hdr_h - master_chk_size) / 2,
+        table_left + DesignSystem::ScaleForDpi(10, m.dpi) + master_chk_size,
+        table_top + (hdr_h + master_chk_size) / 2};
+
     g.details_panel_rect = {content_x, h - det_h, w, h};
     g.status_bar_rect = {0, h, w, h};
     g.status_toggle_off_rect = {0, 0, 0, 0};
 
-    int col_chk_w = DesignSystem::ScaleForDpi(72, m.dpi);
+    int col_chk_w = DesignSystem::ScaleForDpi(36, m.dpi);
     int def_name_w = DesignSystem::ScaleForDpi(320, m.dpi);
-    int def_size_w = DesignSystem::ScaleForDpi(90, m.dpi);
-    int def_stat_w = DesignSystem::ScaleForDpi(125, m.dpi);
-    int def_dl_w = DesignSystem::ScaleForDpi(95, m.dpi);
-    int def_ul_w = DesignSystem::ScaleForDpi(85, m.dpi);
-    int def_added_w = DesignSystem::ScaleForDpi(120, m.dpi);
+    int def_size_w = DesignSystem::ScaleForDpi(compact_toolbar ? 96 : 150, m.dpi);
+    int def_stat_w = DesignSystem::ScaleForDpi(compact_toolbar ? 122 : 150, m.dpi);
+    int def_dl_w = DesignSystem::ScaleForDpi(compact_toolbar ? 72 : 90, m.dpi);
+    int def_ul_w = DesignSystem::ScaleForDpi(compact_toolbar ? 64 : 80, m.dpi);
+    int def_added_w = DesignSystem::ScaleForDpi(145, m.dpi);
 
     if (m_column_widths.size() < 6) {
         m_column_widths = {def_name_w, def_size_w, def_stat_w, def_dl_w, def_ul_w, def_added_w};
     } else {
         if (m_column_widths[0] < 120 || m_column_widths[0] > 2000) m_column_widths[0] = def_name_w;
-        if (m_column_widths[1] < 40 || m_column_widths[1] > 2000) m_column_widths[1] = def_size_w;
-        if (m_column_widths[2] < 40 || m_column_widths[2] > 2000) m_column_widths[2] = def_stat_w;
+        if (m_column_widths[1] < 140 || m_column_widths[1] > 2000) m_column_widths[1] = def_size_w;
+        if (m_column_widths[2] < 140 || m_column_widths[2] > 2000) m_column_widths[2] = def_stat_w;
         if (m_column_widths[3] < 40 || m_column_widths[3] > 2000) m_column_widths[3] = def_dl_w;
         if (m_column_widths[4] < 40 || m_column_widths[4] > 2000) m_column_widths[4] = def_ul_w;
-        if (m_column_widths[5] < 40 || m_column_widths[5] > 2000) m_column_widths[5] = def_added_w;
+        if (m_column_widths[5] < 135 || m_column_widths[5] > 2000) m_column_widths[5] = def_added_w;
     }
 
-    int base_col_size_w = std::max(DesignSystem::ScaleForDpi(75, m.dpi), m_column_widths[1]);
-    int base_col_stat_w = std::max(DesignSystem::ScaleForDpi(95, m.dpi), m_column_widths[2]);
-    int base_col_dl_w   = std::max(DesignSystem::ScaleForDpi(80, m.dpi), m_column_widths[3]);
-    int base_col_ul_w   = std::max(DesignSystem::ScaleForDpi(70, m.dpi), m_column_widths[4]);
-    int base_col_added_w= std::max(DesignSystem::ScaleForDpi(90, m.dpi), m_column_widths[5]);
+    int col_size_w = (m_column_widths.size() > 1 && m_column_widths[1] >= def_size_w)
+        ? m_column_widths[1]
+        : def_size_w;
+    int col_stat_w = (m_column_widths.size() > 2 && m_column_widths[2] >= def_stat_w)
+        ? m_column_widths[2]
+        : def_stat_w;
+    int col_dl_w   = (m_column_widths.size() > 3 && m_column_widths[3] > 40 && m_column_widths[3] != def_dl_w)
+        ? m_column_widths[3]
+        : def_dl_w;
+    int col_ul_w   = (m_column_widths.size() > 4 && m_column_widths[4] > 40 && m_column_widths[4] != def_ul_w)
+        ? m_column_widths[4]
+        : def_ul_w;
+    int col_added_w= (m_column_widths.size() > 5 && m_column_widths[5] >= def_added_w)
+        ? m_column_widths[5]
+        : def_added_w;
 
-    int col_size_w = base_col_size_w;
-    int col_stat_w = base_col_stat_w;
-    int col_dl_w   = base_col_dl_w;
-    int col_ul_w   = base_col_ul_w;
-    int col_added_w= base_col_added_w;
+    int total_avail = std::max(1, table_right - table_left);
 
-    // Intelligent responsive hiding and adaptation at narrow client widths
-    int total_avail = std::max(1, table_right - table_left - DesignSystem::ScaleForDpi(24, m.dpi));
-    if (total_avail < DesignSystem::ScaleForDpi(700, m.dpi)) {
-        col_ul_w = 0; // Preserve Added; hide Upload first at narrow widths
-    }
-    if (total_avail < DesignSystem::ScaleForDpi(600, m.dpi)) {
-        col_dl_w = 0; // Cleanly hide Download speed column
+    // Responsive column display (Design Vision Part 2.1):
+    // Hide Added first (< 1080px), keep Download and Upload speeds visible in compact windows.
+    if (hide_added) {
+        col_added_w = 0;
     }
 
     int min_name_w = DesignSystem::ScaleForDpi(260, m.dpi);
     int fixed_non_name_w = col_size_w + col_stat_w + col_dl_w + col_ul_w + col_added_w;
-    // Persisted column widths can exceed the restored window's available space.
-    // Shrink the flexible metadata columns first so the Name column keeps room
-    // for its checkbox/index/icon prefix and never overflows into Size.
-    int fixed_budget = std::max(0, total_avail - min_name_w);
-    int fixed_overflow = std::max(0, fixed_non_name_w - fixed_budget);
-    auto shrink_column = [&fixed_overflow](int& width, int minimum) {
-        const int reduction = std::min(fixed_overflow, std::max(0, width - minimum));
-        width -= reduction;
-        fixed_overflow -= reduction;
-    };
-    shrink_column(col_stat_w, DesignSystem::ScaleForDpi(95, m.dpi));
-    shrink_column(col_added_w, DesignSystem::ScaleForDpi(90, m.dpi));
-    shrink_column(col_ul_w, DesignSystem::ScaleForDpi(70, m.dpi));
-    shrink_column(col_dl_w, DesignSystem::ScaleForDpi(80, m.dpi));
-    shrink_column(col_size_w, DesignSystem::ScaleForDpi(75, m.dpi));
-    fixed_non_name_w = col_size_w + col_stat_w + col_dl_w + col_ul_w + col_added_w;
-    // The row prefix (checkbox, index and file icon) consumes about 100 px.
-    // Keep enough room for a useful filename so owner-drawn text cannot spill
-    // across the Size column when a narrower width was saved previously.
-    int col_name_w = m_column_widths[0];
-    int available_for_name = total_avail - fixed_non_name_w;
-    int col_name_total_w = (available_for_name >= min_name_w)
-        ? std::min(available_for_name, std::max(col_name_w, min_name_w))
-        : std::max(DesignSystem::ScaleForDpi(120, m.dpi), available_for_name);
 
-    const int name_header_left = table_left + DesignSystem::ScaleForDpi(compact_toolbar ? 48 : 12, m.dpi);
-    const int name_header_width = col_name_total_w - (name_header_left - (table_left + DesignSystem::ScaleForDpi(12, m.dpi)));
-    int cx = name_header_left;
-    g.table_columns.push_back({SortColumn::kFileName, GetLocalizationManager().Translate("Name"), {cx, table_top, cx + name_header_width, table_top + hdr_h}});
-    cx = table_left + DesignSystem::ScaleForDpi(12, m.dpi) + col_name_total_w;
+    // If metadata columns exceed the budget needed to keep Name at least min_name_w,
+    // proportionally shrink columns down to their safe minimums while keeping Download visible
+    int overflow = fixed_non_name_w + min_name_w - total_avail;
+    if (overflow > 0) {
+        auto shrink = [&overflow](int& width, int min_w) {
+            int reduce = std::min(overflow, std::max(0, width - min_w));
+            width -= reduce;
+            overflow -= reduce;
+        };
+        shrink(col_added_w, 0);
+        shrink(col_ul_w, 0);
+        shrink(col_dl_w, DesignSystem::ScaleForDpi(86, m.dpi));
+        shrink(col_size_w, DesignSystem::ScaleForDpi(120, m.dpi));
+        shrink(col_stat_w, DesignSystem::ScaleForDpi(135, m.dpi));
+        fixed_non_name_w = col_size_w + col_stat_w + col_dl_w + col_ul_w + col_added_w;
+    }
+
+    int col_name_total_w = std::max(min_name_w, total_avail - fixed_non_name_w);
+    if (m_resizing_col_index == 0 && m_column_widths.size() > 0 && m_column_widths[0] >= min_name_w) {
+        col_name_total_w = m_column_widths[0];
+    } else if (m_column_widths.size() > 0 && m_column_widths[0] != def_name_w && m_column_widths[0] >= min_name_w) {
+        col_name_total_w = m_column_widths[0];
+    }
+
+    int cx = table_left;
+    g.table_columns.push_back({SortColumn::kFileName, GetLocalizationManager().Translate("Name"), {cx, table_top, cx + col_name_total_w, table_top + hdr_h}});
+    cx += col_name_total_w;
 
     g.table_columns.push_back({SortColumn::kSize, GetLocalizationManager().Translate("Size"), {cx, table_top, cx + col_size_w, table_top + hdr_h}});
     cx += col_size_w;
@@ -554,14 +607,17 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     g.table_columns.push_back({SortColumn::kStatus, GetLocalizationManager().Translate("Status"), {cx, table_top, cx + col_stat_w, table_top + hdr_h}});
     cx += col_stat_w;
 
-    g.table_columns.push_back({SortColumn::kSpeed, GetLocalizationManager().Translate("Download"), {cx, table_top, cx + col_dl_w, table_top + hdr_h}});
-    cx += col_dl_w;
+    int dl_right = (col_ul_w == 0 && col_added_w == 0) ? table_right : (cx + col_dl_w);
+    g.table_columns.push_back({SortColumn::kSpeed, GetLocalizationManager().Translate("Download"), {cx, table_top, dl_right, table_top + hdr_h}});
+    cx = dl_right;
 
-    g.table_columns.push_back({SortColumn::kDownloadType, GetLocalizationManager().Translate("Upload"), {cx, table_top, cx + col_ul_w, table_top + hdr_h}});
-    cx += col_ul_w;
+    int ul_right = (col_added_w == 0) ? table_right : (cx + col_ul_w);
+    g.table_columns.push_back({SortColumn::kDownloadType, GetLocalizationManager().Translate("Upload"), {cx, table_top, ul_right, table_top + hdr_h}});
+    cx = ul_right;
 
-    g.table_columns.push_back({SortColumn::kCreatedAt, GetLocalizationManager().Translate("Added"), {cx, table_top, cx + col_added_w, table_top + hdr_h}});
-    cx += col_added_w;
+    int added_right = (col_added_w == 0) ? cx : table_right;
+    g.table_columns.push_back({SortColumn::kCreatedAt, GetLocalizationManager().Translate("Added"), {cx, table_top, added_right, table_top + hdr_h}});
+    cx = added_right;
 
     g.table_columns.push_back({SortColumn::kProgress, GetLocalizationManager().Translate("Progress"), {cx, table_top, cx, table_top + hdr_h}});
     g.table_columns.push_back({SortColumn::kEta, GetLocalizationManager().Translate("ETA"), {cx, table_top, cx, table_top + hdr_h}});
@@ -583,10 +639,11 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     for (const auto& r : visible_rows) {
         if (ry + row_h > g.table_body_rect.bottom) break;
         RectI row_rc{table_left, ry, table_right, ry + row_h};
-        RectI fn_rc{table_left + 12 + col_chk_w, ry, table_left + 12 + col_name_total_w, ry + row_h};
-        RectI prog_rc{table_left + 12 + col_chk_w + 4, ry + row_h - 14, table_left + 12 + col_chk_w + std::min(160, std::max(50, col_name_total_w - col_chk_w - 70)), ry + row_h - 11};
+        RectI fn_rc{table_left + col_chk_w, ry, table_left + 12 + col_name_total_w, ry + row_h};
+        RectI prog_rc{table_left + col_chk_w + 4, ry + row_h - 14, table_left + col_chk_w + std::min(160, std::max(50, col_name_total_w - col_chk_w - 70)), ry + row_h - 11};
         RectI act_rc{dl_col_left, ry + (row_h - 22) / 2, dl_col_left + 22, ry + (row_h + 22) / 2};
-        RectI chk_rc{table_left + 12, ry + (row_h - 20) / 2, table_left + 32, ry + (row_h + 20) / 2};
+        int chk_sz = DesignSystem::ScaleForDpi(16, m.dpi);
+        RectI chk_rc{table_left + DesignSystem::ScaleForDpi(10, m.dpi), ry + (row_h - chk_sz) / 2, table_left + DesignSystem::ScaleForDpi(10, m.dpi) + chk_sz, ry + (row_h + chk_sz) / 2};
         g.task_rows.push_back({r.task_id, row_rc, fn_rc, prog_rc, act_rc, chk_rc, act_rc});
         ry += row_h;
     }
@@ -600,14 +657,26 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
         if (state.can_resume) actions.push_back({DetailsActionId::kResume, {GetLocalizationManager().Translate("Resume"), true}});
         if (state.can_cancel) actions.push_back({DetailsActionId::kCancel, {GetLocalizationManager().Translate("Cancel"), false}});
         if (!state.can_pause && !state.can_resume && !state.can_cancel && (state.can_open_file || state.can_open_folder))
-            actions.push_back({DetailsActionId::kRemoveHistory, {GetLocalizationManager().Translate("Remove from History"), true}});
+            actions.push_back({DetailsActionId::kRemoveHistory, {GetLocalizationManager().Translate("Remove from History"), false}});
         int action_h = DesignSystem::ScaleForDpi(32, m.dpi);
         int gap = DesignSystem::ScaleForDpi(8, m.dpi);
         int x = w - DesignSystem::ScaleForDpi(16, m.dpi);
         int y = g.details_panel_rect.top + (det_h - action_h) / 2;
+        const bool compact_inspector = w < DesignSystem::ScaleForDpi(1050, m.dpi);
         for (auto it = actions.rbegin(); it != actions.rend(); ++it) {
-            const int button_w = DesignSystem::ScaleForDpi(
-                it->first == DetailsActionId::kRemoveHistory ? 176 : 112, m.dpi);
+            int btn_dp = 112;
+            if (it->first == DetailsActionId::kRemoveHistory) {
+                btn_dp = 32;
+            } else if (compact_inspector) {
+                if (it->first == DetailsActionId::kOpenFolder || it->first == DetailsActionId::kCancel) {
+                    btn_dp = 32;
+                } else if (it->first == DetailsActionId::kOpenFile) {
+                    btn_dp = 86;
+                } else {
+                    btn_dp = 76;
+                }
+            }
+            const int button_w = DesignSystem::ScaleForDpi(btn_dp, m.dpi);
             x -= button_w;
             g.details_action_buttons.push_back({it->first, it->second.first, it->second.second,
                 {x, y, x + button_w, y + action_h}});
@@ -666,7 +735,7 @@ HitTestResult DesktopView::HitTestPoint(int x, int y, size_t scroll_offset) cons
         return {HitTargetType::kSearchBox, 0, "", "Search downloads (Ctrl+K)"};
     }
     if (geom.add_download_button_rect.Contains(x, y)) {
-        return {HitTargetType::kToolbarButton, 0, "", "+ Add download (Ctrl+N)"};
+        return {HitTargetType::kToolbarButton, 0, "", "+ Add Download (Ctrl+N)"};
     }
     if (geom.select_all_checkbox_rect.Contains(x, y)) {
         return {HitTargetType::kSelectAllCheckbox, 0, "", "Select all / Deselect all"};
@@ -1468,9 +1537,14 @@ void DesktopView::SetColumnWidth(size_t col_idx, int width) {
 
 void DesktopView::StartColumnResize(int col_idx, int mouse_x) {
     if (col_idx >= 0 && col_idx < static_cast<int>(m_column_widths.size())) {
+        auto geom = ComputeLayoutGeometry(0);
         m_resizing_col_index = col_idx;
         m_resize_start_x = mouse_x;
-        m_resize_orig_width = m_column_widths[static_cast<size_t>(col_idx)];
+        if (col_idx < static_cast<int>(geom.table_columns.size())) {
+            m_resize_orig_width = geom.table_columns[static_cast<size_t>(col_idx)].rect.width();
+        } else {
+            m_resize_orig_width = m_column_widths[static_cast<size_t>(col_idx)];
+        }
     }
 }
 
@@ -1551,6 +1625,9 @@ void DesktopView::LoadColumnWidthsFromSettings() {
             } catch (...) {}
         }
         if (widths.size() >= 6) {
+            widths[1] = std::max(widths[1], 150);
+            widths[2] = std::max(widths[2], 150);
+            widths[5] = std::max(widths[5], 145);
             m_column_widths = std::move(widths);
         }
     }
@@ -1628,8 +1705,6 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
     size_t end_idx = std::min(list.size(), scroll_offset + max_visible_rows);
     rows.reserve(end_idx - scroll_offset);
 
-    size_t max_fn_chars = IsCompactColumnsMode() ? 28 : 40;
-
     for (size_t i = scroll_offset; i < end_idx; ++i) {
         const auto& t = list[i];
         FormattedTaskRow row;
@@ -1637,8 +1712,8 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
         row.state = t.state;
         row.category = t.category;
         row.full_filename_tooltip = t.file_name;
-        row.display_filename = TruncateFilenameGracefully(t.file_name, max_fn_chars);
-        row.is_filename_truncated = (row.display_filename != t.file_name);
+        row.display_filename = StripLeadingOrphanCombiningMarks(t.file_name);
+        row.is_filename_truncated = false;
         row.is_stream = (t.task_type != TaskType::kHttpFile);
 
         if (t.task_type == TaskType::kStreamHls) row.file_type_badge = "HLS STREAM";
@@ -1663,36 +1738,36 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
         }
 
         // Semantic status indicator & progress fill colors
+        // Restrained monochromatic + single accent rule from Design Vision Part 3.F
         switch (t.state) {
             case TaskState::kCompleted:
-                row.status_indicator_color = m_palette.status_success;
-                row.progress_fill_color = m_palette.mode == ThemeMode::kLight
-                    ? m_palette.accent_primary : m_palette.status_success;
+                row.status_indicator_color = m_palette.status_success; // #74747E Dark / #64748B Light
+                row.progress_fill_color = (m_palette.mode == ThemeMode::kLight) ? m_palette.accent_primary : m_palette.status_success;
                 break;
             case TaskState::kFailed:
             case TaskState::kCanceled:
-                row.status_indicator_color = m_palette.status_danger;
+                row.status_indicator_color = m_palette.status_danger; // #FF4757 Dark / #DC2626 Light
                 row.progress_fill_color = m_palette.status_danger;
                 break;
             case TaskState::kPaused:
-                row.status_indicator_color = m_palette.status_warning;
-                row.progress_fill_color = m_palette.status_warning;
+                row.status_indicator_color = m_palette.text_secondary; // #A1A1AA Dark / #64748B Light
+                row.progress_fill_color = m_palette.text_secondary;
                 break;
             case TaskState::kProbing:
             case TaskState::kMuxing:
             case TaskState::kVerifying:
             case TaskState::kFinalizing:
-                row.status_indicator_color = m_palette.accent_violet;
-                row.progress_fill_color = row.is_stream ? m_palette.badge_stream : m_palette.accent_cyan;
+                row.status_indicator_color = m_palette.text_secondary;
+                row.progress_fill_color = m_palette.text_secondary;
                 break;
             case TaskState::kDownloading:
-                row.status_indicator_color = row.is_stream ? m_palette.badge_stream : m_palette.accent_cyan;
-                row.progress_fill_color = row.is_stream ? m_palette.badge_stream : m_palette.accent_primary;
+                row.status_indicator_color = m_palette.accent_primary; // Coral Dark / Sky Blue Light
+                row.progress_fill_color = m_palette.accent_primary;
                 break;
             case TaskState::kQueued:
             default:
-                row.status_indicator_color = m_palette.text_secondary;
-                row.progress_fill_color = row.is_stream ? m_palette.badge_stream : m_palette.accent_primary;
+                row.status_indicator_color = m_palette.text_muted;
+                row.progress_fill_color = m_palette.text_muted;
                 break;
         }
 
@@ -1737,7 +1812,7 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
         }
 
         if (t.state == TaskState::kCompleted) {
-            row.size_text = (t.total_bytes > 0) ? FormatSizePretty(t.total_bytes) : (t.downloaded_bytes > 0 ? FormatSizePretty(t.downloaded_bytes) : "Unknown");
+            row.size_text = (t.total_bytes > 0) ? FormatSizePretty(t.total_bytes) : (t.downloaded_bytes > 0 ? FormatSizePretty(t.downloaded_bytes) : "—");
         } else if (t.total_bytes > 0) {
             if (t.downloaded_bytes > 0) {
                 row.size_text = FormatSizePretty(t.downloaded_bytes) + " / " + FormatSizePretty(t.total_bytes);
@@ -1746,9 +1821,9 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
             }
         } else {
             if (t.downloaded_bytes > 0) {
-                row.size_text = FormatSizePretty(t.downloaded_bytes) + " / Unknown";
+                row.size_text = FormatSizePretty(t.downloaded_bytes) + " / —";
             } else {
-                row.size_text = "Unknown";
+                row.size_text = "—";
             }
         }
         row.added_time_text = FormatFriendlyTime(t.created_at_ms);
@@ -1765,39 +1840,36 @@ std::vector<FormattedTaskRow> DesktopView::BuildVisibleTaskRows(size_t scroll_of
                     ? std::clamp((static_cast<double>(t.completed_segments) * 100.0) / static_cast<double>(t.total_segments), 0.0, 99.0)
                     : 0.0);
             int ipct = static_cast<int>(pct);
-            row.status_text = (t.total_bytes > 0 || (row.is_stream && t.total_segments > 0)) ? ("Downloading " + std::to_string(ipct) + "%") : "Downloading...";
+            if (t.total_bytes > 0 || (row.is_stream && t.total_segments > 0)) {
+                row.status_text = (m_window_width < DesignSystem::ScaleForDpi(1050, m_metrics.dpi))
+                    ? (std::to_string(ipct) + "% · Downloading")
+                    : ("Downloading · " + std::to_string(ipct) + "%");
+            } else {
+                row.status_text = "Downloading";
+            }
             row.status_indicator_color = m_palette.accent_primary;
         } else if (t.state == TaskState::kProbing) {
             row.status_text = (!t.status_detail.empty()) ? t.status_detail : "Connecting...";
-            row.status_indicator_color = {0x8B, 0x5C, 0xF6, 255};
+            row.status_indicator_color = m_palette.text_secondary;
         } else if (t.state == TaskState::kMuxing) {
             row.status_text = "Merging (FFmpeg)...";
-            row.status_indicator_color = {0x8B, 0x5C, 0xF6, 255};
+            row.status_indicator_color = m_palette.text_secondary;
         } else if (t.state == TaskState::kVerifying) {
             row.status_text = "Verifying...";
-            row.status_indicator_color = {0x8B, 0x5C, 0xF6, 255};
+            row.status_indicator_color = m_palette.text_secondary;
         } else if (t.state == TaskState::kPaused) {
             if (t.scheduled) {
                 row.status_text = "Scheduled (" + t.schedule_time_local + ")";
-            } else if (t.total_bytes > 0) {
+            } else if (t.total_bytes > 0 && t.downloaded_bytes > 0) {
                 double pct = (static_cast<double>(t.downloaded_bytes) * 100.0) / static_cast<double>(t.total_bytes);
-            if (t.state == TaskState::kFinalizing) {
-                pct = std::clamp(pct, 99.8, 99.9);
-            } else if (t.state == TaskState::kVerifying) {
-                pct = std::clamp(pct, 99.0, 99.5);
-            } else if (t.state == TaskState::kMuxing) {
-                pct = std::clamp(pct, 98.0, 99.0);
-            } else {
-                pct = std::clamp(pct, 0.0, 99.0);
-            }
-                row.status_text = "Paused " + std::to_string(static_cast<int>(pct)) + "%";
+                row.status_text = "Paused · " + std::to_string(static_cast<int>(pct)) + "%";
             } else {
                 row.status_text = "Paused";
             }
-            row.status_indicator_color = m_palette.status_warning;
+            row.status_indicator_color = m_palette.text_secondary;
         } else if (t.state == TaskState::kQueued) {
             row.status_text = "Queued";
-            row.status_indicator_color = {0x72, 0x73, 0x7A, 255};
+            row.status_indicator_color = m_palette.text_muted;
         } else if (t.state == TaskState::kCompleted) {
             row.status_text = "Completed";
             row.status_indicator_color = m_palette.status_success;
@@ -1911,15 +1983,44 @@ TaskDetailsViewModel DesktopView::BuildSelectedTaskDetails() const {
     const auto& t = *sel;
     vm.has_selection = true;
     vm.task_id = t.task_id;
-    vm.file_name = t.file_name;
+    vm.file_name = StripLeadingOrphanCombiningMarks(t.file_name);
+    vm.category = t.category;
     vm.redacted_source_url = Logger::RedactSensitiveData(t.url);
     vm.redacted_page_url = t.page_url.empty() ? "—" : Logger::RedactSensitiveData(t.page_url);
     vm.destination_path = PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(t.save_dir) / PathSanitizer::Utf8ToPath(t.file_name));
-    vm.size_summary = (t.total_bytes > 0)
-        ? (FormatBytes(t.downloaded_bytes) + " of " + FormatBytes(t.total_bytes))
-        : (FormatBytes(t.downloaded_bytes) + " (Total size unknown)");
+    if (t.state == TaskState::kCompleted && t.total_bytes > 0) {
+        vm.size_summary = FormatSizePretty(t.total_bytes);
+    } else if (t.total_bytes > 0) {
+        vm.size_summary = FormatSizePretty(t.downloaded_bytes) + " of " + FormatSizePretty(t.total_bytes);
+        if (t.state == TaskState::kDownloading) {
+            int ipct = static_cast<int>(std::clamp((static_cast<double>(t.downloaded_bytes) * 100.0) / static_cast<double>(t.total_bytes), 0.0, 99.0));
+            vm.size_summary += " (" + std::to_string(ipct) + "%)";
+        }
+    } else {
+        vm.size_summary = FormatSizePretty(t.downloaded_bytes) + " (Total size unknown)";
+    }
     vm.progress_summary = t.status_detail.empty() ? TaskStateToString(t.state) : t.status_detail;
-    vm.speed_summary = FormatSpeed(t.speed_bps);
+    if (vm.progress_summary == "COMPLETED") vm.progress_summary = "Completed";
+    if (vm.progress_summary == "PAUSED") vm.progress_summary = "Paused";
+    if (vm.progress_summary == "DOWNLOADING") vm.progress_summary = "Downloading";
+    if (t.state == TaskState::kCompleted || t.state == TaskState::kPaused) {
+        vm.speed_summary.clear();
+    } else if (t.speed_bps == 0) {
+        vm.speed_summary = "0 B/s";
+    } else {
+        double b = static_cast<double>(t.speed_bps);
+        char sbuf[32];
+        if (t.speed_bps >= 1073741824ULL) {
+            std::snprintf(sbuf, sizeof(sbuf), "%.1f GB/s", b / 1073741824.0);
+        } else if (t.speed_bps >= 1048576ULL) {
+            std::snprintf(sbuf, sizeof(sbuf), "%.1f MB/s", b / 1048576.0);
+        } else if (t.speed_bps >= 1024ULL) {
+            std::snprintf(sbuf, sizeof(sbuf), "%.1f KB/s", b / 1024.0);
+        } else {
+            std::snprintf(sbuf, sizeof(sbuf), "%llu B/s", static_cast<unsigned long long>(t.speed_bps));
+        }
+        vm.speed_summary = sbuf;
+    }
     vm.created_time_str = FormatTimestampUtc(t.created_at_ms);
     vm.updated_time_str = FormatTimestampUtc(t.updated_at_ms);
     vm.completed_time_str = FormatTimestampUtc(t.completed_at_ms);
@@ -3820,10 +3921,12 @@ struct Win32WindowContext {
     TaskbarProgressInfo last_taskbar_info{};
     bool taskbar_info_initialized{false};
     bool mouse_tracking_active{false};
+    bool language_button_pressed{false};
     std::string conflict_dialog_task_id;
     std::wstring conflict_dialog_path;
     int conflict_dialog_rename_number{1};
     bool conflict_dialog_remember{false};
+    WNDPROC orig_search_proc{nullptr};
 };
 
 struct ConflictDialogLayout { RECT card, path, checkbox, rename, overwrite, abort, close; };
@@ -6504,10 +6607,35 @@ void DrawRoundedBoxGdi(HDC hdc, const RECT& rc, int radius, ColorRgba bg, ColorR
     DeleteObject(hPen);
 }
 
-void DrawCheckboxGdi(HDC hdc, const RECT& rc, bool checked, ColorRgba bg, ColorRgba border, ColorRgba check_col) {
-    DrawRoundedBoxGdi(hdc, rc, 6, bg, border, 1);
+void DrawCheckboxGdi(HDC hdc, const RECT& rc, bool checked, const ThemePalette& pal) {
+    const bool is_light = (pal.mode == ThemeMode::kLight);
+    ColorRgba actual_bg = checked ? pal.accent_primary : (is_light ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : ColorRgba{0x16, 0x16, 0x18, 255});
+    ColorRgba actual_border = checked ? pal.accent_primary : (is_light ? ColorRgba{0x94, 0xA3, 0xB8, 255} : ColorRgba{0x71, 0x71, 0x7A, 255});
+
+    DrawRoundedBoxGdi(hdc, rc, 4, actual_bg, actual_border, 1);
     if (checked) {
-        HPEN hPen = CreatePen(PS_SOLID, 2, check_col.ToWin32ColorRef());
+        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+        HGDIOBJ oldPen = SelectObject(hdc, hPen);
+        POINT pts[3] = {
+            {rc.left + 4, rc.top + (rc.bottom - rc.top) / 2},
+            {rc.left + (rc.right - rc.left) / 2 - 1, rc.bottom - 5},
+            {rc.right - 4, rc.top + 5}
+        };
+        Polyline(hdc, pts, 3);
+        SelectObject(hdc, oldPen);
+        DeleteObject(hPen);
+    }
+}
+
+void DrawCheckboxGdi(HDC hdc, const RECT& rc, bool checked, ColorRgba bg, ColorRgba border, ColorRgba check_col) {
+    (void)bg;
+    (void)border;
+    const bool is_light = (check_col.r == 0x02 && check_col.g == 0x84) || (bg.r >= 0xEE && bg.g >= 0xEE);
+    ColorRgba actual_bg = checked ? check_col : (is_light ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : ColorRgba{0x16, 0x16, 0x18, 255});
+    ColorRgba actual_border = checked ? check_col : (is_light ? ColorRgba{0x94, 0xA3, 0xB8, 255} : ColorRgba{0x71, 0x71, 0x7A, 255});
+    DrawRoundedBoxGdi(hdc, rc, 4, actual_bg, actual_border, 1);
+    if (checked) {
+        HPEN hPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
         HGDIOBJ oldPen = SelectObject(hdc, hPen);
         POINT pts[3] = {
             {rc.left + 4, rc.top + (rc.bottom - rc.top) / 2},
@@ -6521,145 +6649,165 @@ void DrawCheckboxGdi(HDC hdc, const RECT& rc, bool checked, ColorRgba bg, ColorR
 }
 
 void DrawDocFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba col) {
-    int fold = 5;
-    HPEN hPen = CreatePen(PS_SOLID, 1, col.ToWin32ColorRef());
-    HGDIOBJ oldPen = SelectObject(hdc, hPen);
-    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen pen(Gdiplus::Color(col.a, col.r, col.g, col.b), 1.6f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
 
-    POINT pts[6] = {
-        {x, y},
-        {x + w - fold, y},
-        {x + w, y + fold},
-        {x + w, y + h},
-        {x, y + h},
-        {x, y}
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+    float fold = fw * 0.35f;
+
+    Gdiplus::PointF pts[5] = {
+        {fx, fy},
+        {fx + fw - fold, fy},
+        {fx + fw, fy + fold},
+        {fx + fw, fy + fh},
+        {fx, fy + fh}
     };
-    Polygon(hdc, pts, 6);
-
-    MoveToEx(hdc, x + w - fold, y, nullptr);
-    LineTo(hdc, x + w - fold, y + fold);
-    LineTo(hdc, x + w, y + fold);
-
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    DeleteObject(hPen);
+    g.DrawPolygon(&pen, pts, 5);
+    g.DrawLine(&pen, fx + fw - fold, fy, fx + fw - fold, fy + fold);
+    g.DrawLine(&pen, fx + fw - fold, fy + fold, fx + fw, fy + fold);
 }
 
 void DrawVideoFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
-    // Film sheet frame with coral red accent and centered play triangle
-    DrawDocFileIconGdi(hdc, x, y, w, h, accent);
-    int cx = x + w / 2 - 1;
-    int cy = y + h / 2 + 2;
-    int sz = 4;
-    POINT tri[3] = {
-        {cx - sz + 1, cy - sz},
-        {cx + sz + 1, cy},
-        {cx - sz + 1, cy + sz}
+    // Premium Lucide video icon: rounded camera body + angled lens
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen pen(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b), 1.6f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+
+    // Box body: 68% width
+    float body_w = fw * 0.68f;
+    float body_h = fh * 0.72f;
+    float body_y = fy + (fh - body_h) * 0.5f;
+    g.DrawRectangle(&pen, fx, body_y, body_w, body_h);
+
+    // Lens trapezoid
+    Gdiplus::PointF lens[3] = {
+        {fx + body_w, fy + fh * 0.38f},
+        {fx + fw, fy + fh * 0.22f},
+        {fx + fw, fy + fh * 0.78f}
     };
-    HPEN hPen = CreatePen(PS_SOLID, 1, accent.ToWin32ColorRef());
-    HBRUSH hBrush = CreateSolidBrush(accent.ToWin32ColorRef());
-    HGDIOBJ op = SelectObject(hdc, hPen);
-    HGDIOBJ ob = SelectObject(hdc, hBrush);
-    Polygon(hdc, tri, 3);
-    SelectObject(hdc, ob);
-    SelectObject(hdc, op);
-    DeleteObject(hBrush);
-    DeleteObject(hPen);
+    g.DrawLines(&pen, lens, 3);
+    g.DrawLine(&pen, fx + fw, fy + fh * 0.78f, fx + body_w, fy + fh * 0.62f);
 }
 
 void DrawAudioFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
-    // Violet sheet outline with 3 vertical equalizer lines
-    DrawDocFileIconGdi(hdc, x, y, w, h, accent);
-    int cx = x + w / 2;
-    int cy = y + h / 2 + 2;
-    HPEN hPen = CreatePen(PS_SOLID, 2, accent.ToWin32ColorRef());
-    HGDIOBJ op = SelectObject(hdc, hPen);
-    // Bar 1
-    MoveToEx(hdc, cx - 4, cy + 3, nullptr);
-    LineTo(hdc, cx - 4, cy - 3);
-    // Bar 2 (center, tallest)
-    MoveToEx(hdc, cx, cy + 5, nullptr);
-    LineTo(hdc, cx, cy - 5);
-    // Bar 3
-    MoveToEx(hdc, cx + 4, cy + 4, nullptr);
-    LineTo(hdc, cx + 4, cy - 2);
-    SelectObject(hdc, op);
-    DeleteObject(hPen);
+    // Premium Lucide music icon: eighth notes connected with beam
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen pen(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b), 1.6f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+
+    // Stems & Beam
+    g.DrawLine(&pen, fx + fw * 0.35f, fy + fh * 0.25f, fx + fw * 0.85f, fy + fh * 0.12f);
+    g.DrawLine(&pen, fx + fw * 0.35f, fy + fh * 0.25f, fx + fw * 0.35f, fy + fh * 0.75f);
+    g.DrawLine(&pen, fx + fw * 0.85f, fy + fh * 0.12f, fx + fw * 0.85f, fy + fh * 0.65f);
+
+    // Note heads
+    Gdiplus::SolidBrush br(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b));
+    g.FillEllipse(&br, fx + fw * 0.15f, fy + fh * 0.65f, fw * 0.26f, fh * 0.22f);
+    g.FillEllipse(&br, fx + fw * 0.65f, fy + fh * 0.55f, fw * 0.26f, fh * 0.22f);
 }
 
 void DrawArchiveFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
-    // Amber sheet outline with zipper pattern in center
-    DrawDocFileIconGdi(hdc, x, y, w, h, accent);
-    int cx = x + w / 2;
-    int cy = y + h / 2 + 2;
-    HPEN hPen = CreatePen(PS_SOLID, 1, accent.ToWin32ColorRef());
-    HGDIOBJ op = SelectObject(hdc, hPen);
-    for (int dy = -4; dy <= 4; dy += 2) {
-        int tooth_w = ((dy % 4) == 0) ? 3 : 2;
-        MoveToEx(hdc, cx - tooth_w, cy + dy, nullptr);
-        LineTo(hdc, cx + tooth_w, cy + dy);
-    }
-    SelectObject(hdc, op);
-    DeleteObject(hPen);
+    // Premium Lucide archive box icon
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen pen(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b), 1.6f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+
+    // Top lid box
+    g.DrawRectangle(&pen, fx + 1.0f, fy + 2.0f, fw - 2.0f, fh * 0.28f);
+    // Body
+    Gdiplus::PointF body[4] = {
+        {fx + 2.5f, fy + 2.0f + fh * 0.28f},
+        {fx + 2.5f, fy + fh - 1.0f},
+        {fx + fw - 2.5f, fy + fh - 1.0f},
+        {fx + fw - 2.5f, fy + 2.0f + fh * 0.28f}
+    };
+    g.DrawLines(&pen, body, 4);
+    // Handle slot
+    g.DrawLine(&pen, fx + fw * 0.38f, fy + fh * 0.58f, fx + fw * 0.62f, fy + fh * 0.58f);
 }
 
 void DrawPdfFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
-    // Crimson sheet outline with solid red fold badge
     DrawDocFileIconGdi(hdc, x, y, w, h, accent);
-    int cx = x + w / 2;
-    int cy = y + h / 2 + 2;
-    RECT badge{cx - 6, cy - 3, cx + 6, cy + 4};
-    HBRUSH hBrush = CreateSolidBrush(accent.ToWin32ColorRef());
-    FillRect(hdc, &badge, hBrush);
-    DeleteObject(hBrush);
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = static_cast<float>(x + w / 2);
+    float cy = static_cast<float>(y + h / 2 + 1);
+    Gdiplus::Pen pen(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b), 1.3f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    // Subtle PDF indicator mark
+    g.DrawLine(&pen, cx - 4.0f, cy - 2.0f, cx + 4.0f, cy - 2.0f);
+    g.DrawLine(&pen, cx - 4.0f, cy + 2.0f, cx + 1.0f, cy + 2.0f);
 }
 
 void DrawImageFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
-    // Cyan sheet with sun and two mountains
     DrawDocFileIconGdi(hdc, x, y, w, h, accent);
-    int cx = x + w / 2;
-    int cy = y + h / 2 + 2;
-    HPEN hPen = CreatePen(PS_SOLID, 1, accent.ToWin32ColorRef());
-    HGDIOBJ op = SelectObject(hdc, hPen);
-    // Sun
-    Ellipse(hdc, cx + 1, cy - 4, cx + 5, cy);
-    // Mountain 1 (larger)
-    POINT m1[3] = {{cx - 6, cy + 5}, {cx - 2, cy - 1}, {cx + 2, cy + 5}};
-    Polyline(hdc, m1, 3);
-    // Mountain 2 (smaller)
-    POINT m2[3] = {{cx, cy + 5}, {cx + 3, cy + 1}, {cx + 6, cy + 5}};
-    Polyline(hdc, m2, 3);
-    SelectObject(hdc, op);
-    DeleteObject(hPen);
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = static_cast<float>(x + w / 2);
+    float cy = static_cast<float>(y + h / 2 + 1);
+    Gdiplus::Pen pen(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b), 1.2f);
+    g.DrawEllipse(&pen, cx + 1.0f, cy - 4.0f, 3.5f, 3.5f);
+    Gdiplus::PointF m1[3] = {{cx - 5.5f, cy + 5.0f}, {cx - 2.0f, cy - 0.5f}, {cx + 2.0f, cy + 5.0f}};
+    g.DrawLines(&pen, m1, 3);
+    Gdiplus::PointF m2[3] = {{cx - 0.5f, cy + 5.0f}, {cx + 2.5f, cy + 1.5f}, {cx + 5.5f, cy + 5.0f}};
+    g.DrawLines(&pen, m2, 3);
 }
 
 void DrawExecutableFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
-    // Emerald window frame with titlebar
     DrawDocFileIconGdi(hdc, x, y, w, h, accent);
-    int cx = x + w / 2;
-    int cy = y + h / 2 + 2;
-    HPEN hPen = CreatePen(PS_SOLID, 1, accent.ToWin32ColorRef());
-    HGDIOBJ op = SelectObject(hdc, hPen);
-    RECT win_rc{cx - 5, cy - 4, cx + 5, cy + 5};
-    Rectangle(hdc, win_rc.left, win_rc.top, win_rc.right, win_rc.bottom);
-    MoveToEx(hdc, win_rc.left, cy - 2, nullptr);
-    LineTo(hdc, win_rc.right, cy - 2);
-    SelectObject(hdc, op);
-    DeleteObject(hPen);
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = static_cast<float>(x + w / 2);
+    float cy = static_cast<float>(y + h / 2 + 1);
+    Gdiplus::Pen pen(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b), 1.2f);
+    g.DrawRectangle(&pen, cx - 5.0f, cy - 4.0f, 10.0f, 8.0f);
+    g.DrawLine(&pen, cx - 5.0f, cy - 1.5f, cx + 5.0f, cy - 1.5f);
 }
 
 void DrawDocumentFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
-    // Slate blue sheet with text lines
     DrawDocFileIconGdi(hdc, x, y, w, h, accent);
-    int cx = x + w / 2;
-    int cy = y + h / 2 + 2;
-    HPEN hPen = CreatePen(PS_SOLID, 1, accent.ToWin32ColorRef());
-    HGDIOBJ op = SelectObject(hdc, hPen);
-    MoveToEx(hdc, cx - 4, cy - 3, nullptr); LineTo(hdc, cx + 4, cy - 3);
-    MoveToEx(hdc, cx - 4, cy, nullptr);     LineTo(hdc, cx + 4, cy);
-    MoveToEx(hdc, cx - 4, cy + 3, nullptr); LineTo(hdc, cx + 2, cy + 3);
-    SelectObject(hdc, op);
-    DeleteObject(hPen);
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = static_cast<float>(x + w / 2);
+    float cy = static_cast<float>(y + h / 2 + 1);
+    Gdiplus::Pen pen(Gdiplus::Color(accent.a, accent.r, accent.g, accent.b), 1.3f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    g.DrawLine(&pen, cx - 4.0f, cy - 3.0f, cx + 4.0f, cy - 3.0f);
+    g.DrawLine(&pen, cx - 4.0f, cy, cx + 4.0f, cy);
+    g.DrawLine(&pen, cx - 4.0f, cy + 3.0f, cx + 2.0f, cy + 3.0f);
 }
 
 void DrawGenericFileIconGdi(HDC hdc, int x, int y, int w, int h, ColorRgba accent) {
@@ -6671,134 +6819,228 @@ void DrawFileTypeIconGdi(HDC hdc, int x, int y, int w, int h, const FormattedTas
     auto ext_pos = name.rfind('.');
     std::string ext = (ext_pos != std::string::npos) ? name.substr(ext_pos) : "";
 
-    ColorRgba accent = pal.accent_primary; // Signature coral red #FF4757
-    ColorRgba accent_subtle = ColorRgba{0xFF, 0x73, 0x7A, 255};
+    // Monochromatic file badge container matching Radium Design Vision Part 3.E / Part 4
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
 
-    if (r.is_stream || r.category == "Video" || ext == ".mp4" || ext == ".mkv" || ext == ".webm" ||
-        ext == ".avi" || ext == ".mov" || ext == ".flv" || ext == ".ts" || ext == ".m4v" || ext == ".m3u8" || ext == ".mpd") {
-        DrawVideoFileIconGdi(hdc, x, y, w, h, accent);
+    ColorRgba badge_bg = (pal.mode == ThemeMode::kLight) ? ColorRgba{0xF1, 0xF5, 0xF9, 255} : ColorRgba{0x2A, 0x2A, 0x30, 255};
+    ColorRgba badge_border = (pal.mode == ThemeMode::kLight) ? ColorRgba{0xCB, 0xD5, 0xE1, 255} : ColorRgba{0xFF, 0xFF, 0xFF, 20};
+    ColorRgba glyphCol = (pal.mode == ThemeMode::kLight) ? ColorRgba{0x33, 0x41, 0x55, 255} : ColorRgba{0xD4, 0xD4, 0xD8, 255};
+
+    float fx = static_cast<float>(x);
+    float fy = static_cast<float>(y);
+    float fw = static_cast<float>(w);
+    float fh = static_cast<float>(h);
+    float rad = 6.0f;
+
+    Gdiplus::GraphicsPath path;
+    path.AddArc(fx, fy, rad * 2, rad * 2, 180, 90);
+    path.AddArc(fx + fw - rad * 2, fy, rad * 2, rad * 2, 270, 90);
+    path.AddArc(fx + fw - rad * 2, fy + fh - rad * 2, rad * 2, rad * 2, 0, 90);
+    path.AddArc(fx, fy + fh - rad * 2, rad * 2, rad * 2, 90, 90);
+    path.CloseFigure();
+
+    Gdiplus::SolidBrush br(Gdiplus::Color(badge_bg.a, badge_bg.r, badge_bg.g, badge_bg.b));
+    g.FillPath(&br, &path);
+
+    Gdiplus::Pen pBorder(Gdiplus::Color(badge_border.a, badge_border.r, badge_border.g, badge_border.b), 1.0f);
+    g.DrawPath(&pBorder, &path);
+
+    // Inner glyph drawn in neutral secondary stroke inside the badge
+    int pad = static_cast<int>(fw * 0.22f);
+    int gx = x + pad;
+    int gy = y + pad;
+    int gw = w - pad * 2;
+    int gh = h - pad * 2;
+
+    if (r.category == "PDF" || ext == ".pdf") {
+        DrawPdfFileIconGdi(hdc, gx, gy, gw, gh, glyphCol);
     } else if (r.category == "Audio" || ext == ".mp3" || ext == ".m4a" || ext == ".aac" ||
                ext == ".flac" || ext == ".wav" || ext == ".ogg" || ext == ".opus") {
-        DrawAudioFileIconGdi(hdc, x, y, w, h, accent);
+        DrawAudioFileIconGdi(hdc, gx, gy, gw, gh, glyphCol);
     } else if (r.category == "Compressed" || ext == ".zip" || ext == ".rar" || ext == ".7z" ||
                ext == ".tar" || ext == ".gz" || ext == ".bz2" || ext == ".xz" || ext == ".iso") {
-        DrawArchiveFileIconGdi(hdc, x, y, w, h, accent);
-    } else if (r.category == "PDF" || ext == ".pdf") {
-        DrawPdfFileIconGdi(hdc, x, y, w, h, accent);
+        DrawArchiveFileIconGdi(hdc, gx, gy, gw, gh, glyphCol);
     } else if (r.category == "Image" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
                ext == ".gif" || ext == ".webp" || ext == ".svg" || ext == ".bmp" || ext == ".ico") {
-        DrawImageFileIconGdi(hdc, x, y, w, h, accent);
+        DrawImageFileIconGdi(hdc, gx, gy, gw, gh, glyphCol);
     } else if (r.category == "Programs" || ext == ".exe" || ext == ".msi" || ext == ".dll" ||
                ext == ".bat" || ext == ".cmd" || ext == ".ps1") {
-        DrawExecutableFileIconGdi(hdc, x, y, w, h, accent);
-    } else if (r.category == "Documents" || ext == ".txt" || ext == ".doc" || ext == ".docx" ||
-               ext == ".xls" || ext == ".xlsx" || ext == ".ppt" || ext == ".pptx" || ext == ".csv" ||
-               ext == ".md" || ext == ".json" || ext == ".xml" || ext == ".cpp" || ext == ".h" ||
-               ext == ".hpp" || ext == ".js" || ext == ".ts" || ext == ".py") {
-        DrawDocumentFileIconGdi(hdc, x, y, w, h, accent);
+        DrawExecutableFileIconGdi(hdc, gx, gy, gw, gh, glyphCol);
+    } else if (r.is_stream || r.category == "Video" || ext == ".mp4" || ext == ".mkv" || ext == ".webm" ||
+               ext == ".avi" || ext == ".mov" || ext == ".flv" || ext == ".ts" || ext == ".m4v" || ext == ".m3u8" || ext == ".mpd") {
+        DrawVideoFileIconGdi(hdc, gx, gy, gw, gh, glyphCol);
     } else {
-        DrawGenericFileIconGdi(hdc, x, y, w, h, accent_subtle);
+        DrawDocumentFileIconGdi(hdc, gx, gy, gw, gh, glyphCol);
     }
 }
 
 void DrawPauseGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
-    int cx = (rc.left + rc.right) / 2;
-    int cy = (rc.top + rc.bottom) / 2;
-    int bar_w = 2;
-    int bar_h = 10;
-    int gap = 3;
-    RECT r1{cx - gap - bar_w, cy - bar_h / 2, cx - gap, cy + bar_h / 2};
-    RECT r2{cx + gap, cy - bar_h / 2, cx + gap + bar_w, cy + bar_h / 2};
-    FillRectSolid(hdc, r1, col);
-    FillRectSolid(hdc, r2, col);
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = (rc.left + rc.right) * 0.5f;
+    float cy = (rc.top + rc.bottom) * 0.5f;
+    Gdiplus::Pen pen(Gdiplus::Color(col.a, col.r, col.g, col.b), 2.2f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    g.DrawLine(&pen, cx - 3.0f, cy - 5.0f, cx - 3.0f, cy + 5.0f);
+    g.DrawLine(&pen, cx + 3.0f, cy - 5.0f, cx + 3.0f, cy + 5.0f);
 }
 
 void DrawPlayGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
-    int cx = (rc.left + rc.right) / 2;
-    int cy = (rc.top + rc.bottom) / 2;
-    int sz = 4;
-    POINT pts[3] = {
-        {cx - sz + 1, cy - sz},
-        {cx + sz + 1, cy},
-        {cx - sz + 1, cy + sz}
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = (rc.left + rc.right) * 0.5f;
+    float cy = (rc.top + rc.bottom) * 0.5f;
+    float sz = 4.5f;
+    Gdiplus::PointF pts[3] = {
+        {cx - sz + 1.0f, cy - sz},
+        {cx + sz + 0.5f, cy},
+        {cx - sz + 1.0f, cy + sz}
     };
-    HPEN hPen = CreatePen(PS_SOLID, 1, col.ToWin32ColorRef());
-    HBRUSH hBrush = CreateSolidBrush(col.ToWin32ColorRef());
-    HGDIOBJ oldPen = SelectObject(hdc, hPen);
-    HGDIOBJ oldBrush = SelectObject(hdc, hBrush);
-    Polygon(hdc, pts, 3);
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    DeleteObject(hBrush);
-    DeleteObject(hPen);
+    Gdiplus::SolidBrush br(Gdiplus::Color(col.a, col.r, col.g, col.b));
+    g.FillPolygon(&br, pts, 3);
+}
+
+void DrawTrashGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen p(Gdiplus::Color(col.a, col.r, col.g, col.b), 1.5f);
+    p.SetStartCap(Gdiplus::LineCapRound);
+    p.SetEndCap(Gdiplus::LineCapRound);
+
+    float t_cx = (rc.left + rc.right) * 0.5f;
+    float t_cy = (rc.top + rc.bottom) * 0.5f;
+    g.DrawLine(&p, t_cx - 6.0f, t_cy - 4.0f, t_cx + 6.0f, t_cy - 4.0f);
+    g.DrawLine(&p, t_cx - 2.5f, t_cy - 6.0f, t_cx + 2.5f, t_cy - 6.0f);
+    Gdiplus::PointF body[4] = {
+        {t_cx - 4.5f, t_cy - 4.0f},
+        {t_cx - 3.5f, t_cy + 5.5f},
+        {t_cx + 3.5f, t_cy + 5.5f},
+        {t_cx + 4.5f, t_cy - 4.0f}
+    };
+    g.DrawLines(&p, body, 4);
+    g.DrawLine(&p, t_cx - 1.5f, t_cy - 1.5f, t_cx - 1.5f, t_cy + 3.5f);
+    g.DrawLine(&p, t_cx + 1.5f, t_cy - 1.5f, t_cx + 1.5f, t_cy + 3.5f);
+}
+
+void DrawFolderGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen p(Gdiplus::Color(col.a, col.r, col.g, col.b), 1.5f);
+    p.SetStartCap(Gdiplus::LineCapRound);
+    p.SetEndCap(Gdiplus::LineCapRound);
+    p.SetLineJoin(Gdiplus::LineJoinRound);
+
+    float cx = (rc.left + rc.right) * 0.5f;
+    float cy = (rc.top + rc.bottom) * 0.5f;
+    Gdiplus::PointF pts[7] = {
+        {cx - 6.5f, cy - 4.5f},
+        {cx - 1.5f, cy - 4.5f},
+        {cx,        cy - 2.5f},
+        {cx + 6.5f, cy - 2.5f},
+        {cx + 6.5f, cy + 5.0f},
+        {cx - 6.5f, cy + 5.0f},
+        {cx - 6.5f, cy - 4.5f}
+    };
+    g.DrawLines(&p, pts, 7);
+}
+
+void DrawCloseGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen p(Gdiplus::Color(col.a, col.r, col.g, col.b), 1.6f);
+    p.SetStartCap(Gdiplus::LineCapRound);
+    p.SetEndCap(Gdiplus::LineCapRound);
+
+    float cx = (rc.left + rc.right) * 0.5f;
+    float cy = (rc.top + rc.bottom) * 0.5f;
+    g.DrawLine(&p, cx - 4.5f, cy - 4.5f, cx + 4.5f, cy + 4.5f);
+    g.DrawLine(&p, cx + 4.5f, cy - 4.5f, cx - 4.5f, cy + 4.5f);
+}
+
+static std::wstring MiddleTruncateFilename(HDC hdc, const std::wstring& filename, int max_w) {
+    if (filename.empty() || max_w <= 0) return filename;
+    SIZE sz{};
+    if (GetTextExtentPoint32W(hdc, filename.c_str(), static_cast<int>(filename.length()), &sz) && sz.cx <= max_w) {
+        return filename;
+    }
+    auto dot = filename.rfind(L'.');
+    std::wstring ext;
+    std::wstring stem = filename;
+    if (dot != std::wstring::npos && dot > 0 && filename.length() - dot <= 12) {
+        ext = filename.substr(dot);
+        stem = filename.substr(0, dot);
+    }
+    const std::wstring ellipsis = L"...";
+    int left_len = static_cast<int>(stem.length());
+    int keep_tail = std::min(4, left_len / 3);
+    std::wstring tail = (keep_tail > 0 && stem.length() >= static_cast<size_t>(keep_tail))
+        ? stem.substr(stem.length() - keep_tail) + ext : ext;
+    int keep_head = left_len - keep_tail;
+    while (keep_head > 2) {
+        std::wstring candidate = stem.substr(0, keep_head) + ellipsis + tail;
+        GetTextExtentPoint32W(hdc, candidate.c_str(), static_cast<int>(candidate.length()), &sz);
+        if (sz.cx <= max_w) return candidate;
+        keep_head--;
+    }
+    while (keep_head >= 1) {
+        std::wstring candidate = stem.substr(0, keep_head) + ellipsis + ext;
+        GetTextExtentPoint32W(hdc, candidate.c_str(), static_cast<int>(candidate.length()), &sz);
+        if (sz.cx <= max_w) return candidate;
+        keep_head--;
+    }
+    return ellipsis + ext;
 }
 
 void DrawSearchGlassGdi(HDC hdc, int x, int y, int size, ColorRgba col) {
-    HPEN hPen = CreatePen(PS_SOLID, 2, col.ToWin32ColorRef());
-    HGDIOBJ oldPen = SelectObject(hdc, hPen);
-    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-
-    int radius = size - 4;
-    Ellipse(hdc, x, y, x + radius, y + radius);
-
-    MoveToEx(hdc, x + radius - 1, y + radius - 1, nullptr);
-    LineTo(hdc, x + size + 2, y + size + 2);
-
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    DeleteObject(hPen);
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::Pen pen(Gdiplus::Color(col.a, col.r, col.g, col.b), 1.8f);
+    float radius = static_cast<float>(size - 4);
+    g.DrawEllipse(&pen, static_cast<float>(x), static_cast<float>(y), radius, radius);
+    g.DrawLine(&pen, static_cast<float>(x) + radius * 0.85f, static_cast<float>(y) + radius * 0.85f,
+               static_cast<float>(x + size + 2), static_cast<float>(y + size + 2));
 }
 
 void DrawGearGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
-    int cx = (rc.left + rc.right) / 2;
-    int cy = (rc.top + rc.bottom) / 2;
-    HPEN hPen = CreatePen(PS_SOLID, 2, col.ToWin32ColorRef());
-    HGDIOBJ oldPen = SelectObject(hdc, hPen);
-    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = (rc.left + rc.right) * 0.5f;
+    float cy = (rc.top + rc.bottom) * 0.5f;
+    Gdiplus::Pen pen(Gdiplus::Color(col.a, col.r, col.g, col.b), 1.8f);
 
-    int r_outer = 6;
-    Ellipse(hdc, cx - r_outer, cy - r_outer, cx + r_outer + 1, cy + r_outer + 1);
+    float r_outer = 6.0f;
+    g.DrawEllipse(&pen, cx - r_outer, cy - r_outer, r_outer * 2.0f, r_outer * 2.0f);
+    float r_inner = 2.5f;
+    g.DrawEllipse(&pen, cx - r_inner, cy - r_inner, r_inner * 2.0f, r_inner * 2.0f);
 
-    int r_inner = 2;
-    Ellipse(hdc, cx - r_inner, cy - r_inner, cx + r_inner + 1, cy + r_inner + 1);
-
-    int tooth = 3;
-    MoveToEx(hdc, cx + r_outer, cy, nullptr); LineTo(hdc, cx + r_outer + tooth, cy);
-    MoveToEx(hdc, cx - r_outer, cy, nullptr); LineTo(hdc, cx - r_outer - tooth, cy);
-    MoveToEx(hdc, cx, cy + r_outer, nullptr); LineTo(hdc, cx, cy + r_outer + tooth);
-    MoveToEx(hdc, cx, cy - r_outer, nullptr); LineTo(hdc, cx, cy - r_outer - tooth);
-    MoveToEx(hdc, cx + 4, cy + 4, nullptr); LineTo(hdc, cx + 7, cy + 7);
-    MoveToEx(hdc, cx - 4, cy - 4, nullptr); LineTo(hdc, cx - 7, cy - 7);
-    MoveToEx(hdc, cx + 4, cy - 4, nullptr); LineTo(hdc, cx + 7, cy - 7);
-    MoveToEx(hdc, cx - 4, cy + 4, nullptr); LineTo(hdc, cx - 7, cy + 7);
-
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    DeleteObject(hPen);
+    float tooth = 2.5f;
+    for (int i = 0; i < 8; ++i) {
+        float angle = i * 3.14159265f / 4.0f;
+        float x1 = cx + std::cos(angle) * r_outer;
+        float y1 = cy + std::sin(angle) * r_outer;
+        float x2 = cx + std::cos(angle) * (r_outer + tooth);
+        float y2 = cy + std::sin(angle) * (r_outer + tooth);
+        g.DrawLine(&pen, x1, y1, x2, y2);
+    }
 }
 
 void DrawGlobeGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col) {
-    const int cx = (rc.left + rc.right) / 2;
-    const int cy = (rc.top + rc.bottom) / 2;
-    const int radius = std::max(5, static_cast<int>(std::min(rc.right - rc.left, rc.bottom - rc.top) / 3));
-    HPEN pen = CreatePen(PS_SOLID, 1, col.ToWin32ColorRef());
-    HGDIOBJ old_pen = SelectObject(hdc, pen);
-    HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    Gdiplus::Graphics g(hdc);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    float cx = (rc.left + rc.right) * 0.5f;
+    float cy = (rc.top + rc.bottom) * 0.5f;
+    float radius = std::max(5.0f, static_cast<float>(std::min(rc.right - rc.left, rc.bottom - rc.top)) / 3.0f);
+    Gdiplus::Pen pen(Gdiplus::Color(col.a, col.r, col.g, col.b), 1.5f);
 
-    Ellipse(hdc, cx - radius, cy - radius, cx + radius + 1, cy + radius + 1);
-    Ellipse(hdc, cx - radius / 2, cy - radius, cx + radius / 2 + 1, cy + radius + 1);
-    MoveToEx(hdc, cx - radius + 1, cy, nullptr);
-    LineTo(hdc, cx + radius, cy);
-    const int latitude_y = std::max(2, radius / 2);
-    const int latitude_x = static_cast<int>(std::sqrt(static_cast<double>(radius * radius - latitude_y * latitude_y)));
-    MoveToEx(hdc, cx - latitude_x, cy - latitude_y, nullptr);
-    LineTo(hdc, cx + latitude_x + 1, cy - latitude_y);
-    MoveToEx(hdc, cx - latitude_x, cy + latitude_y, nullptr);
-    LineTo(hdc, cx + latitude_x + 1, cy + latitude_y);
-
-    SelectObject(hdc, old_brush);
-    SelectObject(hdc, old_pen);
-    DeleteObject(pen);
+    g.DrawEllipse(&pen, cx - radius, cy - radius, radius * 2.0f, radius * 2.0f);
+    g.DrawEllipse(&pen, cx - radius * 0.5f, cy - radius, radius, radius * 2.0f);
+    g.DrawLine(&pen, cx - radius, cy, cx + radius, cy);
+    float lat_y = radius * 0.5f;
+    float lat_x = std::sqrt(std::max(0.0f, radius * radius - lat_y * lat_y));
+    g.DrawLine(&pen, cx - lat_x, cy - lat_y, cx + lat_x, cy - lat_y);
+    g.DrawLine(&pen, cx - lat_x, cy + lat_y, cx + lat_x, cy + lat_y);
 }
 
 void DrawThemeGlyphGdi(HDC hdc, const RECT& rc, ColorRgba col, ColorRgba cutout, bool show_moon) {
@@ -8109,83 +8351,119 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
 
     RECT det_rc = ToWinRect(rect);
 
-    // Floating rounded glass card with subtle border
-    int margin_x = DesignSystem::ScaleForDpi(16, m.dpi);
-    int margin_y = DesignSystem::ScaleForDpi(6, m.dpi);
-    RECT card_rc{det_rc.left + margin_x, det_rc.top + margin_y, det_rc.right - margin_x, det_rc.bottom - margin_y};
-    int card_radius = DesignSystem::ScaleForDpi(10, m.dpi);
-    DrawGlassPanelGdi(hdc, card_rc, card_radius, pal.glass_surface, pal.glass_border, 1, false);
+    // Docked bottom inspector according to Design Vision Part 3.G / Part 4
+    FillRectSolid(hdc, det_rc, pal.surface_primary);
+    RECT top_div{det_rc.left, det_rc.top, det_rc.right, det_rc.top + 1};
+    FillRectSolid(hdc, top_div, pal.border_subtle);
+
+    RECT card_rc = det_rc;
 
     auto geometry = view.ComputeLayoutGeometry(view.GetScrollOffset());
     for (size_t i = 0; i < geometry.details_action_buttons.size(); ++i) {
         const auto& action = geometry.details_action_buttons[i];
         RECT button_rc = ToWinRect(action.rect);
         bool hovered = view.GetHoveredDetailsBtnIndex() == static_cast<int>(i);
-        const bool is_primary = action.is_primary || action.action_id == DetailsActionId::kRemoveHistory;
-        ColorRgba bg = is_primary ? (hovered ? pal.accent_hover : pal.accent_primary) :
-            (hovered ? pal.surface_hover : pal.surface_elevated);
-        DrawRoundedBoxGdi(hdc, button_rc, DesignSystem::ScaleForDpi(6, m.dpi), bg,
-                          is_primary ? bg : pal.border_subtle, is_primary ? 0 : 1);
-        SetTextColor(hdc, is_primary ? RGB(255, 255, 255) : pal.text_secondary.ToWin32ColorRef());
-        std::wstring label = Utf8ToW(action.label);
-        int text_inset = DesignSystem::ScaleForDpi(8, m.dpi);
-        RECT label_rc{button_rc.left + text_inset, button_rc.top, button_rc.right - text_inset, button_rc.bottom};
-        DrawTextW(hdc, label.c_str(), -1, &label_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        const bool is_primary = (action.action_id == DetailsActionId::kResume);
+        const bool is_open_file = (action.action_id == DetailsActionId::kOpenFile);
+        const bool is_remove = (action.action_id == DetailsActionId::kRemoveHistory);
+        const bool is_light = (pal.mode == ThemeMode::kLight);
+
+        ColorRgba bg = pal.surface_elevated;
+        ColorRgba border = pal.border_subtle;
+        ColorRgba txt_col = pal.text_secondary;
+        if (is_primary) {
+            bg = pal.accent_primary;
+            border = pal.accent_primary;
+            txt_col = ColorRgba{255, 255, 255, 255};
+        } else if (is_open_file) {
+            bg = is_light ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : ColorRgba{0x32, 0x32, 0x38, 255};
+            border = is_light ? ColorRgba{0x94, 0xA3, 0xB8, 255} : ColorRgba{0x4B, 0x4B, 0x56, 255};
+            txt_col = is_light ? ColorRgba{0x0F, 0x17, 0x2A, 255} : ColorRgba{0xF5, 0xF5, 0xF7, 255};
+            if (hovered) {
+                bg = is_light ? ColorRgba{0xF8, 0xFA, 0xFC, 255} : ColorRgba{0x3C, 0x3C, 0x44, 255};
+            }
+        } else {
+            bg = is_light ? ColorRgba{0xEA, 0xEC, 0xEF, 255} : ColorRgba{0x24, 0x24, 0x28, 255};
+            border = is_light ? ColorRgba{0xD1, 0xD5, 0xDB, 255} : ColorRgba{0x34, 0x34, 0x38, 255};
+            txt_col = is_light ? ColorRgba{0x47, 0x55, 0x69, 255} : ColorRgba{0xA1, 0xA1, 0xAA, 255};
+            if (hovered) {
+                bg = is_remove ? (is_light ? ColorRgba{0xDC, 0x26, 0x26, 255} : ColorRgba{0xFF, 0x47, 0x57, 255}) : pal.surface_hover;
+                if (is_remove) border = bg;
+                txt_col = is_remove ? ColorRgba{255, 255, 255, 255} : pal.text_primary;
+            }
+        }
+        DrawRoundedBoxGdi(hdc, button_rc, DesignSystem::ScaleForDpi(6, m.dpi), bg, border, 1);
+        const bool is_compact_icon = (button_rc.right - button_rc.left <= DesignSystem::ScaleForDpi(44, m.dpi));
+        if (is_remove) {
+            DrawTrashGlyphGdi(hdc, button_rc, txt_col);
+        } else if (is_compact_icon && action.action_id == DetailsActionId::kOpenFolder) {
+            DrawFolderGlyphGdi(hdc, button_rc, txt_col);
+        } else if (is_compact_icon && action.action_id == DetailsActionId::kCancel) {
+            DrawCloseGlyphGdi(hdc, button_rc, txt_col);
+        } else {
+            SelectObject(hdc, is_open_file ? hFontBold : hFontSmall);
+            SetTextColor(hdc, txt_col.ToWin32ColorRef());
+            std::wstring label = Utf8ToW(action.label);
+            int text_inset = DesignSystem::ScaleForDpi(8, m.dpi);
+            RECT label_rc{button_rc.left + text_inset, button_rc.top, button_rc.right - text_inset, button_rc.bottom};
+            DrawTextW(hdc, label.c_str(), -1, &label_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
     }
 
-    // Left Icon Box
+    int line_h = DesignSystem::ScaleForDpi(24, m.dpi);
+    int top_y = card_rc.top + (card_rc.bottom - card_rc.top - line_h * 3) / 2;
+    int text_stack_center_y = top_y + (line_h * 3) / 2;
+
+    // Left Icon Box (42x42px, vertically centered against the 3-line text stack)
     int icon_box_w = DesignSystem::ScaleForDpi(42, m.dpi);
-    int icon_box_h = DesignSystem::ScaleForDpi(46, m.dpi);
+    int icon_box_h = DesignSystem::ScaleForDpi(42, m.dpi);
     int icon_box_x = card_rc.left + DesignSystem::ScaleForDpi(14, m.dpi);
-    int icon_box_y = card_rc.top + (card_rc.bottom - card_rc.top - icon_box_h) / 2;
+    int icon_box_y = text_stack_center_y - icon_box_h / 2;
     RECT icon_box_rc{icon_box_x, icon_box_y, icon_box_x + icon_box_w, icon_box_y + icon_box_h};
     DrawRoundedBoxGdi(hdc, icon_box_rc, DesignSystem::ScaleForDpi(8, m.dpi), pal.surface_elevated, pal.border_subtle, 1);
 
     // Media / File Icon inside icon box
     FormattedTaskRow dummy_row{};
+    dummy_row.display_filename = details.file_name;
     dummy_row.full_filename_tooltip = details.file_name;
-    dummy_row.is_stream = !details.stream_format.empty();
+    dummy_row.category = details.category;
+    dummy_row.is_stream = (details.stream_format.find("HLS") != std::string::npos || details.stream_format.find("DASH") != std::string::npos);
     int icon_w = DesignSystem::ScaleForDpi(24, m.dpi);
-    int icon_h = DesignSystem::ScaleForDpi(28, m.dpi);
+    int icon_h = DesignSystem::ScaleForDpi(26, m.dpi);
     int icon_x = icon_box_rc.left + (icon_box_w - icon_w) / 2;
     int icon_y = icon_box_rc.top + (icon_box_h - icon_h) / 2;
     DrawFileTypeIconGdi(hdc, icon_x, icon_y, icon_w, icon_h, dummy_row, pal);
 
     // Text content bounds
     int text_left = icon_box_rc.right + DesignSystem::ScaleForDpi(14, m.dpi);
-    int action_reserve = geometry.details_action_buttons.empty() ? 0 :
-        geometry.details_action_buttons.back().rect.right - geometry.details_action_buttons.front().rect.left +
-            DesignSystem::ScaleForDpi(16, m.dpi);
-    int text_right = card_rc.right - DesignSystem::ScaleForDpi(16, m.dpi) - action_reserve;
+    int text_right = geometry.details_action_buttons.empty()
+        ? (card_rc.right - DesignSystem::ScaleForDpi(16, m.dpi))
+        : (geometry.details_action_buttons.front().rect.left - DesignSystem::ScaleForDpi(14, m.dpi));
     int total_avail_w = text_right - text_left;
     if (total_avail_w <= 50) return;
 
-    int line_h = DesignSystem::ScaleForDpi(24, m.dpi);
-    int top_y = card_rc.top + (card_rc.bottom - card_rc.top - line_h * 3) / 2;
-
-    if (total_avail_w >= DesignSystem::ScaleForDpi(480, m.dpi)) {
-        // Two-column responsive layout (Matches Image 3)
-        int col1_w = total_avail_w / 2 - DesignSystem::ScaleForDpi(12, m.dpi);
-        int col2_x = text_left + col1_w + DesignSystem::ScaleForDpi(24, m.dpi);
+    if (total_avail_w >= DesignSystem::ScaleForDpi(300, m.dpi)) {
+        // Two-column responsive layout (Always visible in >= 760px windows)
+        int col1_w = (total_avail_w * 48) / 100 - DesignSystem::ScaleForDpi(8, m.dpi);
+        int col2_x = text_left + col1_w + DesignSystem::ScaleForDpi(18, m.dpi);
         int col2_w = text_right - col2_x;
-        RECT details_divider{col2_x - DesignSystem::ScaleForDpi(12, m.dpi),
+        RECT details_divider{col2_x - DesignSystem::ScaleForDpi(9, m.dpi),
             card_rc.top + DesignSystem::ScaleForDpi(18, m.dpi),
-            col2_x - DesignSystem::ScaleForDpi(11, m.dpi),
+            col2_x - DesignSystem::ScaleForDpi(8, m.dpi),
             card_rc.bottom - DesignSystem::ScaleForDpi(18, m.dpi)};
         FillRectSolid(hdc, details_divider, pal.border_subtle);
 
+        const int col1_text_right = col2_x - DesignSystem::ScaleForDpi(14, m.dpi);
+
         // Col 1, Row 1: Filename + Engine Badge
-        RECT fn_rc{text_left, top_y, text_left + col1_w, top_y + line_h};
+        RECT fn_rc{text_left, top_y, col1_text_right, top_y + line_h};
         SelectObject(hdc, hFontBold);
         SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
         std::wstring wname = Utf8ToW(details.file_name);
-        if (!details.engine_name.empty()) {
-            wname += L"  [" + Utf8ToW(details.engine_name) + L"]";
-        }
         DrawTextW(hdc, wname.c_str(), -1, &fn_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         // Col 1, Row 2: Size | Speed | Progress summary
-        RECT stat_rc{text_left, top_y + line_h, text_left + col1_w, top_y + line_h * 2};
+        RECT stat_rc{text_left, top_y + line_h, col1_text_right, top_y + line_h * 2};
         SelectObject(hdc, hFontSmall);
         SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
         std::wstring wstat = Utf8ToW(details.size_summary);
@@ -8198,10 +8476,10 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
         DrawTextW(hdc, wstat.c_str(), -1, &stat_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         // Col 1, Row 3: Destination Folder
-        RECT dest_rc{text_left, top_y + line_h * 2, text_left + col1_w, top_y + line_h * 3};
+        RECT dest_rc{text_left, top_y + line_h * 2, col1_text_right, top_y + line_h * 3};
         SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
         std::wstring wdest = L"Location: " + Utf8ToW(DestinationFolderForDisplay(details.destination_path));
-        DrawTextW(hdc, wdest.c_str(), -1, &dest_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        DrawTextW(hdc, wdest.c_str(), -1, &dest_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         // Col 2, Row 1: Source URL (redacted)
         RECT url_rc{col2_x, top_y, col2_x + col2_w, top_y + line_h};
@@ -8210,20 +8488,27 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
         std::wstring wurl = L"Source: " + Utf8ToW(details.redacted_source_url.empty() ? details.redacted_page_url : details.redacted_source_url);
         DrawTextW(hdc, wurl.c_str(), -1, &url_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-        // Col 2, Row 2: Timestamps
+        // Col 2, Row 2: Timestamps (collapse duplicate same-day date prefix)
         RECT time_rc{col2_x, top_y + line_h, col2_x + col2_w, top_y + line_h * 2};
         std::wstring wtime = L"Added: " + Utf8ToW(details.created_time_str);
         if (!details.completed_time_str.empty() && details.completed_time_str != "\u2014") {
-            wtime += L" \u2022 Finished: " + Utf8ToW(details.completed_time_str);
+            std::string fin_disp = details.completed_time_str;
+            auto c_comma = details.created_time_str.find(", ");
+            auto f_comma = details.completed_time_str.find(", ");
+            if (c_comma != std::string::npos && f_comma != std::string::npos &&
+                details.created_time_str.substr(0, c_comma) == details.completed_time_str.substr(0, f_comma)) {
+                fin_disp = details.completed_time_str.substr(f_comma + 2);
+            }
+            wtime += L" \u2022 Finished: " + Utf8ToW(fin_disp);
         }
-        SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
+        SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
         DrawTextW(hdc, wtime.c_str(), -1, &time_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         // Col 2, Row 3: Error explanation or stream details
         RECT err_rc{col2_x, top_y + line_h * 2, col2_x + col2_w, top_y + line_h * 3};
         if (!details.error_explanation.empty()) {
-            SetTextColor(hdc, pal.accent_primary.ToWin32ColorRef());
-            std::wstring werr = L"Notice: " + Utf8ToW(details.error_explanation);
+            SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
+            std::wstring werr = L"Status: " + Utf8ToW(details.error_explanation);
             DrawTextW(hdc, werr.c_str(), -1, &err_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         } else if (!details.stream_format.empty()) {
             SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
@@ -8272,7 +8557,8 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     HDC hdc = CreateCompatibleDC(hdc_screen);
     HBITMAP hbm = CreateCompatibleBitmap(hdc_screen, std::max(1, w), std::max(1, h));
     HGDIOBJ old_bm = SelectObject(hdc, hbm);
-    if (GetLocalizationManager().IsRightToLeft()) SetLayout(hdc, LAYOUT_RTL);
+    SetLayout(hdc_screen, 0);
+    SetLayout(hdc, 0);
 
     const auto& pal = view.GetPalette();
     auto geom = view.ComputeLayoutGeometry(view.GetScrollOffset());
@@ -8282,14 +8568,11 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     int row_h_calc = std::max(1, geom.task_row_height);
     size_t visible_count = static_cast<size_t>(std::max(1, geom.table_body_rect.height() / row_h_calc));
     ShowScrollBar(hwnd, SB_VERT, FALSE);
+    auto* ctx = reinterpret_cast<Win32WindowContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
 
     // 0. Base Matte Charcoal Canvas
     FillRectSolid(hdc, client_rc, pal.app_background);
     SetBkMode(hdc, TRANSPARENT);
-    RECT table_panel_rc{geom.table_header_rect.left, geom.table_header_rect.top,
-        geom.table_header_rect.right, geom.table_body_rect.bottom};
-    DrawRoundedBoxGdi(hdc, table_panel_rc, DesignSystem::ScaleForDpi(14, m.dpi),
-        pal.surface_primary, pal.border_subtle, 1);
 
     HFONT hFontTitle = CreateFontW(
         -m.font_title_px, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
@@ -8318,116 +8601,214 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     FillRectSolid(hdc, sidebar_rc, pal.surface_primary);
     RECT sidebar_divider{sidebar_rc.right - 1, 0, sidebar_rc.right, h};
     FillRectSolid(hdc, sidebar_divider, pal.border_subtle);
-    int brand_icon_size = DesignSystem::ScaleForDpi(40, m.dpi);
-    int brand_icon_x = DesignSystem::ScaleForDpi(16, m.dpi);
-    int brand_icon_y = DesignSystem::ScaleForDpi(20, m.dpi);
-    HICON brand_icon = reinterpret_cast<HICON>(GetClassLongPtrW(hwnd, GCLP_HICON));
-    if (brand_icon) DrawIconEx(hdc, brand_icon_x, brand_icon_y, brand_icon, brand_icon_size, brand_icon_size, 0, nullptr, DI_NORMAL);
-    RECT brand_rc{brand_icon_x + brand_icon_size + DesignSystem::ScaleForDpi(8, m.dpi), DesignSystem::ScaleForDpi(12, m.dpi),
-                  sidebar_rc.right - DesignSystem::ScaleForDpi(12, m.dpi), DesignSystem::ScaleForDpi(40, m.dpi)};
-    SelectObject(hdc, hFontTitle);
-    SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-    DrawTextW(hdc, L"Radium", -1, &brand_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    brand_rc.top = DesignSystem::ScaleForDpi(40, m.dpi);
-    brand_rc.bottom = DesignSystem::ScaleForDpi(62, m.dpi);
-    SelectObject(hdc, hFontSmall);
-    SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-    DrawTextW(hdc, L"Download Manager", -1, &brand_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    // Modern macOS Sidebar: Clean muted section header
+    RECT section_hdr_rc{sidebar_rc.left + DesignSystem::ScaleForDpi(16, m.dpi), DesignSystem::ScaleForDpi(18, m.dpi),
+                        sidebar_rc.right - DesignSystem::ScaleForDpi(16, m.dpi), DesignSystem::ScaleForDpi(36, m.dpi)};
+    SelectObject(hdc, hFontSmallBold);
+    SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
+    DrawTextW(hdc, L"LIBRARY", -1, &section_hdr_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    const bool compact_sidebar_paint = geom.sidebar_rect.width() <= DesignSystem::ScaleForDpi(168, m.dpi);
+
     for (size_t i = 0; i < geom.sidebar_items.size(); ++i) {
         const auto& item = geom.sidebar_items[i];
         RECT item_rc = ToWinRect(item.rect);
         bool selected = item.selected;
         bool hovered = view.GetHoveredSidebarIndex() == static_cast<int>(i);
-        if (selected || hovered) DrawRoundedBoxGdi(hdc, item_rc, DesignSystem::ScaleForDpi(6, m.dpi),
-            selected ? pal.surface_selected : pal.surface_hover, selected ? pal.surface_selected : pal.surface_hover, 0);
+        const bool is_light = (pal.mode == ThemeMode::kLight);
+        const int pill_r = DesignSystem::ScaleForDpi(8, m.dpi);
+
         if (selected) {
-            RECT indicator{item_rc.left, item_rc.top + 8, item_rc.left + DesignSystem::ScaleForDpi(3, m.dpi), item_rc.bottom - 8};
-            FillRectSolid(hdc, indicator, pal.accent_primary);
+            ColorRgba active_bg = is_light ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : ColorRgba{0x28, 0x28, 0x2E, 255};
+            ColorRgba active_bd = is_light ? ColorRgba{0xCB, 0xD5, 0xE1, 255} : ColorRgba{0x36, 0x36, 0x3F, 255};
+            DrawRoundedBoxGdi(hdc, item_rc, pill_r, active_bg, active_bd, 1);
+        } else if (hovered) {
+            ColorRgba hover_bg = is_light ? ColorRgba{0xEA, 0xEC, 0xEF, 255} : ColorRgba{0x22, 0x22, 0x26, 255};
+            DrawRoundedBoxGdi(hdc, item_rc, pill_r, hover_bg, hover_bg, 0);
         }
-        static constexpr const wchar_t* kNavGlyphs[] = {L"◈", L"◔", L"✓", L"Ⅱ"};
-        RECT icon_rc{item_rc.left + DesignSystem::ScaleForDpi(14, m.dpi), item_rc.top,
-                     item_rc.left + DesignSystem::ScaleForDpi(38, m.dpi), item_rc.bottom};
-        SelectObject(hdc, hFontBold);
-        SetTextColor(hdc, selected ? pal.accent_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
-        DrawTextW(hdc, kNavGlyphs[i], -1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        RECT label_rc{item_rc.left + DesignSystem::ScaleForDpi(46, m.dpi), item_rc.top,
-                      item_rc.right - DesignSystem::ScaleForDpi(46, m.dpi), item_rc.bottom};
-        SelectObject(hdc, selected ? hFontBold : hFontBody);
-        SetTextColor(hdc, selected ? pal.text_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
+
+        // Distinct 16x16px vector outline icons (NO outer circles)
+        int pad_x = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 8 : 10, m.dpi);
+        int icon_s = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 15 : 16, m.dpi);
+        float ix = static_cast<float>(item_rc.left + pad_x);
+        float iy = static_cast<float>(item_rc.top + (item_rc.bottom - item_rc.top - icon_s) / 2);
+        float fis = static_cast<float>(icon_s);
+        ColorRgba nav_icon_color = selected ? pal.accent_primary : (is_light ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0x74, 0x74, 0x7E, 255});
+
+        {
+            Gdiplus::Graphics gNav(hdc);
+            gNav.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            Gdiplus::Pen pNav(Gdiplus::Color(nav_icon_color.a, nav_icon_color.r, nav_icon_color.g, nav_icon_color.b), 1.6f);
+            pNav.SetStartCap(Gdiplus::LineCapRound);
+            pNav.SetEndCap(Gdiplus::LineCapRound);
+            pNav.SetLineJoin(Gdiplus::LineJoinRound);
+
+            if (i == 0) {
+                // "All Downloads": Lucide 'layers' outline
+                Gdiplus::PointF diamond[4] = {
+                    {ix + fis * 0.5f, iy + 1.5f},
+                    {ix + fis - 1.0f, iy + fis * 0.25f + 1.5f},
+                    {ix + fis * 0.5f, iy + fis * 0.5f + 1.0f},
+                    {ix + 1.0f, iy + fis * 0.25f + 1.5f}
+                };
+                gNav.DrawPolygon(&pNav, diamond, 4);
+                Gdiplus::PointF mid_layer[3] = {
+                    {ix + 1.0f, iy + fis * 0.5f + 2.5f},
+                    {ix + fis * 0.5f, iy + fis * 0.75f + 1.0f},
+                    {ix + fis - 1.0f, iy + fis * 0.5f + 2.5f}
+                };
+                gNav.DrawLines(&pNav, mid_layer, 3);
+                Gdiplus::PointF bot_layer[3] = {
+                    {ix + 1.0f, iy + fis * 0.75f + 2.0f},
+                    {ix + fis * 0.5f, iy + fis - 0.5f},
+                    {ix + fis - 1.0f, iy + fis * 0.75f + 2.0f}
+                };
+                gNav.DrawLines(&pNav, bot_layer, 3);
+            } else if (i == 1) {
+                // "In Progress": Lucide 'download' (arrow into tray, no circle)
+                float cx = ix + fis * 0.5f;
+                gNav.DrawLine(&pNav, cx, iy + 2.0f, cx, iy + fis * 0.68f);
+                Gdiplus::PointF arrow[3] = {
+                    {cx - fis * 0.24f, iy + fis * 0.45f},
+                    {cx, iy + fis * 0.68f},
+                    {cx + fis * 0.24f, iy + fis * 0.45f}
+                };
+                gNav.DrawLines(&pNav, arrow, 3);
+                Gdiplus::PointF tray[4] = {
+                    {ix + 2.0f, iy + fis * 0.68f},
+                    {ix + 2.0f, iy + fis - 2.0f},
+                    {ix + fis - 2.0f, iy + fis - 2.0f},
+                    {ix + fis - 2.0f, iy + fis * 0.68f}
+                };
+                gNav.DrawLines(&pNav, tray, 4);
+            } else if (i == 2) {
+                // "Completed": Lucide 'check-check' (double checkmark, no circle)
+                Gdiplus::PointF chk1[3] = {
+                    {ix + 1.5f, iy + fis * 0.55f},
+                    {ix + fis * 0.35f, iy + fis * 0.76f},
+                    {ix + fis * 0.72f, iy + fis * 0.24f}
+                };
+                gNav.DrawLines(&pNav, chk1, 3);
+                Gdiplus::PointF chk2[3] = {
+                    {ix + fis * 0.48f, iy + fis * 0.68f},
+                    {ix + fis * 0.56f, iy + fis * 0.76f},
+                    {ix + fis - 1.5f, iy + fis * 0.24f}
+                };
+                gNav.DrawLines(&pNav, chk2, 3);
+            } else if (i == 3) {
+                // "Paused": standalone rounded pause bars (no circle)
+                float bar_top = iy + 2.5f;
+                float bar_bot = iy + fis - 2.5f;
+                gNav.DrawLine(&pNav, ix + fis * 0.34f, bar_top, ix + fis * 0.34f, bar_bot);
+                gNav.DrawLine(&pNav, ix + fis * 0.66f, bar_top, ix + fis * 0.66f, bar_bot);
+            }
+        }
+
+        // Sculpted counter capsule badge on ALL 4 library items
+        const std::wstring count_str = std::to_wstring(item.count);
+        SelectObject(hdc, hFontSmallBold);
+        SIZE cnt_sz{};
+        GetTextExtentPoint32W(hdc, count_str.c_str(), static_cast<int>(count_str.size()), &cnt_sz);
+        int badge_h = DesignSystem::ScaleForDpi(20, m.dpi);
+        int badge_pad_x = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 5 : 7, m.dpi);
+        int badge_min_w = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 22 : 26, m.dpi);
+        int badge_w = std::max(badge_min_w, static_cast<int>(cnt_sz.cx) + badge_pad_x * 2);
+        int badge_edge_pad = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 6 : 8, m.dpi);
+        int badge_top = item_rc.top + (item_rc.bottom - item_rc.top - badge_h) / 2;
+        RECT badge_rc{item_rc.right - badge_edge_pad - badge_w, badge_top, item_rc.right - badge_edge_pad, badge_top + badge_h};
+
+        ColorRgba badge_bg = selected
+            ? (is_light ? ColorRgba{0xE0, 0xF2, 0xFE, 255} : ColorRgba{0x3F, 0x23, 0x27, 255})
+            : (is_light ? ColorRgba{0xE2, 0xE8, 0xF0, 255} : ColorRgba{0x24, 0x24, 0x29, 255});
+        ColorRgba badge_fg = selected
+            ? (is_light ? ColorRgba{0x02, 0x84, 0xC7, 255} : ColorRgba{0xFF, 0x6B, 0x78, 255})
+            : (is_light ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0x74, 0x74, 0x7E, 255});
+        DrawRoundedBoxGdi(hdc, badge_rc, DesignSystem::ScaleForDpi(6, m.dpi), badge_bg, badge_bg, 0);
+        SetTextColor(hdc, badge_fg.ToWin32ColorRef());
+        DrawTextW(hdc, count_str.c_str(), -1, &badge_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        int label_gap = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 7 : 10, m.dpi);
+        RECT label_rc{item_rc.left + pad_x + icon_s + label_gap, item_rc.top,
+                      badge_rc.left - DesignSystem::ScaleForDpi(4, m.dpi), item_rc.bottom};
+        SelectObject(hdc, compact_sidebar_paint ? (selected ? hFontSmallBold : hFontSmall) : (selected ? hFontBold : hFontBody));
+        ColorRgba nav_label_color = selected ? pal.text_primary : (is_light ? ColorRgba{0x47, 0x55, 0x69, 255} : ColorRgba{0xA1, 0xA1, 0xAA, 255});
+        SetTextColor(hdc, nav_label_color.ToWin32ColorRef());
         std::wstring label = Utf8ToW(item.label);
-        DrawTextW(hdc, label.c_str(), -1, &label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (item.count > 0) {
-            const int badge_w = DesignSystem::ScaleForDpi(30, m.dpi);
-            RECT badge_rc{item_rc.right - badge_w - DesignSystem::ScaleForDpi(8, m.dpi),
-                item_rc.top + DesignSystem::ScaleForDpi(9, m.dpi), item_rc.right - DesignSystem::ScaleForDpi(8, m.dpi),
-                item_rc.bottom - DesignSystem::ScaleForDpi(9, m.dpi)};
-            DrawRoundedBoxGdi(hdc, badge_rc, badge_rc.bottom - badge_rc.top, selected ? pal.surface_elevated : pal.surface_primary,
-                pal.border_subtle, 1);
-            const std::wstring count = std::to_wstring(item.count);
-            SetTextColor(hdc, selected ? pal.text_primary.ToWin32ColorRef() : pal.text_muted.ToWin32ColorRef());
-            DrawTextW(hdc, count.c_str(), -1, &badge_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        }
+        DrawTextW(hdc, label.c_str(), -1, &label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
+
+    const bool is_light_footer = (pal.mode == ThemeMode::kLight);
     RECT sidebar_language_rc = ToWinRect(geom.sidebar_language_rect);
+    RECT lang_div{sidebar_rc.left + DesignSystem::ScaleForDpi(10, m.dpi),
+                  sidebar_language_rc.top - DesignSystem::ScaleForDpi(10, m.dpi),
+                  sidebar_rc.right - DesignSystem::ScaleForDpi(10, m.dpi),
+                  sidebar_language_rc.top - DesignSystem::ScaleForDpi(10, m.dpi) + 1};
+    FillRectSolid(hdc, lang_div, pal.border_subtle);
+
     const bool language_hovered = view.GetHoveredDetailsBtnIndex() == -3;
-    if (language_hovered) DrawRoundedBoxGdi(hdc, sidebar_language_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_hover, pal.surface_hover, 0);
-    RECT language_icon_rc{sidebar_language_rc.left + DesignSystem::ScaleForDpi(8, m.dpi), sidebar_language_rc.top + 4,
-                          sidebar_language_rc.left + DesignSystem::ScaleForDpi(30, m.dpi), sidebar_language_rc.bottom - 4};
-    DrawGlobeGlyphGdi(hdc, language_icon_rc, language_hovered ? pal.accent_primary : pal.text_secondary);
-    RECT language_label_rc{sidebar_language_rc.left + DesignSystem::ScaleForDpi(38, m.dpi), sidebar_language_rc.top,
-                           sidebar_language_rc.right - 8, sidebar_language_rc.bottom};
-    SelectObject(hdc, hFontSmall);
-    SetTextColor(hdc, language_hovered ? pal.accent_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
+    if (language_hovered) {
+        DrawRoundedBoxGdi(hdc, sidebar_language_rc, DesignSystem::ScaleForDpi(8, m.dpi),
+            is_light_footer ? ColorRgba{0xEA, 0xEC, 0xEF, 255} : ColorRgba{0x22, 0x22, 0x26, 255}, ColorRgba{0, 0, 0, 0}, 0);
+    }
+    int f_pad_x = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 8 : 10, m.dpi);
+    int f_gap_x = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 7 : 10, m.dpi);
+    int f_icon_s = DesignSystem::ScaleForDpi(compact_sidebar_paint ? 15 : 16, m.dpi);
+    int f_icon_y_off = (sidebar_language_rc.bottom - sidebar_language_rc.top - f_icon_s) / 2;
+    RECT language_icon_rc{sidebar_language_rc.left + f_pad_x, sidebar_language_rc.top + f_icon_y_off,
+                          sidebar_language_rc.left + f_pad_x + f_icon_s, sidebar_language_rc.top + f_icon_y_off + f_icon_s};
+    DrawGlobeGlyphGdi(hdc, language_icon_rc, language_hovered ? pal.accent_primary : (is_light_footer ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0x74, 0x74, 0x7E, 255}));
+
+    // Locale capsule badge (e.g. "EN", "AR")
+    std::string lang_code = GetLocalizationManager().GetLocale();
+    if (lang_code.size() > 2) lang_code.resize(2);
+    for (char& ch : lang_code) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    if (lang_code.empty()) lang_code = "EN";
+    std::wstring wlang_code = Utf8ToW(lang_code);
+    int lang_badge_h = DesignSystem::ScaleForDpi(20, m.dpi);
+    int lang_badge_w = DesignSystem::ScaleForDpi(28, m.dpi);
+    int lang_badge_pad = DesignSystem::ScaleForDpi(8, m.dpi);
+    int lang_badge_top = sidebar_language_rc.top + (sidebar_language_rc.bottom - sidebar_language_rc.top - lang_badge_h) / 2;
+    RECT lang_badge_rc{sidebar_language_rc.right - lang_badge_pad - lang_badge_w, lang_badge_top,
+                       sidebar_language_rc.right - lang_badge_pad, lang_badge_top + lang_badge_h};
+    ColorRgba lang_badge_bg = is_light_footer ? ColorRgba{0xE2, 0xE8, 0xF0, 255} : ColorRgba{0x26, 0x26, 0x2B, 255};
+    ColorRgba lang_badge_fg = is_light_footer ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0xA1, 0xA1, 0xAA, 255};
+    DrawRoundedBoxGdi(hdc, lang_badge_rc, DesignSystem::ScaleForDpi(6, m.dpi), lang_badge_bg, lang_badge_bg, 0);
+    SelectObject(hdc, hFontSmallBold);
+    SetTextColor(hdc, lang_badge_fg.ToWin32ColorRef());
+    DrawTextW(hdc, wlang_code.c_str(), -1, &lang_badge_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    RECT language_label_rc{language_icon_rc.right + f_gap_x, sidebar_language_rc.top,
+                           lang_badge_rc.left - DesignSystem::ScaleForDpi(6, m.dpi), sidebar_language_rc.bottom};
+    SelectObject(hdc, compact_sidebar_paint ? hFontSmall : hFontBody);
+    SetTextColor(hdc, language_hovered ? pal.text_primary.ToWin32ColorRef() : (is_light_footer ? ColorRgba{0x47, 0x55, 0x69, 255}.ToWin32ColorRef() : ColorRgba{0xA1, 0xA1, 0xAA, 255}.ToWin32ColorRef()));
     const std::wstring language_text = Utf8ToW(GetLocalizationManager().Translate("Language"));
     DrawTextW(hdc, language_text.c_str(), -1, &language_label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     RECT sidebar_settings_rc = ToWinRect(geom.sidebar_settings_rect);
     bool settings_hovered = view.GetHoveredDetailsBtnIndex() == -2;
-    if (settings_hovered) DrawRoundedBoxGdi(hdc, sidebar_settings_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_hover, pal.surface_hover, 0);
-    RECT settings_label_rc{sidebar_settings_rc.left + DesignSystem::ScaleForDpi(38, m.dpi), sidebar_settings_rc.top,
-                           sidebar_settings_rc.right - 8, sidebar_settings_rc.bottom};
-    SelectObject(hdc, hFontSmall);
-    SetTextColor(hdc, settings_hovered ? pal.accent_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
-    RECT sidebar_gear_rc{sidebar_settings_rc.left + DesignSystem::ScaleForDpi(8, m.dpi), sidebar_settings_rc.top + 4,
-                         sidebar_settings_rc.left + DesignSystem::ScaleForDpi(30, m.dpi), sidebar_settings_rc.bottom - 4};
-    DrawGearGlyphGdi(hdc, sidebar_gear_rc, settings_hovered ? pal.accent_primary : pal.text_secondary);
+    if (settings_hovered) {
+        DrawRoundedBoxGdi(hdc, sidebar_settings_rc, DesignSystem::ScaleForDpi(8, m.dpi),
+            is_light_footer ? ColorRgba{0xEA, 0xEC, 0xEF, 255} : ColorRgba{0x22, 0x22, 0x26, 255}, ColorRgba{0, 0, 0, 0}, 0);
+    }
+    int s_icon_y_off = (sidebar_settings_rc.bottom - sidebar_settings_rc.top - f_icon_s) / 2;
+    RECT sidebar_gear_rc{sidebar_settings_rc.left + f_pad_x, sidebar_settings_rc.top + s_icon_y_off,
+                         sidebar_settings_rc.left + f_pad_x + f_icon_s, sidebar_settings_rc.top + s_icon_y_off + f_icon_s};
+    DrawGearGlyphGdi(hdc, sidebar_gear_rc, settings_hovered ? pal.accent_primary : (is_light_footer ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0x74, 0x74, 0x7E, 255}));
+    RECT settings_label_rc{sidebar_gear_rc.right + f_gap_x, sidebar_settings_rc.top,
+                           sidebar_settings_rc.right - DesignSystem::ScaleForDpi(8, m.dpi), sidebar_settings_rc.bottom};
+    SelectObject(hdc, compact_sidebar_paint ? hFontSmall : hFontBody);
+    SetTextColor(hdc, settings_hovered ? pal.text_primary.ToWin32ColorRef() : (is_light_footer ? ColorRgba{0x47, 0x55, 0x69, 255}.ToWin32ColorRef() : ColorRgba{0xA1, 0xA1, 0xAA, 255}.ToWin32ColorRef()));
     const std::wstring settings_text = Utf8ToW(GetLocalizationManager().Translate("Settings"));
     DrawTextW(hdc, settings_text.c_str(), -1, &settings_label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    // 1. Compact toolbar in the main content region.
+    // 1. Toolbar in the main content region.
     RECT tb_rc = ToWinRect(geom.toolbar_rect);
-    FillRectSolid(hdc, tb_rc, pal.app_background);
-    RECT tb_divider{tb_rc.left, tb_rc.bottom - 1, tb_rc.right, tb_rc.bottom};
-    FillRectSolid(hdc, tb_divider, pal.border_subtle);
+    FillRectSolid(hdc, tb_rc, (pal.mode == ThemeMode::kLight) ? ColorRgba{0xFF, 0xFF, 0xFF, 255} : pal.surface_primary);
+    RECT tb_div{tb_rc.left, tb_rc.bottom - 1, tb_rc.right, tb_rc.bottom};
+    FillRectSolid(hdc, tb_div, pal.border_subtle);
 
-    // 1.1 Select All Checkbox
-    RECT sel_rc = ToWinRect(geom.select_all_checkbox_rect);
-    DrawCheckboxGdi(hdc, sel_rc, view.IsSelectAllChecked(), pal.surface_primary, pal.border_subtle, pal.accent_primary);
-
-    // 1.2 Sort Dropdown
-    RECT sort_rc = ToWinRect(geom.sort_dropdown_rect);
-    DrawRoundedBoxGdi(hdc, sort_rc, 18, pal.surface_primary, pal.border_subtle, 1);
-    DrawHamburgerGlyphGdi(hdc, sort_rc.left + 14, sort_rc.top + (sort_rc.bottom - sort_rc.top) / 2 - 5, 12, 10, pal.text_muted);
-    RECT sort_txt_rc{sort_rc.left + 32, sort_rc.top, sort_rc.right - 18, sort_rc.bottom};
-    SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-    std::wstring sort_label = Utf8ToW(GetLocalizationManager().Translate("Sort"));
-    DrawTextW(hdc, sort_label.c_str(), -1, &sort_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    DrawCaretGlyphGdi(hdc, sort_rc.right - 12, sort_rc.top + (sort_rc.bottom - sort_rc.top) / 2, pal.text_muted, false);
-
-    // 1.3 Filter Dropdown
-    RECT filter_rc = ToWinRect(geom.filter_dropdown_rect);
-    DrawRoundedBoxGdi(hdc, filter_rc, 18, pal.surface_primary, pal.border_subtle, 1);
-    DrawFunnelGlyphGdi(hdc, filter_rc.left + 14, filter_rc.top + (filter_rc.bottom - filter_rc.top) / 2 - 5, 12, pal.text_muted);
-    RECT filter_txt_rc{filter_rc.left + 32, filter_rc.top, filter_rc.right - 18, filter_rc.bottom};
-    SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-    std::wstring wcat = (view.GetSelectedCategory() == SidebarCategory::kAllDownloads)
-        ? Utf8ToW(GetLocalizationManager().Translate("All files"))
-        : Utf8ToW(view.CategoryToLabel(view.GetSelectedCategory()));
-    DrawTextW(hdc, wcat.c_str(), -1, &filter_txt_rc,
-              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    DrawCaretGlyphGdi(hdc, filter_rc.right - 12, filter_rc.top + (filter_rc.bottom - filter_rc.top) / 2, pal.text_muted, false);
-
-    // 1.4 + Add download Pill Button (smooth hover and press)
+    // 1.1 + Add download Pill Button (smooth hover and press)
     RECT add_rc = ToWinRect(geom.add_download_button_rect);
     bool add_hovered = (view.GetHoveredToolbarIndex() == 0);
     bool add_pressed = (view.GetAnimationState().pressed_toolbar_idx == 0);
@@ -8438,11 +8819,65 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     } else if (add_hp > 0.0f) {
         add_bg = pal.accent_primary.Interpolate(pal.accent_hover, add_hp);
     }
-    DrawRoundedBoxGdi(hdc, add_rc, DesignSystem::ScaleForDpi(10, m.dpi), add_bg, add_bg, 0);
-    SelectObject(hdc, hFontBold);
+    DrawRoundedBoxGdi(hdc, add_rc, DesignSystem::ScaleForDpi(6, m.dpi), add_bg, add_bg, 0);
+    SelectObject(hdc, compact_sidebar_paint ? hFontSmallBold : hFontBold);
     SetTextColor(hdc, RGB(255, 255, 255));
-    std::wstring add_download_text = L"+ " + Utf8ToW(GetLocalizationManager().Translate("Add download"));
+    std::wstring add_download_text = L"+ " + Utf8ToW(GetLocalizationManager().Translate("Add Download"));
     DrawTextW(hdc, add_download_text.c_str(), -1, &add_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // 1.2 Sort Dropdown
+    RECT sort_rc = ToWinRect(geom.sort_dropdown_rect);
+    if (sort_rc.right > sort_rc.left) {
+        DrawRoundedBoxGdi(hdc, sort_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_elevated, pal.border_subtle, 1);
+        const bool sort_compact = (sort_rc.right - sort_rc.left <= DesignSystem::ScaleForDpi(60, m.dpi));
+        DrawHamburgerGlyphGdi(hdc, sort_rc.left + DesignSystem::ScaleForDpi(sort_compact ? 11 : 14, m.dpi),
+            sort_rc.top + (sort_rc.bottom - sort_rc.top) / 2 - 5, 12, 10, pal.text_muted);
+        if (!sort_compact) {
+            RECT sort_txt_rc{sort_rc.left + 32, sort_rc.top, sort_rc.right - 18, sort_rc.bottom};
+            SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
+            std::wstring sort_label = Utf8ToW(GetLocalizationManager().Translate("Sort"));
+            DrawTextW(hdc, sort_label.c_str(), -1, &sort_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        }
+        DrawCaretGlyphGdi(hdc, sort_rc.right - DesignSystem::ScaleForDpi(12, m.dpi),
+            sort_rc.top + (sort_rc.bottom - sort_rc.top) / 2, pal.text_muted, false);
+    }
+
+    // 1.3 Filter Dropdown
+    RECT filter_rc = ToWinRect(geom.filter_dropdown_rect);
+    if (filter_rc.right > filter_rc.left) {
+        DrawRoundedBoxGdi(hdc, filter_rc, DesignSystem::ScaleForDpi(6, m.dpi), pal.surface_elevated, pal.border_subtle, 1);
+        {
+            Gdiplus::Graphics gFilt(hdc);
+            gFilt.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            Gdiplus::Pen pFilt(Gdiplus::Color(pal.text_muted.a, pal.text_muted.r, pal.text_muted.g, pal.text_muted.b), 1.4f);
+            pFilt.SetStartCap(Gdiplus::LineCapRound);
+            pFilt.SetEndCap(Gdiplus::LineCapRound);
+            pFilt.SetLineJoin(Gdiplus::LineJoinRound);
+            float fx = static_cast<float>(filter_rc.left + DesignSystem::ScaleForDpi(10, m.dpi));
+            float fs = static_cast<float>(DesignSystem::ScaleForDpi(12, m.dpi));
+            float fy = static_cast<float>(filter_rc.top + (filter_rc.bottom - filter_rc.top - static_cast<int>(fs)) / 2);
+            Gdiplus::PointF funnel[7] = {
+                {fx, fy + 1.0f},
+                {fx + fs, fy + 1.0f},
+                {fx + fs * 0.62f, fy + fs * 0.52f},
+                {fx + fs * 0.62f, fy + fs - 1.0f},
+                {fx + fs * 0.38f, fy + fs - 2.5f},
+                {fx + fs * 0.38f, fy + fs * 0.52f},
+                {fx, fy + 1.0f}
+            };
+            gFilt.DrawLines(&pFilt, funnel, 7);
+        }
+        const bool filt_compact = (filter_rc.right - filter_rc.left <= DesignSystem::ScaleForDpi(92, m.dpi));
+        RECT filter_txt_rc{filter_rc.left + DesignSystem::ScaleForDpi(28, m.dpi), filter_rc.top,
+                           filter_rc.right - DesignSystem::ScaleForDpi(18, m.dpi), filter_rc.bottom};
+        SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
+        std::wstring wcat = (view.GetSelectedCategory() == SidebarCategory::kAllDownloads)
+            ? (filt_compact ? L"All" : Utf8ToW(GetLocalizationManager().Translate("All Files")))
+            : Utf8ToW(view.CategoryToLabel(view.GetSelectedCategory()));
+        DrawTextW(hdc, wcat.c_str(), -1, &filter_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        DrawCaretGlyphGdi(hdc, filter_rc.right - DesignSystem::ScaleForDpi(12, m.dpi),
+            filter_rc.top + (filter_rc.bottom - filter_rc.top) / 2, pal.text_muted, false);
+    }
 
     RECT theme_rc = ToWinRect(geom.theme_button_rect);
     POINT theme_cursor{};
@@ -8454,100 +8889,176 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         (theme_hovered ? pal.surface_hover : pal.surface_primary);
     DrawRoundedBoxGdi(hdc, theme_rc, DesignSystem::ScaleForDpi(8, m.dpi),
         theme_button_bg, pal.border_subtle, 1);
-    DrawThemeGlyphGdi(hdc, theme_rc, pal.accent_primary, theme_button_bg,
+    ColorRgba theme_icon_col = theme_hovered ? pal.accent_primary : pal.text_secondary;
+    DrawThemeGlyphGdi(hdc, theme_rc, theme_icon_col, theme_button_bg,
         pal.mode == ThemeMode::kLight);
 
-    // 1.5 Dynamic Context Action Buttons (smooth hover & press transitions)
+    // 1.5 Dynamic Context Action Buttons (macOS segmented action cluster)
+    int first_icon_idx = -1;
+    int last_icon_idx = -1;
+    for (size_t btn_idx = 1; btn_idx < geom.toolbar_buttons.size() - 1; ++btn_idx) {
+        const auto& btn = geom.toolbar_buttons[btn_idx];
+        if (btn.rect.width() <= 0 || btn.rect.height() <= 0) continue;
+        const bool is_icon_action = btn.action_id == ToolbarActionId::kStart ||
+            btn.action_id == ToolbarActionId::kPause || btn.action_id == ToolbarActionId::kRemove;
+        if (is_icon_action) {
+            if (first_icon_idx == -1) first_icon_idx = static_cast<int>(btn_idx);
+            last_icon_idx = static_cast<int>(btn_idx);
+        }
+    }
+
+    if (first_icon_idx != -1 && last_icon_idx != -1) {
+        RECT first_rc = ToWinRect(geom.toolbar_buttons[first_icon_idx].rect);
+        RECT last_rc = ToWinRect(geom.toolbar_buttons[last_icon_idx].rect);
+        RECT group_rc{
+            std::min(first_rc.left, last_rc.left),
+            first_rc.top,
+            std::max(first_rc.right, last_rc.right),
+            first_rc.bottom
+        };
+        ColorRgba grp_bg = (pal.mode == ThemeMode::kLight) ? ColorRgba{0xF1, 0xF5, 0xF9, 255} : ColorRgba{0x26, 0x26, 0x2A, 255};
+        ColorRgba grp_border = (pal.mode == ThemeMode::kLight) ? ColorRgba{0xE2, 0xE8, 0xF0, 255} : ColorRgba{0x34, 0x34, 0x38, 255};
+        DrawRoundedBoxGdi(hdc, group_rc, DesignSystem::ScaleForDpi(6, m.dpi), grp_bg, grp_border, 1);
+
+        for (int idx = first_icon_idx; idx < last_icon_idx; ++idx) {
+            RECT btn_rc = ToWinRect(geom.toolbar_buttons[idx].rect);
+            RECT div_rc{btn_rc.right - 1, group_rc.top + DesignSystem::ScaleForDpi(4, m.dpi), btn_rc.right, group_rc.bottom - DesignSystem::ScaleForDpi(4, m.dpi)};
+            FillRectSolid(hdc, div_rc, grp_border);
+        }
+    }
+
     for (size_t btn_idx = 1; btn_idx < geom.toolbar_buttons.size() - 1; ++btn_idx) {
         const auto& btn = geom.toolbar_buttons[btn_idx];
         if (btn.rect.width() <= 0 || btn.rect.height() <= 0) continue;
         RECT brc = ToWinRect(btn.rect);
         bool hovered = (view.GetHoveredToolbarIndex() == static_cast<int>(btn_idx));
         bool pressed = (view.GetAnimationState().pressed_toolbar_idx == static_cast<int>(btn_idx));
-        float hp = hovered ? view.GetAnimationState().ComputeTransitionProgress(view.GetAnimationState().toolbar_hover_start_ms, 140) : 0.0f;
 
-        ColorRgba btn_bg = pal.glass_surface;
-        ColorRgba btn_border = pal.glass_border;
-        if (pressed) {
-            btn_bg = pal.surface_pressed;
-            btn_border = pal.glass_highlight;
-        } else if (hp > 0.0f) {
-            btn_bg = pal.glass_surface.Interpolate(pal.glass_elevated, hp);
-            btn_border = pal.glass_border.Interpolate(pal.glass_highlight, hp);
-        }
         const bool is_start_all = btn.action_id == ToolbarActionId::kStartAll;
         const bool is_pause_all = btn.action_id == ToolbarActionId::kPauseAll;
+        const bool is_clear_history = btn.action_id == ToolbarActionId::kClearHistory;
         const bool is_icon_action = btn.action_id == ToolbarActionId::kStart ||
             btn.action_id == ToolbarActionId::kPause || btn.action_id == ToolbarActionId::kRemove;
-        DrawRoundedBoxGdi(hdc, brc, is_icon_action ? brc.bottom - brc.top : DesignSystem::ScaleForDpi(10, m.dpi),
-            btn_bg, btn_border, 1);
+
+        bool has_selection = !view.GetSelectedTaskId().empty();
+
+        if (is_icon_action) {
+            if ((hovered || pressed) && has_selection) {
+                ColorRgba btn_bg = hovered ? pal.surface_hover : pal.surface_pressed;
+                DrawRoundedBoxGdi(hdc, brc, DesignSystem::ScaleForDpi(4, m.dpi), btn_bg, ColorRgba{0, 0, 0, 0}, 0);
+            }
+        } else {
+            // Secondary button pill styling
+            ColorRgba pill_bg = hovered ? pal.surface_hover : (pressed ? pal.surface_pressed : pal.surface_elevated);
+            ColorRgba pill_border = (pal.mode == ThemeMode::kLight) ? ColorRgba{0xE2, 0xE8, 0xF0, 255} : ColorRgba{0x2E, 0x2E, 0x34, 255};
+            DrawRoundedBoxGdi(hdc, brc, DesignSystem::ScaleForDpi(6, m.dpi), pill_bg, pill_border, 1);
+        }
 
         SelectObject(hdc, hFontSmallBold);
         ColorRgba txt_col = hovered ? pal.text_primary : pal.text_secondary;
-        if (is_start_all) {
-            RECT separator{brc.left - DesignSystem::ScaleForDpi(5, m.dpi), brc.top + DesignSystem::ScaleForDpi(8, m.dpi),
-                brc.left - DesignSystem::ScaleForDpi(4, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(8, m.dpi)};
-            FillRectSolid(hdc, separator, pal.border_subtle);
+        if (is_icon_action && !has_selection) {
+            txt_col.a = 90;
         }
+
         if (is_icon_action) {
-            RECT glyph_rc{brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(10, m.dpi),
-                brc.right - DesignSystem::ScaleForDpi(10, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(10, m.dpi)};
+            RECT glyph_rc{brc.left + DesignSystem::ScaleForDpi(9, m.dpi), brc.top + DesignSystem::ScaleForDpi(9, m.dpi),
+                brc.right - DesignSystem::ScaleForDpi(9, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(9, m.dpi)};
             if (btn.action_id == ToolbarActionId::kStart) {
                 DrawPlayGlyphGdi(hdc, glyph_rc, txt_col);
             } else if (btn.action_id == ToolbarActionId::kPause) {
                 DrawPauseGlyphGdi(hdc, glyph_rc, txt_col);
             } else {
-                SetTextColor(hdc, txt_col.ToWin32ColorRef());
-                DrawTextW(hdc, L"×", -1, &glyph_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                DrawTrashGlyphGdi(hdc, glyph_rc, txt_col);
             }
             continue;
         }
+
         SetTextColor(hdc, txt_col.ToWin32ColorRef());
         std::wstring wlbl = Utf8ToW(btn.label);
-        int text_inset = DesignSystem::ScaleForDpi(8, m.dpi);
-        RECT label_rc{brc.left + text_inset, brc.top, brc.right - text_inset, brc.bottom};
-        if (is_start_all) {
-            label_rc.left += DesignSystem::ScaleForDpi(6, m.dpi);
-            DrawPlayGlyphGdi(hdc, {brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(12, m.dpi),
-                brc.left + DesignSystem::ScaleForDpi(23, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(12, m.dpi)}, txt_col);
-        } else if (is_pause_all) {
-            label_rc.left += DesignSystem::ScaleForDpi(6, m.dpi);
-            DrawPauseGlyphGdi(hdc, {brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(12, m.dpi),
-                brc.left + DesignSystem::ScaleForDpi(23, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(12, m.dpi)}, txt_col);
+        RECT label_rc = brc;
+        const bool is_compact_batch = (brc.right - brc.left <= DesignSystem::ScaleForDpi(72, m.dpi));
+        if (is_compact_batch && (is_start_all || is_pause_all || is_clear_history)) {
+            int g_pad_l = DesignSystem::ScaleForDpi(8, m.dpi);
+            int g_sz = DesignSystem::ScaleForDpi(10, m.dpi);
+            int g_top = brc.top + (brc.bottom - brc.top - g_sz) / 2;
+            RECT glyph_rc{brc.left + g_pad_l, g_top, brc.left + g_pad_l + g_sz, g_top + g_sz};
+            if (is_start_all) {
+                DrawPlayGlyphGdi(hdc, glyph_rc, txt_col);
+                wlbl = L"All";
+            } else if (is_pause_all) {
+                DrawPauseGlyphGdi(hdc, glyph_rc, txt_col);
+                wlbl = L"All";
+            } else {
+                RECT trash_rc{brc.left + DesignSystem::ScaleForDpi(7, m.dpi), brc.top + (brc.bottom - brc.top - DesignSystem::ScaleForDpi(12, m.dpi)) / 2,
+                              brc.left + DesignSystem::ScaleForDpi(19, m.dpi), brc.top + (brc.bottom - brc.top + DesignSystem::ScaleForDpi(12, m.dpi)) / 2};
+                DrawTrashGlyphGdi(hdc, trash_rc, txt_col);
+                wlbl = L"Clear";
+            }
+            label_rc.left = glyph_rc.right + DesignSystem::ScaleForDpi(5, m.dpi);
+            label_rc.right = brc.right - DesignSystem::ScaleForDpi(5, m.dpi);
+            DrawTextW(hdc, wlbl.c_str(), -1, &label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            continue;
         }
-        DrawTextW(hdc, wlbl.c_str(), -1, &label_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (is_start_all) {
+            DrawPlayGlyphGdi(hdc, {brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(11, m.dpi),
+                brc.left + DesignSystem::ScaleForDpi(22, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(11, m.dpi)}, txt_col);
+            label_rc.left = brc.left + DesignSystem::ScaleForDpi(28, m.dpi);
+            label_rc.right = brc.right - DesignSystem::ScaleForDpi(6, m.dpi);
+        } else if (is_pause_all) {
+            DrawPauseGlyphGdi(hdc, {brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(11, m.dpi),
+                brc.left + DesignSystem::ScaleForDpi(22, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(11, m.dpi)}, txt_col);
+            label_rc.left = brc.left + DesignSystem::ScaleForDpi(28, m.dpi);
+            label_rc.right = brc.right - DesignSystem::ScaleForDpi(6, m.dpi);
+        } else if (is_clear_history) {
+            RECT broom_rc{brc.left + DesignSystem::ScaleForDpi(10, m.dpi), brc.top + DesignSystem::ScaleForDpi(10, m.dpi),
+                          brc.left + DesignSystem::ScaleForDpi(22, m.dpi), brc.bottom - DesignSystem::ScaleForDpi(10, m.dpi)};
+            DrawTrashGlyphGdi(hdc, broom_rc, txt_col);
+            label_rc.left = brc.left + DesignSystem::ScaleForDpi(28, m.dpi);
+            label_rc.right = brc.right - DesignSystem::ScaleForDpi(6, m.dpi);
+        }
+        DrawTextW(hdc, wlbl.c_str(), -1, &label_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 
-    // 1.6 Search Capsule
+    // 1.6 Search Capsule (macOS Search Bar with 8px radius)
     RECT search_rc = ToWinRect(geom.search_box_rect);
-    DrawRoundedBoxGdi(hdc, search_rc, 20, pal.surface_primary, pal.border_subtle, 1);
+    DrawRoundedBoxGdi(hdc, search_rc, DesignSystem::ScaleForDpi(8, m.dpi), pal.surface_elevated, pal.border_subtle, 1);
     DrawSearchGlassGdi(hdc, search_rc.left + 14, search_rc.top + (search_rc.bottom - search_rc.top) / 2 - 6, 13, pal.text_muted);
+    const bool modal_overlay_active = view.IsSettingsCenterOpen() || (ctx && !ctx->conflict_dialog_task_id.empty());
+    if (!ctx || !ctx->hSearchEdit || modal_overlay_active) {
+        RECT search_txt_rc{search_rc.left + 36, search_rc.top, search_rc.right - 14, search_rc.bottom};
+        SelectObject(hdc, hFontSmall);
+        const std::string& q = view.GetSearchQuery();
+        SetTextColor(hdc, (q.empty() ? pal.text_muted : pal.text_primary).ToWin32ColorRef());
+        std::wstring search_disp = q.empty() ? L"Search downloads..." : Utf8ToW(q);
+        DrawTextW(hdc, search_disp.c_str(), -1, &search_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
 
-    // 2. Table Column Headers and discoverable resize handles
+    // 2. Table Column Headers (Apple muted uppercase subheadings)
     RECT header_rc = ToWinRect(geom.table_header_rect);
+    DrawCheckboxGdi(hdc, ToWinRect(geom.select_all_checkbox_rect), view.IsSelectAllChecked(), pal);
     SelectObject(hdc, hFontSmallBold);
-    SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
+    SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
     RECT clip_hdr_rc{};
     bool needs_header = (IntersectRect(&clip_hdr_rc, &ps.rcPaint, &header_rc) != 0);
     if (needs_header) {
-    const int hovered_divider_idx = view.HitTestColumnDivider(theme_cursor.x, theme_cursor.y, view.GetScrollOffset());
     for (size_t col_idx = 0; col_idx < geom.table_columns.size(); ++col_idx) {
         const auto& col = geom.table_columns[col_idx];
         if (col.rect.width() <= 0) continue;
         RECT crc = ToWinRect(col.rect);
         std::wstring wt = Utf8ToW(col.title);
-        DrawTextW(hdc, wt.c_str(), -1, &crc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        // Draw Excel-style resize divider handle between columns
-        if (col_idx < 6 && col.rect.right > 0 && col.rect.right < w) {
-            bool is_resizing = (view.GetResizingColumnIndex() == static_cast<int>(col_idx));
-            bool is_hovered = hovered_divider_idx == static_cast<int>(col_idx);
-            int half_width = (is_resizing || is_hovered) ? DesignSystem::ScaleForDpi(2, m.dpi) : 1;
-            RECT div_handle{col.rect.right - half_width, header_rc.top + 8,
-                            col.rect.right + half_width, header_rc.bottom - 8};
-            FillRectSolid(hdc, div_handle,
-                          (is_resizing || is_hovered) ? pal.accent_primary : pal.border_subtle);
+        UINT align_flags = (col.sort_column == SortColumn::kSize || col.sort_column == SortColumn::kSpeed ||
+                            col.sort_column == SortColumn::kDownloadType || col.sort_column == SortColumn::kCreatedAt)
+            ? (DT_RIGHT | DT_VCENTER | DT_SINGLELINE)
+            : (DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (align_flags & DT_RIGHT) {
+            const bool is_rightmost_col = (crc.right >= header_rc.right - 2);
+            crc.right -= DesignSystem::ScaleForDpi(is_rightmost_col ? 16 : 8, m.dpi);
+        } else if (col.sort_column == SortColumn::kStatus) {
+            crc.left += DesignSystem::ScaleForDpi(16, m.dpi);
+        } else if (col.sort_column == SortColumn::kFileName) {
+            crc.left += DesignSystem::ScaleForDpi(52, m.dpi);
         }
+        DrawTextW(hdc, wt.c_str(), -1, &crc, align_flags);
     }
     RECT hdr_div{header_rc.left, header_rc.bottom - 1, header_rc.right, header_rc.bottom};
     FillRectSolid(hdc, hdr_div, pal.border_subtle);
@@ -8614,29 +9125,27 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                 const auto& anim = view.GetAnimationState();
                 if (is_selected) {
                     float sel_p = anim.ComputeTransitionProgress(anim.row_select_start_ms, 120);
-                    ColorRgba row_col = pal.surface_primary.Interpolate(pal.surface_selected, sel_p);
+                    ColorRgba row_col = ColorRgba{0x00, 0x00, 0x00, 0}.Interpolate(pal.surface_selected, sel_p);
                     FillRectSolid(hdc, rrc, row_col);
+                    // Crisp 3px vertical accent bar flush against the left edge
+                    RECT sel_bar{rrc.left, rrc.top, rrc.left + DesignSystem::ScaleForDpi(3, m.dpi), rrc.bottom};
+                    FillRectSolid(hdc, sel_bar, pal.accent_primary);
                 } else if (is_hovered) {
                     FillRectSolid(hdc, rrc, pal.surface_hover);
                 }
             }
 
-            RECT row_div{rrc.left, rrc.bottom - 1, rrc.right, rrc.bottom};
+            // Subtle separator line with left inset (48px)
+            RECT row_div{rrc.left + DesignSystem::ScaleForDpi(48, m.dpi), rrc.bottom - 1, rrc.right - DesignSystem::ScaleForDpi(16, m.dpi), rrc.bottom};
             FillRectSolid(hdc, row_div, pal.border_subtle);
 
             RECT chk_rc = ToWinRect(rl.checkbox_rect);
-            DrawCheckboxGdi(hdc, chk_rc, r.checked, pal.surface_primary, pal.border_subtle, pal.accent_primary);
+            DrawCheckboxGdi(hdc, chk_rc, r.checked, pal);
 
-            int idx_w = DesignSystem::ScaleForDpi(24, m.dpi);
-            RECT idx_rc{chk_rc.right + 4, rrc.top, chk_rc.right + 4 + idx_w, rrc.bottom};
-            SelectObject(hdc, hFontBody);
-            SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-            std::wstring widx = std::to_wstring(view.GetScrollOffset() + i + 1);
-            DrawTextW(hdc, widx.c_str(), -1, &idx_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            int icon_x = idx_rc.right + 6;
-            int icon_w = DesignSystem::ScaleForDpi(24, m.dpi);
-            int icon_h = DesignSystem::ScaleForDpi(28, m.dpi);
+            // Icon placed directly after checkbox
+            int icon_w = DesignSystem::ScaleForDpi(26, m.dpi);
+            int icon_h = DesignSystem::ScaleForDpi(26, m.dpi);
+            int icon_x = chk_rc.right + DesignSystem::ScaleForDpi(10, m.dpi);
             int icon_y = rrc.top + (rrc.bottom - rrc.top - icon_h) / 2;
             DrawFileTypeIconGdi(hdc, icon_x, icon_y, icon_w, icon_h, r, pal);
 
@@ -8644,81 +9153,64 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
             const ColorRgba row_primary_text = pal.text_primary;
             SetTextColor(hdc, row_primary_text.ToWin32ColorRef());
             int name_right = std::min(rl.filename_rect.right, geom.table_columns[0].rect.right);
-            RECT fn_rc{icon_x + icon_w + 10, rrc.top + 7, std::max(icon_x + icon_w + 10, name_right - 10), rrc.top + 27};
-            std::wstring wfn = Utf8ToW(r.display_filename);
-            if (fn_rc.right > fn_rc.left) {
-                DrawTextW(hdc, wfn.c_str(), -1, &fn_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-            }
-
-            // Sleek horizontal linear progress bar (8px height) with smoothly interpolated fill
-            int bar_x = icon_x + icon_w + 10;
-            int bar_y = rrc.top + 31;
-            int progress_right = name_right - DesignSystem::ScaleForDpi(8, m.dpi);
-            int pct_width = DesignSystem::ScaleForDpi(48, m.dpi);
-            int pct_gap = DesignSystem::ScaleForDpi(8, m.dpi);
-            int bar_max_w = std::min(DesignSystem::ScaleForDpi(260, m.dpi),
-                                     progress_right - bar_x - pct_gap - pct_width);
-            int bar_h = DesignSystem::ScaleForDpi(8, m.dpi);
-            if (bar_max_w > 0) {
-            RECT track_rc{bar_x, bar_y, bar_x + bar_max_w, bar_y + bar_h};
-            FillRectSolid(hdc, track_rc, pal.progress_track);
-            // Smooth interpolated progress: lerp cached value toward actual, capped at 99% unless complete
-            {
-                auto& interp_map = view.GetAnimationState().progress_interpolated;
-                float actual_frac = static_cast<float>(std::clamp(r.progress_fraction, 0.0, 1.0));
-                float disp_frac = actual_frac;
-                if (view.GetAnimationState().IsActive()) {
-                    auto it = interp_map.find(r.task_id);
-                    if (it == interp_map.end()) {
-                        interp_map[r.task_id] = actual_frac;
-                        disp_frac = actual_frac;
-                    } else {
-                        float prev = it->second;
-                        // Interpolate 15% per frame toward actual (smooth but fast catch-up)
-                        float next = prev + (actual_frac - prev) * 0.15f;
-                        it->second = next;
-                        disp_frac = next;
-                    }
+            
+            // Clean row presentation according to Design Vision Part 3.E
+            // Show inline progress bar ONLY when 0% < progress < 100%
+            const bool show_progress_bar = (r.state != TaskState::kCompleted && r.progress_fraction > 0.001 && r.progress_fraction < 0.999);
+            if (!show_progress_bar) {
+                // Single-line centered vertically with high-contrast text, NO empty/finished progress bar
+                int cy = rrc.top + (rrc.bottom - rrc.top) / 2;
+                RECT fn_rc{icon_x + icon_w + DesignSystem::ScaleForDpi(12, m.dpi), cy - DesignSystem::ScaleForDpi(12, m.dpi),
+                           std::max(icon_x + icon_w + DesignSystem::ScaleForDpi(12, m.dpi), name_right - DesignSystem::ScaleForDpi(10, m.dpi)),
+                           cy + DesignSystem::ScaleForDpi(13, m.dpi)};
+                std::wstring wfn = Utf8ToW(r.display_filename);
+                if (fn_rc.right > fn_rc.left) {
+                    std::wstring trunc_fn = MiddleTruncateFilename(hdc, wfn, fn_rc.right - fn_rc.left);
+                    DrawTextW(hdc, trunc_fn.c_str(), -1, &fn_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
                 }
-                int fill_w = static_cast<int>(static_cast<double>(bar_max_w) * disp_frac);
-                if (fill_w > 0) {
-                    ColorRgba fill_col = r.progress_fill_color;
-                    // For actively downloading tasks, apply a subtle live pulse brightness
-                    if (r.state == TaskState::kDownloading) {
-                        uint64_t tick_now = GetTickCount64();
-                        float pulse_t = static_cast<float>((tick_now / 20) % 50) / 50.0f;
-                        float wave = (pulse_t <= 0.5f) ? (pulse_t * 2.0f) : ((1.0f - pulse_t) * 2.0f);
-                        fill_col = fill_col.Interpolate(pal.accent_hover, wave * 0.4f);
-                    }
-                    RECT fill_rc{bar_x, bar_y, bar_x + fill_w, bar_y + bar_h};
-                    FillRectSolid(hdc, fill_rc, fill_col);
+            } else {
+                // In-Progress / Paused (>0%): Filename on top, sleek progress bar beneath with clean 6px+ gap
+                RECT fn_rc{icon_x + icon_w + DesignSystem::ScaleForDpi(12, m.dpi), rrc.top + DesignSystem::ScaleForDpi(3, m.dpi),
+                           std::max(icon_x + icon_w + DesignSystem::ScaleForDpi(12, m.dpi), name_right - DesignSystem::ScaleForDpi(10, m.dpi)),
+                           rrc.top + DesignSystem::ScaleForDpi(25, m.dpi)};
+                std::wstring wfn = Utf8ToW(r.display_filename);
+                if (fn_rc.right > fn_rc.left) {
+                    std::wstring trunc_fn = MiddleTruncateFilename(hdc, wfn, fn_rc.right - fn_rc.left);
+                    DrawTextW(hdc, trunc_fn.c_str(), -1, &fn_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                }
 
-                    // Multi-segment division lines when actively downloading with multiple segments
-                    if (r.state == TaskState::kDownloading && bar_max_w >= 60) {
-                        for (int seg = 1; seg <= 3; ++seg) {
-                            int seg_x = bar_x + (bar_max_w * seg) / 4;
-                            if (seg_x < bar_x + fill_w) {
-                                RECT seg_rc{seg_x, bar_y, seg_x + 1, bar_y + bar_h};
-                                FillRectSolid(hdc, seg_rc, ColorRgba{0x10, 0x10, 0x14, 180});
-                            }
+                int bar_x = fn_rc.left;
+                int bar_y = rrc.top + DesignSystem::ScaleForDpi(38, m.dpi);
+                int bar_max_w = std::min(DesignSystem::ScaleForDpi(220, m.dpi), std::max(0, static_cast<int>(fn_rc.right - fn_rc.left)));
+                int bar_h = DesignSystem::ScaleForDpi(3, m.dpi);
+                if (bar_max_w > 0) {
+                    RECT track_rc{bar_x, bar_y, bar_x + bar_max_w, bar_y + bar_h};
+                    DrawRoundedBoxGdi(hdc, track_rc, 2, pal.progress_track, pal.progress_track, 0);
+
+                    auto& interp_map = view.GetAnimationState().progress_interpolated;
+                    float actual_frac = static_cast<float>(std::clamp(r.progress_fraction, 0.0, 1.0));
+                    float disp_frac = actual_frac;
+                    if (view.GetAnimationState().IsActive()) {
+                        auto it = interp_map.find(r.task_id);
+                        if (it == interp_map.end()) {
+                            interp_map[r.task_id] = actual_frac;
+                            disp_frac = actual_frac;
+                        } else {
+                            float prev = it->second;
+                            float next = prev + (actual_frac - prev) * 0.15f;
+                            it->second = next;
+                            disp_frac = next;
                         }
                     }
+                    int fill_w = static_cast<int>(static_cast<double>(bar_max_w) * disp_frac);
+                    if (fill_w > 0) {
+                        ColorRgba fill_col = (r.state == TaskState::kDownloading)
+                            ? pal.accent_primary
+                            : ((pal.mode == ThemeMode::kLight) ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0xA1, 0xA1, 0xAA, 255});
+                        RECT fill_rc{bar_x, bar_y, bar_x + fill_w, bar_y + bar_h};
+                        DrawRoundedBoxGdi(hdc, fill_rc, 2, fill_col, fill_col, 0);
+                    }
                 }
-            }
-            RECT pct_rc{bar_x + bar_max_w + pct_gap, bar_y - 4,
-                        bar_x + bar_max_w + pct_gap + pct_width, bar_y + bar_h + 4};
-            SelectObject(hdc, hFontSmallBold);
-            SetTextColor(hdc, (r.state == TaskState::kDownloading) ? pal.accent_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
-            std::wstring wpct;
-            if (r.state == TaskState::kCompleted) wpct = L"100%";
-            else if (r.state == TaskState::kQueued) wpct = L"0%";
-            else {
-                char pbuf[32];
-                double display_pct = std::min(99.0, r.progress_fraction * 100.0);
-                std::snprintf(pbuf, sizeof(pbuf), "%.1f%%", display_pct);
-                wpct = Utf8ToW(pbuf);
-            }
-            DrawTextW(hdc, wpct.c_str(), -1, &pct_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
 
             // Column 1: Size
@@ -8726,11 +9218,12 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                 RECT sz_rc = ToWinRect(geom.table_columns[1].rect);
                 sz_rc.top = rrc.top;
                 sz_rc.bottom = rrc.bottom;
-                sz_rc.right -= DesignSystem::ScaleForDpi(4, m.dpi);
+                sz_rc.right -= DesignSystem::ScaleForDpi(8, m.dpi);
                 SelectObject(hdc, hFontBody);
-                SetTextColor(hdc, row_primary_text.ToWin32ColorRef());
-                std::wstring wsz = Utf8ToW(r.size_text);
-                DrawTextW(hdc, wsz.c_str(), -1, &sz_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                const bool is_unknown = (r.size_text.find("Unknown") != std::string::npos || r.size_text == "—");
+                SetTextColor(hdc, is_unknown ? pal.text_muted.ToWin32ColorRef() : row_primary_text.ToWin32ColorRef());
+                std::wstring wsz = is_unknown ? L"—" : Utf8ToW(r.size_text);
+                DrawTextW(hdc, wsz.c_str(), -1, &sz_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
 
             // Column 2: Status
@@ -8739,98 +9232,91 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                 st_rc.top = rrc.top;
                 st_rc.bottom = rrc.bottom;
 
-                int dot_r = DesignSystem::ScaleForDpi(4, m.dpi);
-                int dot_cy = (st_rc.top + st_rc.bottom) / 2;
-                HPEN hDotPen = CreatePen(PS_SOLID, 1, r.status_indicator_color.ToWin32ColorRef());
-                HBRUSH hDotBrush = CreateSolidBrush(r.status_indicator_color.ToWin32ColorRef());
-                HGDIOBJ op = SelectObject(hdc, hDotPen);
-                HGDIOBJ ob = SelectObject(hdc, hDotBrush);
-                Ellipse(hdc, st_rc.left, dot_cy - dot_r, st_rc.left + dot_r * 2, dot_cy + dot_r);
-                SelectObject(hdc, ob);
-                SelectObject(hdc, op);
-                DeleteObject(hDotBrush);
-                DeleteObject(hDotPen);
+                int icon_sz = DesignSystem::ScaleForDpi(16, m.dpi);
+                int icon_cy = (st_rc.top + st_rc.bottom) / 2;
+                int icon_top = icon_cy - icon_sz / 2;
+                int status_left = st_rc.left + DesignSystem::ScaleForDpi(16, m.dpi);
+                RECT status_icon_rc{status_left, icon_top, status_left + icon_sz, icon_top + icon_sz};
 
-                RECT st_txt_rc{st_rc.left + dot_r * 2 + 8, st_rc.top, st_rc.right - 4, st_rc.bottom};
+                {
+                    Gdiplus::Graphics gStat(hdc);
+                    gStat.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                    Gdiplus::Pen pStat(Gdiplus::Color(r.status_indicator_color.a, r.status_indicator_color.r,
+                                                      r.status_indicator_color.g, r.status_indicator_color.b), 1.8f);
+                    pStat.SetStartCap(Gdiplus::LineCapRound);
+                    pStat.SetEndCap(Gdiplus::LineCapRound);
+
+                    float isz = static_cast<float>(icon_sz);
+                    float ifx = static_cast<float>(status_icon_rc.left);
+                    float ify = static_cast<float>(icon_top);
+                    float icy = static_cast<float>(icon_cy);
+
+                    if (r.state == TaskState::kCompleted) {
+                        ColorRgba chkCol = (pal.mode == ThemeMode::kLight) ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0x71, 0x71, 0x7A, 255};
+                        Gdiplus::Pen pChk(Gdiplus::Color(chkCol.a, chkCol.r, chkCol.g, chkCol.b), 1.8f);
+                        pChk.SetStartCap(Gdiplus::LineCapRound);
+                        pChk.SetEndCap(Gdiplus::LineCapRound);
+                        Gdiplus::PointF chk_pts[3] = {
+                            {ifx + 2.0f, icy + 0.5f},
+                            {ifx + 5.5f, ify + isz - 3.5f},
+                            {ifx + isz - 2.0f, ify + 3.0f}
+                        };
+                        gStat.DrawLines(&pChk, chk_pts, 3);
+                    } else if (r.state == TaskState::kPaused) {
+                        gStat.DrawEllipse(&pStat, ifx, ify, isz, isz);
+                        gStat.DrawLine(&pStat, ifx + isz * 0.5f - 2.5f, ify + 4.0f, ifx + isz * 0.5f - 2.5f, ify + isz - 4.0f);
+                        gStat.DrawLine(&pStat, ifx + isz * 0.5f + 2.5f, ify + 4.0f, ifx + isz * 0.5f + 2.5f, ify + isz - 4.0f);
+                    } else {
+                        float dot_r = static_cast<float>(DesignSystem::ScaleForDpi(4, m.dpi));
+                        Gdiplus::SolidBrush bDot(Gdiplus::Color(r.status_indicator_color.a, r.status_indicator_color.r,
+                                                               r.status_indicator_color.g, r.status_indicator_color.b));
+                        gStat.FillEllipse(&bDot, ifx, icy - dot_r, dot_r * 2.0f, dot_r * 2.0f);
+                    }
+                }
+
+                RECT st_txt_rc{status_left + icon_sz + 8, st_rc.top, st_rc.right - 4, st_rc.bottom};
                 SelectObject(hdc, hFontBody);
-                SetTextColor(hdc, r.status_indicator_color.ToWin32ColorRef());
+                ColorRgba status_txt_col = (r.state == TaskState::kCompleted)
+                    ? ((pal.mode == ThemeMode::kLight) ? ColorRgba{0x64, 0x74, 0x8B, 255} : ColorRgba{0x8E, 0x8E, 0x96, 255})
+                    : r.status_indicator_color;
+                SetTextColor(hdc, status_txt_col.ToWin32ColorRef());
                 std::wstring wst = Utf8ToW(r.status_text);
                 DrawTextW(hdc, wst.c_str(), -1, &st_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
 
-            // Column 3: Download rate, formatted in shared binary byte units
+            // Column 3: Download rate
             if (geom.table_columns.size() > 3 && geom.table_columns[3].rect.width() > 0) {
                 RECT dl_rc = ToWinRect(geom.table_columns[3].rect);
                 dl_rc.top = rrc.top;
                 dl_rc.bottom = rrc.bottom;
+                dl_rc.right -= DesignSystem::ScaleForDpi(8, m.dpi);
 
-                RECT act_rc = ToWinRect(rl.action_icon_rect);
-
-                // Compute action icon pulse overlay (one-time 200ms brightness flare)
-                ColorRgba icon_tint_col = pal.accent_primary;
-                {
-                    const auto& anim = view.GetAnimationState();
-                    auto it = anim.icon_pulses.find(r.task_id);
-                    if (it != anim.icon_pulses.end()) {
-                        uint64_t now = GetTickCount64();
-                        uint64_t elapsed = (now >= it->second.start_ms) ? (now - it->second.start_ms) : 0;
-                        if (elapsed < 200) {
-                            float pulse_t = 1.0f - static_cast<float>(elapsed) / 200.0f;
-                            // Flare: brighten toward white then fade back
-                            icon_tint_col = pal.accent_primary.Interpolate(ColorRgba{255, 255, 255, 255}, pulse_t * 0.6f);
-                        }
-                    }
-                }
-
+                SelectObject(hdc, hFontBody);
                 if (r.state == TaskState::kDownloading || r.state == TaskState::kProbing) {
-                    DrawRoundedBoxGdi(hdc, act_rc, 6, pal.surface_primary, pal.border_subtle, 1);
-                    DrawPauseGlyphGdi(hdc, act_rc, icon_tint_col);
-
-                    RECT spd_rc{act_rc.right + 8, dl_rc.top, dl_rc.right - 2, dl_rc.bottom};
-                    SelectObject(hdc, hFontBody);
                     SetTextColor(hdc, pal.accent_primary.ToWin32ColorRef());
                     std::wstring wspd = Utf8ToW(r.speed_text);
-                    DrawTextW(hdc, wspd.c_str(), -1, &spd_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-                } else if (r.state == TaskState::kPaused || r.state == TaskState::kQueued) {
-                    ColorRgba play_tint = pal.text_secondary;
-                    {
-                        const auto& anim = view.GetAnimationState();
-                        auto it = anim.icon_pulses.find(r.task_id);
-                        if (it != anim.icon_pulses.end()) {
-                            uint64_t now = GetTickCount64();
-                            uint64_t elapsed = (now >= it->second.start_ms) ? (now - it->second.start_ms) : 0;
-                            if (elapsed < 200) {
-                                float pulse_t = 1.0f - static_cast<float>(elapsed) / 200.0f;
-                                play_tint = pal.text_secondary.Interpolate(pal.accent_primary, pulse_t);
-                            }
-                        }
-                    }
-                    DrawRoundedBoxGdi(hdc, act_rc, 6, pal.surface_primary, pal.border_subtle, 1);
-                    DrawPlayGlyphGdi(hdc, act_rc, play_tint);
-
-                    RECT spd_rc{act_rc.right + 8, dl_rc.top, dl_rc.right - 2, dl_rc.bottom};
-                    SelectObject(hdc, hFontBody);
-                    SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-                    DrawTextW(hdc, L"0 B/s", -1, &spd_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-                } else if (r.state != TaskState::kCompleted) {
-                    RECT spd_rc{act_rc.left, dl_rc.top, dl_rc.right - 2, dl_rc.bottom};
-                    SelectObject(hdc, hFontBody);
-                    SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-                    DrawTextW(hdc, L"0 B/s", -1, &spd_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    DrawTextW(hdc, wspd.c_str(), -1, &dl_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                } else {
+                    SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
+                    DrawTextW(hdc, L"—", -1, &dl_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
                 }
             }
 
-            // Column 4: Upload rate, formatted in shared binary byte units
+            // Column 4: Upload rate
             if (geom.table_columns.size() > 4 && geom.table_columns[4].rect.width() > 0) {
                 RECT ul_rc = ToWinRect(geom.table_columns[4].rect);
                 ul_rc.top = rrc.top;
                 ul_rc.bottom = rrc.bottom;
-                ul_rc.right -= DesignSystem::ScaleForDpi(2, m.dpi);
+                const bool ul_is_outer = (geom.table_columns.size() <= 5 || geom.table_columns[5].rect.width() <= 0);
+                ul_rc.right -= DesignSystem::ScaleForDpi(ul_is_outer ? 16 : 8, m.dpi);
                 SelectObject(hdc, hFontBody);
-                SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-                if (!r.upload_speed_text.empty()) {
+                if (!r.upload_speed_text.empty() && r.upload_speed_text != "0 B/s") {
+                    SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
                     std::wstring wul = Utf8ToW(r.upload_speed_text);
-                    DrawTextW(hdc, wul.c_str(), -1, &ul_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                    DrawTextW(hdc, wul.c_str(), -1, &ul_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                } else {
+                    SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
+                    DrawTextW(hdc, L"—", -1, &ul_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
                 }
             }
 
@@ -8839,17 +9325,16 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
                 RECT add_time_rc = ToWinRect(geom.table_columns[5].rect);
                 add_time_rc.top = rrc.top;
                 add_time_rc.bottom = rrc.bottom;
-                add_time_rc.right -= DesignSystem::ScaleForDpi(8, m.dpi);
+                add_time_rc.right -= DesignSystem::ScaleForDpi(16, m.dpi);
                 SelectObject(hdc, hFontBody);
                 SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
                 std::wstring wadd = Utf8ToW(r.added_time_text);
-                DrawTextW(hdc, wadd.c_str(), -1, &add_time_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                DrawTextW(hdc, wadd.c_str(), -1, &add_time_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
         }
     }
 
     // 3.4 Custom Slim Fluent Scrollbar
-    auto* ctx = reinterpret_cast<Win32WindowContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (all_tasks.size() > visible_count) {
         int track_top = geom.table_body_rect.top + 4;
         int track_bottom = geom.table_body_rect.bottom - 4;
@@ -8859,7 +9344,7 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         int thumb_travel = track_h - thumb_h;
         int thumb_y = track_top + (thumb_travel > 0 ? static_cast<int>(thumb_travel * std::min(view.GetScrollOffset(), max_offset) / max_offset) : 0);
 
-        RECT thumb_rc{w - 11, thumb_y, w - 5, thumb_y + thumb_h};
+        RECT thumb_rc{geom.table_body_rect.right - 11, thumb_y, geom.table_body_rect.right - 5, thumb_y + thumb_h};
         bool active = (ctx && (ctx->is_dragging_vscroll || ctx->is_vscroll_hovered));
         ColorRgba thumb_col = active ? ColorRgba{255, 255, 255, 80} : ColorRgba{255, 255, 255, 38};
         DrawRoundedBoxGdi(hdc, thumb_rc, 3, thumb_col, thumb_col, 0);
@@ -9087,6 +9572,62 @@ static void InitWin32Theme(HWND hwnd, const ThemePalette& palette) {
     }
 }
 
+LRESULT CALLBACK SearchEditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* ctx = reinterpret_cast<Win32WindowContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (!ctx || !ctx->orig_search_proc) {
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+    LRESULT res = CallWindowProcW(ctx->orig_search_proc, hwnd, msg, wParam, lParam);
+    if (msg == WM_PAINT && GetWindowTextLengthW(hwnd) == 0 && ctx->view) {
+        HDC hdc = GetDC(hwnd);
+        if (hdc) {
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+            const auto& pal = ctx->view->GetPalette();
+            HFONT hFont = reinterpret_cast<HFONT>(SendMessageW(hwnd, WM_GETFONT, 0, 0));
+            HGDIOBJ old_f = hFont ? SelectObject(hdc, hFont) : nullptr;
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, pal.text_muted.ToWin32ColorRef());
+            const wchar_t* cue = (rc.right - rc.left < DesignSystem::ScaleForDpi(150, ctx->view->GetMetrics().dpi))
+                ? L"Search..."
+                : L"Search downloads...";
+            DrawTextW(hdc, cue, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            if (old_f) SelectObject(hdc, old_f);
+            ReleaseDC(hwnd, hdc);
+        }
+    } else if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    return res;
+}
+
+static void SyncSearchEditVisibility(Win32WindowContext* ctx) {
+    if (!ctx || !ctx->view || !ctx->hSearchEdit) return;
+    const bool should_hide = ctx->view->IsSettingsCenterOpen() || !ctx->conflict_dialog_task_id.empty();
+    const bool is_visible = (IsWindowVisible(ctx->hSearchEdit) != FALSE);
+    if (should_hide && is_visible) {
+        ShowWindow(ctx->hSearchEdit, SW_HIDE);
+        EnableWindow(ctx->hSearchEdit, FALSE);
+    } else if (!should_hide && !is_visible) {
+        ShowWindow(ctx->hSearchEdit, SW_SHOW);
+        EnableWindow(ctx->hSearchEdit, TRUE);
+    }
+}
+
+static void SyncSearchEditLayout(Win32WindowContext* ctx) {
+    if (!ctx || !ctx->view || !ctx->hSearchEdit) return;
+    SyncSearchEditVisibility(ctx);
+    auto geom = ctx->view->ComputeLayoutGeometry(ctx->view->GetScrollOffset());
+    const int dpi = ctx->view->GetMetrics().dpi;
+    const int edit_pad = DesignSystem::ScaleForDpi(32, dpi);
+    const int outer_pad = DesignSystem::ScaleForDpi(14, dpi);
+    const int edit_h = DesignSystem::ScaleForDpi(22, dpi);
+    const int edit_y = geom.search_box_rect.top + (geom.search_box_rect.height() - edit_h) / 2;
+    const int edit_x = geom.search_box_rect.left + edit_pad;
+    const int edit_w = std::max(10, geom.search_box_rect.width() - edit_pad - outer_pad);
+    MoveWindow(ctx->hSearchEdit, edit_x, edit_y, edit_w, edit_h, TRUE);
+}
+
 LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     auto* ctx = reinterpret_cast<Win32WindowContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (msg == WM_NCCREATE) {
@@ -9097,15 +9638,6 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     }
     if (!ctx || !ctx->view) {
         return DefWindowProcW(hwnd, msg, wParam, lParam);
-    }
-
-    if (GetLocalizationManager().IsRightToLeft() &&
-        (msg == WM_MOUSEMOVE || msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
-         msg == WM_LBUTTONDBLCLK || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
-         msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP)) {
-        RECT client{};
-        GetClientRect(hwnd, &client);
-        lParam = MAKELPARAM(client.right - GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
     }
 
     switch (msg) {
@@ -9152,8 +9684,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_SEARCH_EDIT)),
                 GetModuleHandleW(nullptr), nullptr);
             if (ctx->hSearchEdit) {
-                ApplyNativeEditTheme(ctx->hSearchEdit,
-                    ctx->view->GetPalette().mode != ThemeMode::kLight);
+                ApplyNativeEditTheme(ctx->hSearchEdit, false);
             }
             int edit_font_sz = DesignSystem::ScaleForDpi(15, ctx->view->GetMetrics().dpi);
             HFONT hEditFont = CreateFontW(
@@ -9161,7 +9692,13 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
             SendMessageW(ctx->hSearchEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hEditFont), TRUE);
-            SendMessageW(ctx->hSearchEdit, EM_SETCUEBANNER, FALSE, reinterpret_cast<LPARAM>(L"Search in downloads..."));
+            SendMessageW(ctx->hSearchEdit, EM_SETCUEBANNER, FALSE, reinterpret_cast<LPARAM>(L"Search downloads..."));
+            if (ctx->hSearchEdit) {
+                SetWindowLongPtrW(ctx->hSearchEdit, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
+                ctx->orig_search_proc = reinterpret_cast<WNDPROC>(
+                    SetWindowLongPtrW(ctx->hSearchEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(SearchEditSubclassProc)));
+                SyncSearchEditLayout(ctx);
+            }
             return 0;
         }
         case WM_CTLCOLOREDIT:
@@ -9171,10 +9708,17 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             if (hCtl == ctx->hSearchEdit) {
                 const auto& palette = ctx->view->GetPalette();
                 SetTextColor(hdcEdit, palette.text_primary.ToWin32ColorRef());
-                SetBkColor(hdcEdit, palette.surface_primary.ToWin32ColorRef());
-                static HBRUSH hLightEditBrush = CreateSolidBrush(RGB(0xFF, 0xFF, 0xFF));
-                static HBRUSH hDarkEditBrush = CreateSolidBrush(RGB(0x1E, 0x1E, 0x22));
-                return reinterpret_cast<LRESULT>(palette.mode == ThemeMode::kLight ? hLightEditBrush : hDarkEditBrush);
+                ColorRgba bg_col = palette.surface_elevated;
+                SetBkColor(hdcEdit, bg_col.ToWin32ColorRef());
+                static HBRUSH hSearchEditBrush = nullptr;
+                static COLORREF lastBrushColor = CLR_INVALID;
+                COLORREF cr = bg_col.ToWin32ColorRef();
+                if (!hSearchEditBrush || lastBrushColor != cr) {
+                    if (hSearchEditBrush) DeleteObject(hSearchEditBrush);
+                    hSearchEditBrush = CreateSolidBrush(cr);
+                    lastBrushColor = cr;
+                }
+                return reinterpret_cast<LRESULT>(hSearchEditBrush);
             }
             break;
         }
@@ -9223,14 +9767,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 suggested->right - suggested->left,
                 suggested->bottom - suggested->top,
                 SWP_NOZORDER | SWP_NOACTIVATE);
-            auto geom = ctx->view->ComputeLayoutGeometry(ctx->view->GetScrollOffset());
-            if (ctx->hSearchEdit) {
-                int edit_pad = DesignSystem::ScaleForDpi(32, ctx->view->GetMetrics().dpi);
-                int edit_h = DesignSystem::ScaleForDpi(22, ctx->view->GetMetrics().dpi);
-                int edit_y = geom.search_box_rect.top + (geom.search_box_rect.height() - edit_h) / 2;
-                MoveWindow(ctx->hSearchEdit, geom.search_box_rect.left + edit_pad, edit_y,
-                           std::max(10, geom.search_box_rect.width() - edit_pad - 14), edit_h, TRUE);
-            }
+            SyncSearchEditLayout(ctx);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -9256,13 +9793,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 tool.rect = ToWinRect(geom.theme_button_rect);
                 SendMessageW(ctx->hThemeTooltip, TTM_NEWTOOLRECTW, 0, reinterpret_cast<LPARAM>(&tool));
             }
-            if (ctx->hSearchEdit) {
-                int edit_pad = DesignSystem::ScaleForDpi(32, ctx->view->GetMetrics().dpi);
-                int edit_h = DesignSystem::ScaleForDpi(22, ctx->view->GetMetrics().dpi);
-                int edit_y = geom.search_box_rect.top + (geom.search_box_rect.height() - edit_h) / 2;
-                MoveWindow(ctx->hSearchEdit, geom.search_box_rect.left + edit_pad, edit_y,
-                           std::max(10, geom.search_box_rect.width() - edit_pad - 14), edit_h, TRUE);
-            }
+            SyncSearchEditLayout(ctx);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -9297,11 +9828,8 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 return 0;
             }
 
-            RECT client_rc{};
-            GetClientRect(hwnd, &client_rc);
-            int win_w = client_rc.right - client_rc.left;
             auto geom = ctx->view->ComputeLayoutGeometry(ctx->view->GetScrollOffset());
-            bool on_scroll = (x >= win_w - 16 && x <= win_w && y >= geom.table_body_rect.top && y <= geom.table_body_rect.bottom);
+            bool on_scroll = (x >= geom.table_body_rect.right - 16 && x <= geom.table_body_rect.right && y >= geom.table_body_rect.top && y <= geom.table_body_rect.bottom);
             if (on_scroll != ctx->is_vscroll_hovered) {
                 ctx->is_vscroll_hovered = on_scroll;
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -9383,6 +9911,52 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 ctx->view->GetAnimationState().pressed_toolbar_idx = -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+            if (ctx->language_button_pressed) {
+                ctx->language_button_pressed = false;
+                const int x = GET_X_LPARAM(lParam);
+                const int y = GET_Y_LPARAM(lParam);
+                const size_t scroll_offset = ctx->view->GetScrollOffset();
+                const auto hit = ctx->view->HitTestPoint(x, y, scroll_offset);
+                if (hit.type == HitTargetType::kSidebarLanguageButton) {
+                    const auto geom = ctx->view->ComputeLayoutGeometry(scroll_offset);
+                    const auto& languages = LocalizationManager::Languages();
+                    const std::string selected_locale = ctx->controller->GetSettings().language;
+                    HMENU language_menu = CreatePopupMenu();
+                    if (language_menu) {
+                        AppendMenuW(language_menu, MF_STRING | MF_DISABLED | MF_GRAYED, 100, L"Choose a language");
+                        AppendMenuW(language_menu, MF_SEPARATOR, 0, nullptr);
+                        for (size_t i = 0; i < languages.size(); ++i) {
+                            const auto& option = languages[i];
+                            const UINT id = static_cast<UINT>(i + 1);
+                            const UINT flags = MF_STRING | (selected_locale == option.locale ? MF_CHECKED : 0);
+                            const std::wstring native_name = Utf8ToW(option.native_name);
+                            AppendMenuW(language_menu, flags, id, native_name.c_str());
+                        }
+
+                        RECT language_rect = ToWinRect(geom.sidebar_language_rect);
+                        POINT menu_anchor{language_rect.left, language_rect.top - 6};
+                        ClientToScreen(hwnd, &menu_anchor);
+                        const int choice = TrackPopupMenu(
+                            language_menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_BOTTOMALIGN | TPM_LEFTALIGN,
+                            menu_anchor.x, menu_anchor.y, 0, hwnd, nullptr);
+                        DestroyMenu(language_menu);
+
+                        if (choice >= 1 && static_cast<size_t>(choice - 1) < languages.size()) {
+                            ctx->view->SetDraftSettingByKey("language", languages[static_cast<size_t>(choice - 1)].locale);
+                            const auto saved = ctx->view->ApplySettingsChanges();
+                            if (saved.ok()) {
+                                ApplyNativeWindowTheme(hwnd, ctx->view->GetPalette());
+                                SyncSearchEditLayout(ctx);
+                            } else {
+                                const std::wstring error = Utf8ToW(saved.error ? saved.error->message : "Could not save language preference.");
+                                MessageBoxW(hwnd, error.c_str(), L"Language", MB_OK | MB_ICONWARNING);
+                            }
+                        }
+                    }
+                    InvalidateRect(hwnd, nullptr, TRUE);
+                }
+                return 0;
+            }
             break;
         }
         case WM_MOUSEWHEEL: {
@@ -9413,11 +9987,9 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             size_t scroll_offset = ctx->view->GetScrollOffset();
 
             // Custom Slim Scrollbar Hit Test
-            RECT client_rc{};
-            GetClientRect(hwnd, &client_rc);
-            int win_w = client_rc.right - client_rc.left;
             auto geom = ctx->view->ComputeLayoutGeometry(scroll_offset);
-            if (x >= win_w - 16 && x <= win_w && y >= geom.table_body_rect.top && y <= geom.table_body_rect.bottom) {
+            const bool on_scrollbar = (x >= geom.table_body_rect.right - 16 && x <= geom.table_body_rect.right && y >= geom.table_body_rect.top && y <= geom.table_body_rect.bottom);
+            if (on_scrollbar) {
                 auto all_tasks = ctx->view->GetFilteredAndSortedTasks();
                 int row_h_calc = std::max(1, geom.task_row_height);
                 size_t visible_count = static_cast<size_t>(std::max(1, geom.table_body_rect.height() / row_h_calc));
@@ -9457,41 +10029,9 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
             auto hit = ctx->view->HitTestPoint(x, y, scroll_offset);
             if (hit.type == HitTargetType::kSidebarLanguageButton) {
-                const auto& languages = LocalizationManager::Languages();
-                const std::string selected_locale = ctx->controller->GetSettings().language;
-                HMENU language_menu = CreatePopupMenu();
-                if (language_menu) {
-                    AppendMenuW(language_menu, MF_STRING | MF_DISABLED | MF_GRAYED, 100, L"Choose a language");
-                    AppendMenuW(language_menu, MF_SEPARATOR, 0, nullptr);
-                    for (size_t i = 0; i < languages.size(); ++i) {
-                        const auto& option = languages[i];
-                        const UINT id = static_cast<UINT>(i + 1);
-                        const UINT flags = MF_STRING | (selected_locale == option.locale ? MF_CHECKED : 0);
-                        const std::wstring native_name = Utf8ToW(option.native_name);
-                        AppendMenuW(language_menu, flags, id, native_name.c_str());
-                    }
-
-                    RECT language_rect = ToWinRect(geom.sidebar_language_rect);
-                    POINT menu_anchor{language_rect.left, language_rect.bottom};
-                    ClientToScreen(hwnd, &menu_anchor);
-                    const int choice = TrackPopupMenu(language_menu, TPM_RETURNCMD | TPM_NONOTIFY,
-                        menu_anchor.x, menu_anchor.y, 0, hwnd, nullptr);
-                    DestroyMenu(language_menu);
-
-                    if (choice >= 1 && static_cast<size_t>(choice - 1) < languages.size()) {
-                        ctx->view->SetDraftSettingByKey("language", languages[static_cast<size_t>(choice - 1)].locale);
-                    }
-                    if (choice >= 1 && static_cast<size_t>(choice - 1) < languages.size()) {
-                        const auto saved = ctx->view->ApplySettingsChanges();
-                        if (saved.ok()) {
-                            ApplyNativeWindowTheme(hwnd, ctx->view->GetPalette());
-                        } else {
-                            const std::wstring error = Utf8ToW(saved.error ? saved.error->message : "Could not save language preference.");
-                            MessageBoxW(hwnd, error.c_str(), L"Language", MB_OK | MB_ICONWARNING);
-                        }
-                    }
+                if (msg == WM_LBUTTONDOWN) {
+                    ctx->language_button_pressed = true;
                 }
-                InvalidateRect(hwnd, nullptr, TRUE);
                 return 0;
             }
             if (hit.type == HitTargetType::kThemeToggleButton) {
@@ -9775,7 +10315,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 POINT pt{geom.filter_dropdown_rect.left, geom.filter_dropdown_rect.bottom + 2};
                 ClientToScreen(hwnd, &pt);
                 HMENU hMenu = CreatePopupMenu();
-                AppendMenuW(hMenu, MF_STRING | (ctx->view->GetSelectedCategory() == SidebarCategory::kAllDownloads ? MF_CHECKED : 0), 201, L"All files");
+                AppendMenuW(hMenu, MF_STRING | (ctx->view->GetSelectedCategory() == SidebarCategory::kAllDownloads ? MF_CHECKED : 0), 201, L"All Files");
                 AppendMenuW(hMenu, MF_STRING | (ctx->view->GetSelectedCategory() == SidebarCategory::kInProgress ? MF_CHECKED : 0), 202, L"In Progress");
                 AppendMenuW(hMenu, MF_STRING | (ctx->view->GetSelectedCategory() == SidebarCategory::kCompleted ? MF_CHECKED : 0), 203, L"Completed");
                 AppendMenuW(hMenu, MF_STRING | (ctx->view->GetSelectedCategory() == SidebarCategory::kQueued ? MF_CHECKED : 0), 204, L"Queued");
@@ -10581,6 +11121,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             return 0;
         }
         case WM_PAINT: {
+            SyncSearchEditVisibility(ctx);
             PaintMainWindow(hwnd, *ctx->view);
             return 0;
         }
@@ -10646,6 +11187,10 @@ int DesktopView::RunWin32MessageLoop() {
     INITCOMMONCONTROLSEX icex{sizeof(INITCOMMONCONTROLSEX), ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icex);
 
+    ULONG_PTR gdiplusToken = 0;
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+
     HINSTANCE hInst = GetModuleHandleW(nullptr);
     HICON hAppIcon = CreateRadiumAppIcon();
     WNDCLASSEXW wc{};
@@ -10660,6 +11205,7 @@ int DesktopView::RunWin32MessageLoop() {
     RegisterClassExW(&wc);
 
     Win32WindowContext ctx{this, &m_controller, nullptr, nullptr, {}, false};
+    OPENIDM_LOG_INFO("UI", "Calling CreateWindowExW for Radium_MainWindowClass");
     HWND hwnd = CreateWindowExW(
         0,
         wc.lpszClassName,
@@ -10668,7 +11214,12 @@ int DesktopView::RunWin32MessageLoop() {
         CW_USEDEFAULT, CW_USEDEFAULT,
         m_window_width, m_window_height,
         nullptr, nullptr, hInst, &ctx);
-    if (!hwnd) return 1;
+    if (!hwnd) {
+        DWORD err = GetLastError();
+        OPENIDM_LOG_INFO("UI", "ERROR: CreateWindowExW failed with err=" + std::to_string(err));
+        return 1;
+    }
+    OPENIDM_LOG_INFO("UI", "CreateWindowExW succeeded: hwnd=" + std::to_string(reinterpret_cast<uintptr_t>(hwnd)));
     ctx.hwnd = hwnd;
 
     ctx.hThemeTooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
@@ -10751,6 +11302,7 @@ int DesktopView::RunWin32MessageLoop() {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    Gdiplus::GdiplusShutdown(gdiplusToken);
     return static_cast<int>(msg.wParam);
 }
 #endif

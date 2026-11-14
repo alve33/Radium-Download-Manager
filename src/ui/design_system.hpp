@@ -245,23 +245,23 @@ public:
         m.min_window_width = ScaleForDpi(900, dpi);
         m.min_window_height = ScaleForDpi(560, dpi);
         m.compact_width_threshold = ScaleForDpi(1024, dpi);
-        m.toolbar_height = ScaleForDpi(60, dpi);
-        m.sidebar_width = ScaleForDpi(248, dpi);
-        m.table_header_height = ScaleForDpi(42, dpi);
-        m.table_row_height = ScaleForDpi(50, dpi);
-        m.details_panel_height = ScaleForDpi(126, dpi);
-        m.status_bar_height = ScaleForDpi(28, dpi);
-        m.button_height = ScaleForDpi(36, dpi);
-        m.progress_bar_height = ScaleForDpi(6, dpi);
-        m.corner_radius = ScaleForDpi(6, dpi);
+        m.toolbar_height = ScaleForDpi(56, dpi);
+        m.sidebar_width = ScaleForDpi(214, dpi);
+        m.table_header_height = ScaleForDpi(38, dpi);
+        m.table_row_height = ScaleForDpi(52, dpi);
+        m.details_panel_height = ScaleForDpi(142, dpi);
+        m.status_bar_height = ScaleForDpi(0, dpi);
+        m.button_height = ScaleForDpi(32, dpi);
+        m.progress_bar_height = ScaleForDpi(4, dpi);
+        m.corner_radius = ScaleForDpi(8, dpi);
         m.focus_ring_width = std::max(1, ScaleForDpi(2, dpi));
 
-        // Enforce >= 12px caption floor and >= 15px body floor for modern Windows 11 readability
+        // Refined typography ramp
         m.font_caption_px = ScaleForDpi(12, dpi);
-        m.font_body_px = ScaleForDpi(15, dpi);
-        m.font_body_strong_px = ScaleForDpi(15, dpi);
-        m.font_subtitle_px = ScaleForDpi(16, dpi);
-        m.font_title_px = ScaleForDpi(20, dpi);
+        m.font_body_px = ScaleForDpi(14, dpi);
+        m.font_body_strong_px = ScaleForDpi(14, dpi);
+        m.font_subtitle_px = ScaleForDpi(14, dpi);
+        m.font_title_px = ScaleForDpi(16, dpi);
         return m;
     }
 
@@ -275,7 +275,7 @@ public:
         p.surface_primary  = {0x1E, 0x29, 0x3B, 255}; // #1E293B Dark Navy Surface
         p.surface_elevated = {0x33, 0x41, 0x55, 255}; // #334155 Elevated Surface
         p.surface_hover    = {0x47, 0x55, 0x69, 255}; // #475569 Interactive Hover
-        p.surface_selected = {0x30, 0x23, 0x28, 255}; // #302328 Radium selection
+        p.surface_selected = {0x28, 0x28, 0x2C, 255}; // #28282C Neutral elevated selection
         p.surface_pressed  = {0x16, 0x22, 0x38, 255};
         p.border_subtle    = {0x33, 0x41, 0x55, 255}; // #334155 Hairline Divider
         p.border_focus     = {0xFF, 0x47, 0x57, 255}; // #FF4757 Radium Coral focus ring
@@ -315,7 +315,7 @@ public:
         p.border_focus     = {0x16, 0x8B, 0xCB, 255}; // #168BCB
         p.text_primary     = {0x20, 0x21, 0x24, 255}; // #202124
         p.text_secondary   = {0x65, 0x6B, 0x73, 255}; // #656B73
-        p.text_muted       = {0x76, 0x7D, 0x85, 255};
+        p.text_muted       = {0x80, 0x86, 0x8B, 255}; // #80868B
         p.accent_primary   = {0x16, 0x8B, 0xCB, 255}; // #168BCB Sky Blue
         p.accent_hover     = {0x12, 0x76, 0xAE, 255};
         p.badge_stream     = {0x7C, 0x3A, 0xED, 255};
@@ -339,8 +339,8 @@ public:
         p.surface_primary  = {0x1E, 0x1E, 0x22, 255}; // #1E1E22 Surface
         p.surface_elevated = {0x28, 0x28, 0x2E, 255}; // #28282E Elevated
         p.surface_hover    = {0x2B, 0x2B, 0x32, 255}; // #2B2B32 Row/control hover
-        p.surface_selected = {0x30, 0x23, 0x28, 255}; // #302328 Warm selected row
-        p.surface_pressed  = {0x3A, 0x2B, 0x30, 255}; // #3A2B30 Pressed control
+        p.surface_selected = {0x28, 0x28, 0x2C, 255}; // #28282C Neutral elevated selection
+        p.surface_pressed  = {0x32, 0x32, 0x38, 255}; // #323238 Pressed control
         p.border_subtle    = {0x35, 0x35, 0x3D, 255}; // #35353D Hairline divider
         p.border_focus     = {0xFF, 0x47, 0x57, 255}; // #FF4757 Reference Coral Red
         p.text_primary     = {0xF2, 0xF2, 0xF3, 255}; // #F2F2F3 Crisp off-white
