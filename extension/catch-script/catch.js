@@ -1069,9 +1069,14 @@
       const host = (win.location && win.location.hostname) ? win.location.hostname.toLowerCase() : "";
       const isAiSite = host.includes("chatgpt.com") || host.includes("openai.com") ||
                        host.includes("oaiusercontent.com") || host.includes("oaistatic.com") ||
-                       host.includes("claude.ai") || host.includes("anthropic.com");
+                       host.includes("claude.ai") || host.includes("anthropic.com") ||
+                       host.includes("gemini.google.com") || host.includes("bard.google.com") ||
+                       host.includes("aistudio.google.com") || host.includes("googleusercontent.com");
 
       const entry = blobRegistry.get(href);
+      if (entry && entry.kind === "MediaSource") {
+        return false; // Never intercept MSE video buffers as file downloads
+      }
       const blobObj = entry ? entry.blob : null;
       let targetFilename = downloadAttr || (entry && entry.filename) || "";
       const mimeType = (blobObj && blobObj.type) || (entry && entry.mimeType) || "";
@@ -1096,7 +1101,7 @@
       }
 
       const extMatch = (targetFilename || "").match(/\.([a-zA-Z0-9_-]{1,16})$/);
-      const isEligible = Boolean(downloadAttr || extMatch || isAiSite);
+      const isEligible = Boolean(downloadAttr || extMatch || isAiSite || !entry || entry.kind !== "MediaSource");
 
       if (!isEligible) {
         return false;
@@ -1309,6 +1314,171 @@
         return foundCount;
       } catch (_) {
         return 0;
+      }
+    }
+
+    // 4b. Hook File System Access API (window.showSaveFilePicker) used by Gemini, VS Code Web, Photopea, etc.
+    const origShowSaveFilePicker = typeof win.showSaveFilePicker === "function"
+      ? win.showSaveFilePicker
+      : (win.Window && win.Window.prototype && typeof win.Window.prototype.showSaveFilePicker === "function"
+          ? win.Window.prototype.showSaveFilePicker
+          : null);
+    if (typeof origShowSaveFilePicker === "function") {
+      const wrappedShowSaveFilePicker = async function (options = {}) {
+        if (win.event && (win.event.altKey || win.event.metaKey)) {
+          return origShowSaveFilePicker.apply(this, arguments);
+        }
+        const suggestedName = (options && typeof options.suggestedName === "string" && options.suggestedName.trim())
+          ? options.suggestedName.trim()
+          : `download_${Date.now().toString(36)}.bin`;
+
+        let inferredMime = "application/octet-stream";
+        if (options && Array.isArray(options.types) && options.types.length > 0 && options.types[0] && options.types[0].accept) {
+          const acceptKeys = Object.keys(options.types[0].accept);
+          if (acceptKeys.length > 0) inferredMime = acceptKeys[0];
+        } else if (suggestedName.endsWith(".md")) {
+          inferredMime = "text/markdown";
+        } else if (suggestedName.endsWith(".json")) {
+          inferredMime = "application/json";
+        } else if (suggestedName.endsWith(".txt")) {
+          inferredMime = "text/plain";
+        }
+
+        const chunks = [];
+        let closed = false;
+
+        const dispatchToRadium = async () => {
+          if (closed) return;
+          closed = true;
+          const BlobCtor = win.Blob || Blob;
+          const outBlob = new BlobCtor(chunks, { type: inferredMime });
+          const blobUrl = (win.URL && typeof win.URL.createObjectURL === "function")
+            ? win.URL.createObjectURL(outBlob)
+            : `blob:${(win.location && win.location.origin) ? win.location.origin : "https://local"}/${Date.now()}`;
+
+          const sendPayload = (b64) => {
+            postToExtension({
+              action: "radiumDirectBlobDownload",
+              url: blobUrl,
+              filename: suggestedName,
+              mimeType: outBlob.type || inferredMime,
+              size: outBlob.size || 0,
+              dataBase64: b64,
+              correlationId: "fsa-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8),
+              pageTitle: win.document ? win.document.title : "",
+              pageUrl: win.location ? win.location.href : ""
+            });
+          };
+
+          if (typeof outBlob.arrayBuffer === "function") {
+            const buf = await outBlob.arrayBuffer();
+            sendPayload(arrayBufferToBase64(buf));
+          } else if (typeof win.FileReader === "function") {
+            await new Promise((resolve) => {
+              const r = new win.FileReader();
+              r.onload = () => {
+                const s = String(r.result || "");
+                const idx = s.indexOf(",");
+                sendPayload(idx >= 0 ? s.slice(idx + 1) : s);
+                resolve();
+              };
+              r.onerror = () => { sendPayload(""); resolve(); };
+              r.readAsDataURL(outBlob);
+            });
+          } else {
+            sendPayload("");
+          }
+        };
+
+        return {
+          kind: "file",
+          name: suggestedName,
+          async queryPermission() { return "granted"; },
+          async requestPermission() { return "granted"; },
+          async isSameEntry() { return false; },
+          async getFile() {
+            const FileCtor = win.File || File;
+            return new FileCtor(chunks, suggestedName, { type: inferredMime });
+          },
+          async createWritable() {
+            if (typeof win.WritableStream === "function") {
+              const ws = new win.WritableStream({
+                write(chunk) {
+                  if (chunk == null) return;
+                  if (chunk && typeof chunk === "object" && chunk.type === "write" && chunk.data !== undefined) {
+                    chunks.push(chunk.data);
+                  } else {
+                    chunks.push(chunk);
+                  }
+                },
+                async close() {
+                  await dispatchToRadium();
+                },
+                abort() {
+                  chunks.length = 0;
+                  closed = true;
+                }
+              });
+              ws.write = async (data) => {
+                const writer = ws.getWriter();
+                try {
+                  await writer.write(data);
+                } finally {
+                  writer.releaseLock();
+                }
+              };
+              ws.truncate = async (size) => { if (size === 0) chunks.length = 0; };
+              ws.seek = async () => {};
+              const origClose = ws.close.bind(ws);
+              ws.close = async () => {
+                if (!ws.locked) return origClose();
+                await dispatchToRadium();
+              };
+              return ws;
+            }
+            return {
+              async write(data) {
+                if (data == null) return;
+                if (data && typeof data === "object" && data.type === "write" && data.data !== undefined) {
+                  chunks.push(data.data);
+                } else {
+                  chunks.push(data);
+                }
+              },
+              async truncate(size) {
+                if (size === 0) chunks.length = 0;
+              },
+              async seek() {},
+              async close() {
+                await dispatchToRadium();
+              },
+              async abort() {
+                chunks.length = 0;
+                closed = true;
+              }
+            };
+          }
+        };
+      };
+      try {
+        Object.defineProperty(win, "showSaveFilePicker", {
+          value: wrappedShowSaveFilePicker,
+          writable: true,
+          configurable: true,
+          enumerable: true
+        });
+      } catch (_) {
+        try { win.showSaveFilePicker = wrappedShowSaveFilePicker; } catch (_) {}
+      }
+      if (win.Window && win.Window.prototype && typeof win.Window.prototype.showSaveFilePicker === "function") {
+        try {
+          Object.defineProperty(win.Window.prototype, "showSaveFilePicker", {
+            value: wrappedShowSaveFilePicker,
+            writable: true,
+            configurable: true,
+            enumerable: true
+          });
+        } catch (_) {}
       }
     }
 

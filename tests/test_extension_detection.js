@@ -1248,11 +1248,11 @@ async function runTests() {
   assert.deepStrictEqual(mFox.background.scripts, ["js/init.js", "js/function.js", "js/background.js"],
     "BUG-039: Firefox manifest must declare init.js, function.js, and background.js in order");
 
-  // 2. Verify content-script enforces strict per-anchor authorization token on radiumDirectBlobDownload
+  // 2. Verify content-script forwards radiumDirectBlobDownload without SEC-001 token blocking
   const csText = fs.readFileSync(path.join(rootDir, "extension", "js", "content-script.js"), "utf8");
   assert.ok(csText.includes('ev.data.action === "radiumDirectBlobDownload"'), "Content script handles direct blob download");
-  assert.ok(csText.includes('g_authorizedBlobTokens'), "SEC-001: Content script maintains anchor authorization registry");
-  assert.ok(csText.includes('authToken'), "SEC-001: Content script enforces anchor-bound authToken verification");
+  assert.ok(!csText.includes('g_authorizedBlobTokens'), "Content script must not enforce g_authorizedBlobTokens SEC-001 blocking");
+  assert.ok(csText.includes('radiumBlobFallback'), "Content script preserves safe browser fallback on background rejection");
 
   // Verify categories.generated.js is declared before content-script.js across Chromium and Firefox manifests
   const chrContentScripts = mDev.content_scripts.find(cs => cs.js && cs.js.includes("js/content-script.js"));
@@ -1426,4 +1426,129 @@ runTests().catch((err) => {
     throw new Error('FAILED: Mover drag handle triggered download click callback!');
   }
   console.log('  -> PASS: Mover button event isolation regression assertion passed');
+
+  // Singleton Video Overlay regression (Facebook Reels: blurred background + preloaded offscreen + active playing)
+  const hostsInDoc = [];
+  const makeReelVideo = (opts) => ({
+    currentSrc: opts.src,
+    src: opts.src,
+    readyState: 4,
+    paused: Boolean(opts.paused),
+    ended: false,
+    style: opts.style || {},
+    dataset: {},
+    getBoundingClientRect: () => opts.rect
+  });
+  const blurredBgVideo = makeReelVideo({
+    src: 'blob:https://www.facebook.com/bg-blur',
+    paused: false,
+    style: { filter: 'blur(24px)', pointerEvents: 'none' },
+    rect: { width: 1200, height: 700, top: 0, bottom: 700, left: 0, right: 1200 }
+  });
+  const preloadedNextVideo = makeReelVideo({
+    src: 'blob:https://www.facebook.com/next-reel',
+    paused: true,
+    rect: { width: 400, height: 600, top: 820, bottom: 1420, left: 400, right: 800 }
+  });
+  const activeMainVideo = makeReelVideo({
+    src: 'blob:https://www.facebook.com/main-reel',
+    paused: false,
+    rect: { width: 500, height: 680, top: 60, bottom: 740, left: 350, right: 850 }
+  });
+  const reelDoc = {
+    location: { hostname: 'www.facebook.com', href: 'https://www.facebook.com/reel/1451164913078568' },
+    title: 'Facebook Reel',
+    defaultView: { innerWidth: 1280, innerHeight: 900 },
+    querySelectorAll: (sel) => {
+      if (sel === 'video') return [blurredBgVideo, preloadedNextVideo, activeMainVideo];
+      return hostsInDoc.filter(h => h.isConnected);
+    },
+    createElement: (tag) => {
+      const el = {
+        tagName: tag.toUpperCase(),
+        style: {},
+        attrs: {},
+        children: [],
+        isConnected: false,
+        setAttribute: (k, v) => { el.attrs[k] = v; },
+        getAttribute: (k) => el.attrs[k],
+        addEventListener: () => {},
+        appendChild: (c) => { el.children.push(c); },
+        attachShadow: () => ({ appendChild: () => {} }),
+        remove: () => {
+          el.isConnected = false;
+          const idx = hostsInDoc.indexOf(el);
+          if (idx >= 0) hostsInDoc.splice(idx, 1);
+        }
+      };
+      return el;
+    },
+    body: {
+      appendChild: (el) => {
+        el.isConnected = true;
+        if (!hostsInDoc.includes(el)) hostsInDoc.push(el);
+      }
+    }
+  };
+  const reelAttached = scanAndAttachVideoOverlays(reelDoc, () => {});
+  assert.strictEqual(reelAttached.length, 1, 'Strictly 1 singleton overlay attached on Facebook Reels');
+  assert.strictEqual(hostsInDoc.length, 1, 'Strictly 1 shadow host exists in DOM');
+  assert.strictEqual(reelAttached[0].video, activeMainVideo, 'Singleton overlay attached only to primary active video');
+  assert.strictEqual(reelAttached[0].hostEl.id, 'radium-singleton-video-btn', 'Singleton overlay has #radium-singleton-video-btn id');
+  console.log('  -> PASS: Singleton video overlay (Facebook Reels multi-video) regression assertion passed');
+
+  // File System Access API (window.showSaveFilePicker) interception regression (Gemini Export -> Download)
+  const vm = require('vm');
+  const catchSrc = fs.readFileSync(path.join(__dirname, '..', 'extension', 'catch-script', 'catch.js'), 'utf8');
+  const fsaPosted = [];
+  let nativePickerCalled = false;
+  const nativePicker = async () => { nativePickerCalled = true; throw new Error('native picker should not be called'); };
+  function FakeWindow() {}
+  FakeWindow.prototype.showSaveFilePicker = nativePicker;
+  const fsaWin = new FakeWindow();
+  Object.assign(fsaWin, {
+    Window: FakeWindow,
+    btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+    location: { href: 'https://gemini.google.com/app/test', hostname: 'gemini.google.com', origin: 'https://gemini.google.com' },
+    addEventListener: () => {},
+    postMessage: (msg) => fsaPosted.push(msg),
+    HTMLAnchorElement: function () {},
+    document: { createElement: () => ({}), addEventListener: () => {}, title: 'Gemini' },
+    Blob: class {
+      constructor(parts, opts) { this.parts = parts; this.type = (opts && opts.type) || ''; this.size = Buffer.byteLength(parts.join('')); }
+      async arrayBuffer() { return new Uint8Array(Buffer.from(this.parts.join(''))).buffer; }
+    },
+    WritableStream: globalThis.WritableStream,
+    FileReader: class {},
+    URL: { createObjectURL: () => 'blob:https://gemini.google.com/fsa-1' },
+    MediaSource: function () {},
+    XMLHttpRequest: function () {},
+    fetch: () => {}
+  });
+  fsaWin.window = fsaWin;
+  fsaWin.self = fsaWin;
+  fsaWin.top = fsaWin;
+  fsaWin.HTMLAnchorElement.prototype = {};
+  fsaWin.XMLHttpRequest.prototype = {};
+  vm.runInNewContext(catchSrc, {
+    window: fsaWin, globalThis: fsaWin, console, setTimeout, clearTimeout,
+    Promise, Object, Array, String, Uint8Array, TextEncoder
+  });
+  (async () => {
+    const fsaHandle = await fsaWin.showSaveFilePicker({ suggestedName: 'radium_design.md' });
+    const fsaWritable = await fsaHandle.createWritable();
+    await fsaWritable.write('# Radium\n');
+    await fsaWritable.close();
+    assert.strictEqual(nativePickerCalled, false, 'Native showSaveFilePicker must not be invoked');
+    assert.strictEqual(fsaWin.Window.prototype.showSaveFilePicker !== nativePicker, true, 'Window.prototype.showSaveFilePicker must also be wrapped');
+    assert.strictEqual(fsaPosted.length, 1, 'Exactly 1 radiumDirectBlobDownload message must be posted');
+    assert.strictEqual(fsaPosted[0].action, 'radiumDirectBlobDownload');
+    assert.strictEqual(fsaPosted[0].filename, 'radium_design.md');
+    assert.strictEqual(fsaPosted[0].mimeType, 'text/markdown');
+    assert.strictEqual(Buffer.from(fsaPosted[0].dataBase64, 'base64').toString('utf8'), '# Radium\n');
+    console.log('  -> PASS: File System Access API (showSaveFilePicker) interception regression assertion passed');
+  })().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 })();

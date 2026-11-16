@@ -9,6 +9,7 @@
 #include <deque>
 #include <set>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -399,10 +400,17 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     }
 
     // 2. Storage Setup (aria2 MultiDiskAdaptor) & Stateful Session Retention
+    const auto torrent_engine_start_tp = std::chrono::steady_clock::now();
+    int64_t t_disk_alloc_ms = 0;
+    int64_t t_probe_ms = 0;
+    std::atomic<int64_t> t_connect_ms{-1};
+    std::atomic<bool> first_torrent_byte_logged{false};
+
     auto announce_list = torrent_info.announce_list.empty() ? std::vector<std::string>{torrent_info.announce} : torrent_info.announce_list;
     auto active_session = GetOrCreateSession(task.task_id, announce_list);
     active_session->sequential_mode = sequential_download;
 
+    const auto disk_alloc_start_tp = std::chrono::steady_clock::now();
     std::shared_ptr<MultiFileStorage> storage = active_session->storage;
     if (!storage) {
         storage = std::make_shared<MultiFileStorage>();
@@ -417,6 +425,8 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         storage->AllocateFiles();
         active_session->storage = storage;
     }
+    t_disk_alloc_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - disk_alloc_start_tp).count();
 
     // 3. Piece & Block Scheduler (aria2 PieceStorage)
     std::shared_ptr<PieceManager> piece_mgr = active_session->piece_mgr;
@@ -531,39 +541,50 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         }
     }
 
-    if (peer_swarm.empty() && !announce_urls.empty()) {
-        auto tr_res = TrackerClient::AnnounceAny(
-            announce_urls,
-            torrent_info.info_hash_raw,
-            client_peer_id,
-            6881,
-            task.uploaded_bytes,
-            task.downloaded_bytes,
-            total_bytes - task.downloaded_bytes,
-            "started",
-            4000);
-
-        if (tr_res.ok()) {
-            peer_swarm = tr_res.value->peers;
-        } else {
-            OPENIDM_LOG_WARN("TorrentEngine", "All announce trackers failed for task " + task.task_id + ": " + tr_res.error->message);
+    const auto probe_start_tp = std::chrono::steady_clock::now();
+    if (peer_swarm.empty()) {
+        // Run tracker announce and DHT bootstrap discovery in parallel to eliminate sequential 5s stall
+        std::future<Result<TrackerAnnounceResponse>> tr_future;
+        if (!announce_urls.empty()) {
+            tr_future = std::async(std::launch::async, [&]() {
+                return TrackerClient::AnnounceAny(
+                    announce_urls,
+                    torrent_info.info_hash_raw,
+                    client_peer_id,
+                    6881,
+                    task.uploaded_bytes,
+                    task.downloaded_bytes,
+                    total_bytes - task.downloaded_bytes,
+                    "started",
+                    2500);
+            });
         }
-    }
-
-    // Secondary DHT Discovery if peer swarm is small
-    if (peer_swarm.size() < 20) {
         std::vector<std::pair<std::string, uint16_t>> bootstrap_nodes = {
             {std::string("router.bittorrent.com"), static_cast<uint16_t>(6881)},
             {std::string("dht.transmissionbt.com"), static_cast<uint16_t>(6881)},
             {std::string("router.utorrent.com"), static_cast<uint16_t>(6881)}
         };
-        auto dht_peers = DhtClient::QueryDhtNodes(bootstrap_nodes, torrent_info.info_hash_raw, client_peer_id, 1000);
+        auto dht_future = std::async(std::launch::async, [&]() {
+            return DhtClient::QueryDhtNodes(bootstrap_nodes, torrent_info.info_hash_raw, client_peer_id, 800);
+        });
+
+        if (tr_future.valid()) {
+            auto tr_res = tr_future.get();
+            if (tr_res.ok()) {
+                peer_swarm = tr_res.value->peers;
+            } else {
+                OPENIDM_LOG_WARN("TorrentEngine", "All announce trackers failed for task " + task.task_id + ": " + tr_res.error->message);
+            }
+        }
+        auto dht_peers = dht_future.get();
         for (const auto& dp : dht_peers) {
             if (std::none_of(peer_swarm.begin(), peer_swarm.end(), [&](const PeerEndpoint& p) { return p.ip == dp.ip && p.port == dp.port; })) {
                 peer_swarm.push_back(dp);
             }
         }
     }
+    t_probe_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - probe_start_tp).count();
 
     bool ever_discovered_peer = !peer_swarm.empty();
 
@@ -833,6 +854,13 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         std::vector<BlockRequest> in_flight_requests;
 
         active_connections++;
+        if (t_connect_ms.load(std::memory_order_relaxed) < 0) {
+            int64_t expected = -1;
+            t_connect_ms.compare_exchange_strong(expected,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - torrent_engine_start_tp).count(),
+                std::memory_order_relaxed);
+        }
 
         while (!cancel_requested.load() && !pause_requested.load() && !piece_mgr->IsAllCompleted()) {
             uint8_t temp[16384];
@@ -900,6 +928,16 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                     bool corrupt = false;
                     session->downloaded_recent.fetch_add(msg.payload.size(), std::memory_order_relaxed);
                     piece_mgr->ProcessBlock(msg.piece_index, msg.block_begin, msg.payload.data(), msg.payload.size(), verified, corrupt);
+                    if (!first_torrent_byte_logged.exchange(true)) {
+                        const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - torrent_engine_start_tp).count();
+                        OPENIDM_LOG_INFO("TorrentStartupProfile",
+                            "task=" + task.task_id +
+                            " t_probe_ms=" + std::to_string(t_probe_ms) +
+                            " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms) +
+                            " t_connect_ms=" + std::to_string(t_connect_ms.load(std::memory_order_relaxed)) +
+                            " t_first_byte_ms=" + std::to_string(first_byte_ms));
+                    }
 
                     if (verified) {
                         auto have_msg = PeerWireProtocol::CreateHave(msg.piece_index);

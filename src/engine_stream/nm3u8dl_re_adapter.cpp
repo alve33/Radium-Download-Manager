@@ -2809,6 +2809,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     task_id, "Direct HTTP: " + std::string(stage),
                     "Stage duration " + std::to_string(elapsed_ms) + " ms");
             };
+            std::atomic<int64_t> yt_connect_ms{0};
             auto res = brisk::HttpClient::PerformGet(
                 track_url,
                 eff_headers,
@@ -2818,6 +2819,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                 m_cfg.allow_loopback_manifests,
                 cancel_requested,
                 [&](const brisk::HttpResponseMeta& meta) -> brisk::HeaderAction {
+                    yt_connect_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - direct_transfer_started).count(), std::memory_order_relaxed);
                     if (meta.status_code != 200 && meta.status_code != 206) {
                         rejected_status = meta.status_code;
                         // Read only a bounded prefix of YouTube's 403 XML so we
@@ -2846,9 +2849,18 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                         if (pause_requested.load() || cancel_requested.load() || track_failed.load()) return false;
                         if (!recorded_track_first_byte && len > 0) {
                             recorded_track_first_byte = true;
+                            const auto yt_first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - direct_transfer_started).count();
+                            OPENIDM_LOG_INFO("YouTubeStartupProfile",
+                                "task=" + task.task_id +
+                                " track=" + label +
+                                " t_probe_ms=0"
+                                " t_disk_alloc_ms=0"
+                                " t_connect_ms=" + std::to_string(yt_connect_ms.load(std::memory_order_relaxed)) +
+                                " t_first_byte_ms=" + std::to_string(yt_first_byte_ms));
                             diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                                 task.task_id, "First data bytes received",
-                                "Direct stream fast-path received initial payload (" + label + ")");
+                                "Direct stream fast-path received initial payload (" + label + ", t_first_byte_ms=" + std::to_string(yt_first_byte_ms) + ")");
                         }
                         ofs.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(len));
                         if (!ofs.good()) return false;
@@ -3422,6 +3434,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
         std::vector<std::string> yt_args = {
             "--newline",
             "--no-playlist",
+            "--force-ipv4",
             "--no-warnings",
             "--cache-dir", cache_dir.string(),
             "-N", "8",

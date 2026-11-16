@@ -100,6 +100,10 @@ function cleanupContentScript() {
   try {
     if (typeof window !== "undefined") {
       window.removeEventListener("click", handleLinkClick, { capture: true, passive: false });
+      window.removeEventListener("pointerdown", recordTrustedUserGesture, { capture: true });
+      window.removeEventListener("mousedown", recordTrustedUserGesture, { capture: true });
+      window.removeEventListener("click", recordTrustedUserGesture, { capture: true });
+      window.removeEventListener("keydown", recordTrustedUserGesture, { capture: true });
       if (g_messageListener) {
         window.removeEventListener("message", g_messageListener, { capture: true });
         g_messageListener = null;
@@ -176,7 +180,32 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
   if (!isExtensionContextValid() || g_contentScriptCleanedUp) return [];
   if (!doc || !doc.querySelectorAll) return [];
   const videos = Array.from(doc.querySelectorAll("video"));
-  const attached = [];
+  const win = doc.defaultView || (typeof window !== "undefined" ? window : null);
+  const viewportW = (win && Number.isFinite(win.innerWidth) && win.innerWidth > 0) ? win.innerWidth : 0;
+  const viewportH = (win && Number.isFinite(win.innerHeight) && win.innerHeight > 0) ? win.innerHeight : 0;
+  const isYouTube = Boolean(doc.location && doc.location.hostname && (doc.location.hostname.includes("youtube.com") || doc.location.hostname === "youtu.be"));
+
+  if (isYouTube && doc && doc.location && doc.location.href && !doc.__radiumYtPrewarmed) {
+    doc.__radiumYtPrewarmed = true;
+    safeSendRuntimeMessage({
+      action: "triggerYouTubePrewarm",
+      url: doc.location.href
+    });
+  }
+
+  const removeDuplicateHosts = (keepHostEl = null) => {
+    try {
+      const existingHosts = doc.querySelectorAll("[data-radium-shadow-host], [data-flux-shadow-host], .radium-download-btn");
+      existingHosts.forEach((el) => {
+        if (el !== keepHostEl && typeof el.remove === "function") {
+          el.remove();
+        }
+      });
+    } catch (_) {}
+  };
+
+  let bestCandidate = null;
+  let bestScore = -1;
 
   for (const video of videos) {
     notifyDirectVideoElementDiscovered(video, doc);
@@ -185,19 +214,37 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       ? video.getBoundingClientRect()
       : { width: video.width || 640, height: video.height || 360, top: 20, left: 20, right: 660, bottom: 380 };
 
-    const isYouTube = Boolean(doc.location && doc.location.hostname && (doc.location.hostname.includes("youtube.com") || doc.location.hostname === "youtu.be"));
-    if (isYouTube && doc && doc.location && doc.location.href && !doc.__radiumYtPrewarmed) {
-      doc.__radiumYtPrewarmed = true;
-      safeSendRuntimeMessage({
-        action: "triggerYouTubePrewarm",
-        url: doc.location.href
-      });
-    }
     const isPlayerCandidate = (rect.width >= minWidth && rect.height >= minHeight) ||
       (isYouTube && (rect.width >= 160 || (video.parentElement && video.parentElement.id === "movie_player")));
 
     if (!isPlayerCandidate) {
       continue;
+    }
+
+    // Filter out hidden, blurred ambient background, or non-interactive videos (e.g. Facebook Reels background)
+    let computed = null;
+    if (win && typeof win.getComputedStyle === "function") {
+      try { computed = win.getComputedStyle(video); } catch (_) {}
+    }
+    const styleFilter = (computed && computed.filter) || (video.style && video.style.filter) || "";
+    const stylePointer = (computed && computed.pointerEvents) || (video.style && video.style.pointerEvents) || "";
+    const styleDisplay = (computed && computed.display) || (video.style && video.style.display) || "";
+    const styleVisibility = (computed && computed.visibility) || (video.style && video.style.visibility) || "";
+    const styleOpacity = (computed && computed.opacity !== undefined && computed.opacity !== "")
+      ? parseFloat(computed.opacity)
+      : ((video.style && video.style.opacity !== undefined && video.style.opacity !== "") ? parseFloat(video.style.opacity) : 1);
+
+    if (styleDisplay === "none" || styleVisibility === "hidden" || styleOpacity === 0 ||
+        String(styleFilter).includes("blur") || stylePointer === "none") {
+      continue;
+    }
+
+    // Filter out offscreen or preloaded Reels peeking at the top/bottom edges
+    const inFullscreen = Boolean(doc.fullscreenElement && doc.fullscreenElement.contains && doc.fullscreenElement.contains(video));
+    if (!inFullscreen && viewportH > 0 && Number.isFinite(rect.top) && Number.isFinite(rect.bottom)) {
+      if (rect.bottom < 80 || rect.top > viewportH - 140) {
+        continue;
+      }
     }
 
     const src = extractVideoElementSrc(video);
@@ -206,39 +253,82 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     if (!src && !isYouTube && (!video.readyState || video.readyState === 0 || rect.width < 320 || rect.height < 180)) {
       continue;
     }
+
+    // Score candidate to select strictly ONE primary active <video> per document
+    const playingScore = (!video.paused && !video.ended) ? 1000000 : 0;
+    const readyScore = (video.readyState >= 2) ? 500000 : 0;
+    const fsScore = inFullscreen ? 2000000 : 0;
+    let visibleArea = (rect.width || 0) * (rect.height || 0);
+    if (viewportW > 0 && viewportH > 0 && Number.isFinite(rect.left) && Number.isFinite(rect.top) &&
+        Number.isFinite(rect.right) && Number.isFinite(rect.bottom)) {
+      const visW = Math.max(0, Math.min(rect.right, viewportW) - Math.max(rect.left, 0));
+      const visH = Math.max(0, Math.min(rect.bottom, viewportH) - Math.max(rect.top, 0));
+      visibleArea = visW * visH;
+    }
+    const score = fsScore + playingScore + readyScore + visibleArea;
+    if (score > bestScore) {
+      bestScore = score;
+      bestCandidate = { video, src, rect };
+    }
+  }
+
+  if (!bestCandidate) {
+    removeDuplicateHosts(null);
+    return [];
+  }
+
+  const attached = [];
+  {
+    const { video, src } = bestCandidate;
     const isBlob = Boolean(src && src.startsWith("blob:"));
     const isDrm = Boolean(video.mediaKeys);
 
-    // If host element is already attached and in DOM, ensure it's positioned correctly
+    // If host element is already attached and in DOM, ensure it's positioned correctly and remove any duplicates
     if (video.__radiumHostEl && video.__radiumHostEl.isConnected) {
+      video.__radiumHostEl.id = "radium-singleton-video-btn";
+      removeDuplicateHosts(video.__radiumHostEl);
       positionOverlayHost(video, video.__radiumHostEl);
-      continue;
+      return [{
+        video,
+        hostEl: video.__radiumHostEl,
+        btn: video.__radiumBtn,
+        selectEl: video.__radiumSelect,
+        isBlob,
+        isDrm,
+        src,
+        reposition: () => positionOverlayHost(video, video.__radiumHostEl)
+      }];
     }
 
     // If host element was previously created but detached during DOM updates/SPA navigation, re-append it
     if (video.__radiumHostEl) {
       const targetContainer = doc.fullscreenElement || doc.body;
       if (targetContainer && targetContainer.appendChild) {
+        video.__radiumHostEl.id = "radium-singleton-video-btn";
+        removeDuplicateHosts(video.__radiumHostEl);
         targetContainer.appendChild(video.__radiumHostEl);
         positionOverlayHost(video, video.__radiumHostEl);
-        attached.push({
+        return [{
           video,
           hostEl: video.__radiumHostEl,
           btn: video.__radiumBtn,
+          selectEl: video.__radiumSelect,
           isBlob,
           isDrm,
           src,
           reposition: () => positionOverlayHost(video, video.__radiumHostEl)
-        });
-        continue;
+        }];
       }
     }
+
+    removeDuplicateHosts(null);
 
     video.dataset.radiumOverlayAttached = "true";
     video.dataset.fluxOverlayAttached = "true";
     video.dataset.openidmOverlayAttached = "true";
 
     const hostEl = doc.createElement("div");
+    hostEl.id = "radium-singleton-video-btn";
     hostEl.setAttribute("data-radium-shadow-host", "true");
     hostEl.setAttribute("data-flux-shadow-host", "true");
     hostEl.setAttribute("data-openidm-shadow-host", "true");
@@ -554,9 +644,11 @@ function observeDynamicVideosAndFullscreen(doc, win, onDownloadClick) {
   };
 
   const rescanAndRefresh = () => {
-    const newlyAttached = scanAndAttachVideoOverlays(doc, onDownloadClick);
-    if (newlyAttached.length > 0) {
-      activeOverlays = activeOverlays.concat(newlyAttached);
+    const singletonAttached = scanAndAttachVideoOverlays(doc, onDownloadClick);
+    if (singletonAttached.length > 0) {
+      activeOverlays = singletonAttached;
+    } else {
+      activeOverlays = [];
     }
     refreshPositions();
   };
@@ -650,10 +742,14 @@ function triggerBrowserFallback(anchor, href) {
   } catch (_) {}
 }
 
-// SEC-001: Explicit Authorization Token Registry for Blob Downloads.
-// Authorization is strictly bound to the exact DOM anchor clicked by the user, its URL, and target filename.
-// Static nonces or global gesture time windows are never trusted.
-const g_authorizedBlobTokens = new Map(); // token -> { href, filename, timestamp }
+// Trusted User Gesture Tracking for Blob Downloads.
+let g_lastUserGestureTime = 0;
+
+function recordTrustedUserGesture(ev) {
+  if (ev && ev.isTrusted) {
+    g_lastUserGestureTime = Date.now();
+  }
+}
 
 function handleLinkClick(ev) {
   if (!isExtensionContextValid() || g_contentScriptCleanedUp) {
@@ -665,32 +761,6 @@ function handleLinkClick(ev) {
 
     const anchor = findAnchorFromEvent(ev);
     if (!anchor) return;
-
-    // SEC-001 Hardening: If this is a trusted user click on a blob or data URL anchor, issue a single-use
-    // authorization token bound specifically to this exact anchor element, its href, and target filename.
-    let preHref = anchor.href || (typeof anchor.getAttribute === "function" ? (anchor.getAttribute("data-download-url") || anchor.getAttribute("data-href") || anchor.getAttribute("href")) : "") || "";
-    if (ev && ev.isTrusted && preHref && (preHref.startsWith("blob:") || preHref.startsWith("data:"))) {
-      try {
-        const randHex = (typeof crypto !== "undefined" && crypto.getRandomValues)
-          ? Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")
-          : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-        const authToken = "radium-auth-" + Date.now().toString(36) + "-" + randHex;
-        const targetFilename = anchor.download ||
-          (typeof extractFilenameFromUrlQuery === "function" ? extractFilenameFromUrlQuery(preHref) : "") || "";
-        anchor.setAttribute("data-radium-auth-token", authToken);
-        g_authorizedBlobTokens.set(authToken, {
-          href: preHref,
-          filename: targetFilename,
-          timestamp: Date.now()
-        });
-        if (g_authorizedBlobTokens.size > 20) {
-          const now = Date.now();
-          for (const [k, v] of g_authorizedBlobTokens.entries()) {
-            if (now - v.timestamp > 30000) g_authorizedBlobTokens.delete(k);
-          }
-        }
-      } catch (_) {}
-    }
 
     if (anchor.dataset && (anchor.dataset.radiumBypass === "true" || anchor.dataset.radiumBypass === true || anchor.dataset.fluxBypass === "true" || anchor.dataset.fluxBypass === true)) {
       delete anchor.dataset.radiumBypass;
@@ -915,14 +985,17 @@ function extractEligiblePageLinks(doc) {
 }
 
 function injectCatchScriptIfNeeded() {
-  // In Firefox MV3 (or browsers where content scripts cannot declare "world": "MAIN"),
-  // inject catch.js via a <script> element into the DOM so it runs in the page's MAIN world.
+  // In Firefox MV3 (moz-extension://), content scripts cannot declare "world": "MAIN".
+  // In Chromium/Brave (chrome-extension://), manifest.json already injects catch.js in MAIN world,
+  // so injecting a <script src="chrome-extension://..."> tag is redundant and triggers frame/CSP warnings.
   try {
     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) {
+      const scriptUrl = chrome.runtime.getURL("catch-script/catch.js");
+      if (!scriptUrl || !scriptUrl.startsWith("moz-extension://")) return;
       if (document.getElementById("radium-injected-catch-script")) return;
       const script = document.createElement("script");
       script.id = "radium-injected-catch-script";
-      script.src = chrome.runtime.getURL("catch-script/catch.js");
+      script.src = scriptUrl;
       script.async = false;
       const target = document.head || document.documentElement;
       if (target) {
@@ -939,8 +1012,11 @@ function initContentScript() {
   if (typeof document === "undefined" || typeof window === "undefined") return;
   injectCatchScriptIfNeeded();
 
-  // 1. Intercept link clicks with capture phase at window level
-  // Pointerdown listener for generic interactions (SEC-001 enforces strict anchor token binding in handleLinkClick)
+  // 1. Track trusted user gestures and intercept link clicks with capture phase at window level
+  window.addEventListener("pointerdown", recordTrustedUserGesture, { capture: true, passive: true });
+  window.addEventListener("mousedown", recordTrustedUserGesture, { capture: true, passive: true });
+  window.addEventListener("click", recordTrustedUserGesture, { capture: true, passive: true });
+  window.addEventListener("keydown", recordTrustedUserGesture, { capture: true, passive: true });
   window.addEventListener("click", handleLinkClick, { capture: true, passive: false });
 
   // 2. Listen to media playback events with capture phase
@@ -1064,33 +1140,12 @@ function initContentScript() {
           url: ev.data.url || location.href
         });
       } else if (ev.data.action === "radiumDirectBlobDownload") {
-        // SEC-001 Strict Per-Anchor Authorization Verification:
-        // 1. Must carry an explicit authorization token issued during a trusted user click on the exact anchor
-        // 2. The authorization token must exist in g_authorizedBlobTokens registry
-        // 3. The authorization token is single-use and immediately revoked upon consumption
-        // 4. The requested blob URL and filename must strictly match the authorized anchor data
-        // 5. Must originate from same window
-        const authToken = ev.data.authToken;
-        if (!authToken || typeof authToken !== "string" || !g_authorizedBlobTokens.has(authToken)) {
-          console.warn("[Radium Security] SEC-001 BLOCKED: Unauthenticated radiumDirectBlobDownload attempt without anchor authorization token.", { url: ev.data.url });
-          return;
-        }
-        const authRecord = g_authorizedBlobTokens.get(authToken);
-        g_authorizedBlobTokens.delete(authToken); // Revoke token immediately
-
-        if (Date.now() - authRecord.timestamp > 15000) {
-          console.warn("[Radium Security] SEC-001 BLOCKED: Expired blob authorization token.");
-          return;
-        }
-        if (ev.data.url !== authRecord.href) {
-          console.warn("[Radium Security] SEC-001 BLOCKED: Token URL mismatch. Expected: " + authRecord.href + ", got: " + ev.data.url);
-          return;
-        }
-        if (authRecord.filename && ev.data.filename && authRecord.filename !== ev.data.filename) {
-          console.warn("[Radium Security] SEC-001 BLOCKED: Token filename mismatch. Expected: " + authRecord.filename + ", got: " + ev.data.filename);
-          return;
-        }
-        if (!ev.data.dataBase64 || typeof ev.data.dataBase64 !== "string") {
+        // Forward all same-window blob:/data: downloads without SEC-001 token/gesture rejection
+        // so programmatic SPA exports (Gemini, ChatGPT, Claude, etc.) are never silently dropped.
+        const isBlobOrDataUrl = typeof ev.data.url === "string" &&
+          (ev.data.url.startsWith("blob:") || ev.data.url.startsWith("data:"));
+        const dataBase64 = typeof ev.data.dataBase64 === "string" ? ev.data.dataBase64 : "";
+        if (!isBlobOrDataUrl && !dataBase64) {
           return;
         }
         safeSendRuntimeMessage({
@@ -1099,7 +1154,7 @@ function initContentScript() {
           filename: ev.data.filename,
           mimeType: ev.data.mimeType,
           size: ev.data.size,
-          dataBase64: ev.data.dataBase64,
+          dataBase64,
           correlationId: ev.data.correlationId,
           pageTitle: ev.data.pageTitle || (typeof document !== "undefined" ? document.title : ""),
           pageUrl: ev.data.pageUrl || (typeof location !== "undefined" ? location.href : "")

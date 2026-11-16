@@ -240,6 +240,10 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
     const bool http_trace_enabled = HttpRangeTraceEnabled();
     const auto engine_start_tp = std::chrono::steady_clock::now();
+    std::atomic<int64_t> t_probe_ms{0};
+    std::atomic<int64_t> t_connect_ms{0};
+    std::atomic<int64_t> t_disk_alloc_ms{0};
+    std::atomic<int64_t> t_first_byte_ms{0};
     std::atomic<uint64_t> next_trace_request_id{0};
     std::atomic<uint32_t> active_http_requests{0};
     std::atomic<bool> first_request_recorded{false};
@@ -842,6 +846,8 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 if (!meta.etag.empty()) task.etag = meta.etag;
                 if (!meta.last_modified.empty()) task.last_modified = meta.last_modified;
 
+                t_connect_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - engine_start_tp).count(), std::memory_order_relaxed);
                 diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                     task.task_id, "Response headers received",
                     "HTTP " + std::to_string(meta.status_code) + " Content-Length=" + std::to_string(total_bytes) +
@@ -956,6 +962,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         }
                     }
                     auto alloc_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - alloc_t0).count();
+                    t_disk_alloc_ms.store(alloc_ms, std::memory_order_relaxed);
                     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                         task.task_id, "Storage allocation completed", "Completed in " + std::to_string(alloc_ms) + " ms");
                     OPENIDM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Storage allocation completed in " + std::to_string(alloc_ms) + " ms");
@@ -1060,9 +1067,19 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     bool is_first_w0 = false;
                     if (!first_write_recorded.exchange(true)) {
                         is_first_w0 = true;
+                        const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - engine_start_tp).count();
+                        t_first_byte_ms.store(first_byte_ms, std::memory_order_relaxed);
+                        OPENIDM_LOG_INFO("HttpStartupProfile",
+                            "task=" + task.task_id +
+                            " t_probe_ms=" + std::to_string(t_probe_ms.load(std::memory_order_relaxed)) +
+                            " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms.load(std::memory_order_relaxed)) +
+                            " t_connect_ms=" + std::to_string(t_connect_ms.load(std::memory_order_relaxed)) +
+                            " t_first_byte_ms=" + std::to_string(first_byte_ms));
                         diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                             task.task_id, "First bytes written to disk",
-                            "Worker 0 committed " + std::to_string(to_write) + " bytes at offset " + std::to_string(write_pos));
+                            "Worker 0 committed " + std::to_string(to_write) + " bytes at offset " + std::to_string(write_pos) +
+                            " (t_first_byte_ms=" + std::to_string(first_byte_ms) + ")");
                     }
                     seg0->current_offset.fetch_add(to_write);
                     const bool seg0_done = (seg0->current_offset.load() > seg0->end_offset.load());
@@ -1087,9 +1104,19 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     }
                     if (!first_write_recorded.exchange(true)) {
                         is_first_single = true;
+                        const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - engine_start_tp).count();
+                        t_first_byte_ms.store(first_byte_ms, std::memory_order_relaxed);
+                        OPENIDM_LOG_INFO("HttpStartupProfile",
+                            "task=" + task.task_id +
+                            " t_probe_ms=" + std::to_string(t_probe_ms.load(std::memory_order_relaxed)) +
+                            " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms.load(std::memory_order_relaxed)) +
+                            " t_connect_ms=" + std::to_string(t_connect_ms.load(std::memory_order_relaxed)) +
+                            " t_first_byte_ms=" + std::to_string(first_byte_ms));
                         diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                             task.task_id, "First bytes written to disk",
-                            "Single stream committed " + std::to_string(len) + " bytes at offset " + std::to_string(single_stream_written));
+                            "Single stream committed " + std::to_string(len) + " bytes at offset " + std::to_string(single_stream_written) +
+                            " (t_first_byte_ms=" + std::to_string(first_byte_ms) + ")");
                     }
                     single_stream_written += len;
                     task.downloaded_bytes = single_stream_written;

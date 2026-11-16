@@ -463,7 +463,7 @@ function updateTabBadge(tabId) {
   } catch (_) {}
 }
 
-async function collectCookiesForDownload(targetUrl, referrerUrl = "") {
+async function collectCookiesForDownload(targetUrl, referrerUrl = "", originalUrl = "") {
   const cookieMap = new Map();
   const urlsToQuery = [];
   const domainsToQuery = new Set();
@@ -485,41 +485,34 @@ async function collectCookiesForDownload(targetUrl, referrerUrl = "") {
   };
 
   addTarget(targetUrl);
+  if (originalUrl && originalUrl !== targetUrl) addTarget(originalUrl);
   if (referrerUrl) addTarget(referrerUrl);
 
   if (typeof chrome !== "undefined" && chrome.cookies && typeof chrome.cookies.getAll === "function") {
+    const queryCookies = (details) => new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => { if (!settled) { settled = true; resolve([]); } }, 120);
+      try {
+        chrome.cookies.getAll(details, (cList) => {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            if (chrome.runtime) void chrome.runtime.lastError;
+            resolve(cList || []);
+          }
+        });
+      } catch (_) { if (!settled) { settled = true; clearTimeout(timer); resolve([]); } }
+    });
+
     const queryTasks = [];
     for (const u of urlsToQuery) {
-      queryTasks.push(new Promise((resolve) => {
-        let settled = false;
-        const timer = setTimeout(() => { if (!settled) { settled = true; resolve([]); } }, 120);
-        try {
-          chrome.cookies.getAll({ url: u }, (cList) => {
-            if (!settled) {
-              settled = true;
-              clearTimeout(timer);
-              if (chrome.runtime) void chrome.runtime.lastError;
-              resolve(cList || []);
-            }
-          });
-        } catch (_) { if (!settled) { settled = true; clearTimeout(timer); resolve([]); } }
-      }));
+      queryTasks.push(queryCookies({ url: u }));
+      // Chromium 110+ CHIPS / Partitioned cookies require partitionKey: {} (matches FDM CookieManager)
+      queryTasks.push(queryCookies({ url: u, partitionKey: {} }));
     }
     for (const dom of domainsToQuery) {
-      queryTasks.push(new Promise((resolve) => {
-        let settled = false;
-        const timer = setTimeout(() => { if (!settled) { settled = true; resolve([]); } }, 120);
-        try {
-          chrome.cookies.getAll({ domain: dom }, (cList) => {
-            if (!settled) {
-              settled = true;
-              clearTimeout(timer);
-              if (chrome.runtime) void chrome.runtime.lastError;
-              resolve(cList || []);
-            }
-          });
-        } catch (_) { if (!settled) { settled = true; clearTimeout(timer); resolve([]); } }
-      }));
+      queryTasks.push(queryCookies({ domain: dom }));
+      queryTasks.push(queryCookies({ domain: dom, partitionKey: {} }));
     }
     try {
       const results = await Promise.all(queryTasks);
@@ -1007,6 +1000,17 @@ class DownloadStateMachine {
 const downloadStateMachine = new DownloadStateMachine();
 
 
+function exactBase64ByteLength(b64) {
+  if (!b64 || typeof b64 !== "string") return 0;
+  const clean = b64.replace(/\s+/g, "");
+  const len = clean.length;
+  if (len === 0) return 0;
+  let padding = 0;
+  if (clean.endsWith("==")) padding = 2;
+  else if (clean.endsWith("=")) padding = 1;
+  return Math.max(0, Math.floor((len * 3) / 4) - padding);
+}
+
 var transferBlobToFlux = transferBlobToRadium;
 async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationId, customTransport = null) {
   let directDataB64 = "";
@@ -1022,7 +1026,7 @@ async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationI
         const dataPart = blobUrl.slice(commaIdx + 1);
         if (metaPart.includes(";base64")) {
           directDataB64 = dataPart;
-          directTotalBytes = Math.round(dataPart.length * 0.75);
+          directTotalBytes = exactBase64ByteLength(dataPart);
         } else {
           const decoded = decodeURIComponent(dataPart);
           directTotalBytes = decoded.length;
@@ -1056,10 +1060,11 @@ async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationI
 
   if (directDataB64) {
     const transferId = "blob-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    const exactBytes = directTotalBytes || exactBase64ByteLength(directDataB64);
     const startRes = await sendNativeRpc("download.startChunkedTransfer", {
       taskId: transferId,
       filename: filename || "artifact_download",
-      totalBytes: directTotalBytes || Math.round(directDataB64.length * 0.75),
+      totalBytes: exactBytes,
       mimeType: directMime,
       correlationId
     }, customTransport);
@@ -1083,7 +1088,7 @@ async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationI
 
     const completeRes = await sendNativeRpc("download.completeChunkedTransfer", {
       taskId: effectiveTaskId,
-      totalBytes: directTotalBytes || Math.round(directDataB64.length * 0.75)
+      totalBytes: exactBytes
     }, customTransport);
 
     if (!completeRes || !completeRes.success) {
@@ -1181,6 +1186,17 @@ async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationI
   });
 }
 
+function exactBase64ByteLength(b64) {
+  if (!b64 || typeof b64 !== "string") return 0;
+  const clean = b64.replace(/\s+/g, "");
+  const len = clean.length;
+  if (len === 0) return 0;
+  let padding = 0;
+  if (clean.endsWith("==")) padding = 2;
+  else if (clean.endsWith("=")) padding = 1;
+  return Math.max(0, Math.floor((len * 3) / 4) - padding);
+}
+
 var transferBlobToFlux = transferBlobToRadium;
 
 async function onDownloadCreatedHandler(
@@ -1256,12 +1272,10 @@ async function onDownloadCreatedHandler(
     return { intercepted: false, reason: "BROWSER_INTERNAL_PAGE", mechanism };
   }
 
-  // 4. In Chromium/Brave/Edge, onCreated fires first. Pause the download immediately so no bytes transfer
-  // before filename determination and Flux eligibility check!
+  // 4. In Chromium/Brave/Edge, onCreated fires before onDeterminingFilename.
+  // Defer to onDeterminingFilename (which holds suggest() synchronously) without calling pause() prematurely,
+  // because pausing in onCreated can stall or prevent onDeterminingFilename from firing for redirects/dynamic URLs.
   if (phase === "created") {
-    if (!isBlob && G.enableCapture && typeof chrome !== "undefined" && chrome.downloads && typeof chrome.downloads.pause === "function" && downloadItem.id !== undefined) {
-      try { chrome.downloads.pause(downloadItem.id, () => { if (chrome.runtime) void chrome.runtime.lastError; }); } catch (_) {}
-    }
     if (typeof chrome !== "undefined" && chrome.downloads && chrome.downloads.onDeterminingFilename) {
       return { intercepted: false, reason: "DEFERRED_TO_FILENAME_DETERMINATION" };
     }
@@ -1299,17 +1313,15 @@ async function onDownloadCreatedHandler(
     effectiveTabId = clickedInfo.tabId;
   }
 
-  // If effectiveTabId is still unknown, attempt async resolution from matching web origin or active tab
-  if (effectiveTabId <= 0 && typeof chrome !== "undefined" && chrome.tabs && typeof chrome.tabs.query === "function") {
+  // Resolve effectiveTabId synchronously from tabUrlMap or only query tabs when a web blob needs tab context
+  if (effectiveTabId <= 0 && isWebBlob && typeof chrome !== "undefined" && chrome.tabs && typeof chrome.tabs.query === "function") {
     try {
       let originPattern = "";
-      if (isWebBlob) {
-        try {
-          const stripped = targetUrl.replace(/^blob:/i, "");
-          const origin = new URL(stripped).origin;
-          if (origin && origin !== "null") originPattern = origin + "/*";
-        } catch (_) {}
-      }
+      try {
+        const stripped = targetUrl.replace(/^blob:/i, "");
+        const origin = new URL(stripped).origin;
+        if (origin && origin !== "null") originPattern = origin + "/*";
+      } catch (_) {}
       if (originPattern) {
         const originTabs = await new Promise(r => chrome.tabs.query({ url: originPattern }, r));
         if (Array.isArray(originTabs) && originTabs.length > 0) {
@@ -1396,7 +1408,7 @@ async function onDownloadCreatedHandler(
     stage: "OBSERVED"
   });
 
-  if (!customTransport) await refreshNativeCaptureSettings();
+  if (!customTransport) refreshNativeCaptureSettings().catch(() => {});
   const eligibility = isDownloadEligible({
     url: downloadItem.url,
     finalUrl: targetUrl,
@@ -1472,9 +1484,12 @@ async function onDownloadCreatedHandler(
       if (pageReferrer && !headers.Referer && !headers.referer) {
         headers.Referer = pageReferrer;
       }
-      const cookieHeader = await collectCookiesForDownload(targetUrl, pageReferrer);
+      const cookieHeader = await collectCookiesForDownload(targetUrl, pageReferrer, downloadItem.url || "");
       if (cookieHeader && !headers.Cookie && !headers.cookie) {
         headers.Cookie = cookieHeader;
+      }
+      if (typeof navigator !== "undefined" && navigator.userAgent && !headers["User-Agent"] && !headers["user-agent"]) {
+        headers["User-Agent"] = navigator.userAgent;
       }
       rec.headers = headers;
 
@@ -2582,8 +2597,8 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
           dataB64 = btoa(binary);
         }
 
-        if (!totalBytes && dataB64) {
-          totalBytes = Math.round(dataB64.length * 0.75);
+        if (dataB64) {
+          totalBytes = exactBase64ByteLength(dataB64);
         }
 
         const transferId = "blob-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -3025,6 +3040,13 @@ if (typeof chrome !== "undefined") {
   if (chrome.downloads) {
     if (chrome.downloads.onDeterminingFilename) {
       chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
+        if (!G.enableCapture) {
+          return false;
+        }
+        const rawUrl = ((downloadItem && (downloadItem.finalUrl || downloadItem.url)) || "").toLowerCase();
+        if (rawUrl.startsWith("filesystem:") || rawUrl.startsWith("chrome-extension:") || rawUrl.startsWith("about:")) {
+          return false;
+        }
         onDownloadCreatedHandler(downloadItem, null, null, suggest, "determine").catch(() => {
           try { if (typeof suggest === "function") suggest(); } catch (_) {}
         });

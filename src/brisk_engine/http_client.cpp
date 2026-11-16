@@ -856,8 +856,8 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         if (!hSession) {
             return Result<HttpResponseMeta>::Err("ERR_NET_INIT", "WinHttpOpen failed", true);
         }
-        int resolve_timeout = std::clamp(timeout_ms, 2000, 15000);
-        int connect_timeout = std::clamp(timeout_ms, 3000, 15000);
+        int resolve_timeout = std::clamp(timeout_ms, 1500, 5000);
+        int connect_timeout = std::clamp(timeout_ms, 1500, 5000);
         int send_timeout = std::clamp(timeout_ms, 5000, 30000);
         int recv_timeout = std::clamp(timeout_ms, 5000, 60000);
 

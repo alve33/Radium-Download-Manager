@@ -627,7 +627,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             res["reason"] = add_res.error->code + ": " + add_res.error->message;
             return MakeRpcResult(id, std::move(res)).dump();
         }
-        if (!m_is_headless.load() && !auto_start) {
+        if (!m_is_headless.load() && !auto_start && add_res.value->error_code != "ERR_FILE_EXISTS") {
             std::lock_guard<std::mutex> lock(m_offer_mutex);
             if (m_offer_cb) {
                 m_offer_cb(*add_res.value);
@@ -902,6 +902,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
 
         TaskModel t;
         t.task_id = sess.task_id;
+        t.task_type = TaskType::kHttpFile;
         t.file_name = sess.filename;
         t.page_url = sess.page_url;
         t.save_dir = sess.save_dir;
@@ -909,26 +910,60 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         t.correlation_id = sess.correlation_id;
         t.total_bytes = sess.bytes_written;
 
-        auto ingest_res = m_controller.IngestCompletedTask(std::move(t), sess.staging_path);
-        if (!ingest_res.ok()) {
+        if (m_is_headless.load()) {
+            auto ingest_res = m_controller.IngestCompletedTask(std::move(t), sess.staging_path);
+            if (!ingest_res.ok()) {
+                std::error_code ec;
+                std::filesystem::remove(sess.staging_path, ec);
+                json::Value res = json::Object{};
+                res["success"] = false;
+                res["error"] = ingest_res.error->code + ": " + ingest_res.error->message;
+                return MakeRpcResult(id, std::move(res)).dump();
+            }
+            json::Value res = json::Object{};
+            res["success"] = true;
+            res["taskId"] = ingest_res.value->task_id;
+            res["fileName"] = ingest_res.value->file_name;
+            res["saveDir"] = ingest_res.value->save_dir;
+            res["totalBytes"] = static_cast<int64_t>(ingest_res.value->total_bytes);
+            return MakeRpcResult(id, std::move(res)).dump();
+        }
+
+        // In GUI mode, queue the staged blob transfer paused and route through the standard
+        // Conflict ("Download Already Exists") or "New Download" sub-window before committing.
+        t.part_path = PathSanitizer::PathToUtf8(sess.staging_path);
+        t.downloaded_bytes = 0;
+        if (t.save_dir.empty()) {
+            const auto& settings = m_controller.GetSettings();
+            t.save_dir = settings.default_download_dir.empty()
+                ? m_controller.GetConfig().default_download_dir.string()
+                : settings.default_download_dir;
+        }
+        auto add_res = m_controller.AddTask(std::move(t), false, false);
+        if (!add_res.ok()) {
             std::error_code ec;
             std::filesystem::remove(sess.staging_path, ec);
             json::Value res = json::Object{};
             res["success"] = false;
-            res["error"] = ingest_res.error->code + ": " + ingest_res.error->message;
+            res["error"] = add_res.error->code + ": " + add_res.error->message;
             return MakeRpcResult(id, std::move(res)).dump();
         }
 
-        if (m_offer_cb) {
-            m_offer_cb(*ingest_res.value);
+        if (add_res.value->error_code != "ERR_FILE_EXISTS") {
+            std::lock_guard<std::mutex> lock(m_offer_mutex);
+            if (m_offer_cb) {
+                m_offer_cb(*add_res.value);
+            } else {
+                m_pending_offers.push_back(*add_res.value);
+            }
         }
 
         json::Value res = json::Object{};
         res["success"] = true;
-        res["taskId"] = ingest_res.value->task_id;
-        res["fileName"] = ingest_res.value->file_name;
-        res["saveDir"] = ingest_res.value->save_dir;
-        res["totalBytes"] = static_cast<int64_t>(ingest_res.value->total_bytes);
+        res["taskId"] = add_res.value->task_id;
+        res["fileName"] = add_res.value->file_name;
+        res["saveDir"] = add_res.value->save_dir;
+        res["totalBytes"] = static_cast<int64_t>(add_res.value->total_bytes);
         return MakeRpcResult(id, std::move(res)).dump();
     }
 
@@ -1252,10 +1287,9 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         t.stream_options.custom_hls_key_hex = params["customKeyHex"].as_string("");
         t.stream_options.cached_manifest_body = cached_body;
 
-        // If autoStart is requested (e.g. headless daemon / automated test mode or explicit bypass),
-        // start network transfer immediately. Otherwise in GUI mode, queue paused and show
-        // the Win32 New Download dialog so the user can choose destination and quality.
-        bool auto_start = m_is_headless.load() || params["autoStart"].as_bool(false);
+        // Never auto-start browser-intercepted streams in GUI mode; always route to
+        // the Win32 Conflict ("Download Already Exists") or "New Download" sub-window.
+        bool auto_start = m_is_headless.load();
 
         // User's conflict_policy is preserved so if destination file exists, the conflict warning shows first
         uint64_t client_click_ms = static_cast<uint64_t>(params["clientClickTime"].as_int64(0));
@@ -1283,7 +1317,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             return MakeRpcError(id, -32602, add_res.error->code + ": " + add_res.error->message).dump();
         }
 
-        if (!m_is_headless.load() && !auto_start) {
+        if (!m_is_headless.load() && !auto_start && add_res.value->error_code != "ERR_FILE_EXISTS") {
             std::lock_guard<std::mutex> lock(m_offer_mutex);
             if (m_offer_cb) {
                 m_offer_cb(*add_res.value);

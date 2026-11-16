@@ -714,13 +714,19 @@ Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const 
     }
     std::filesystem::create_directories(task.save_dir, ec);
 
+    ConflictPolicy effective_policy = (task.conflict_policy != ConflictPolicy::kPrompt)
+        ? task.conflict_policy
+        : settings_snapshot.conflict_policy;
     auto staged_commit = PathSanitizer::CommitPartFile(
-        staged_file_path, task.save_dir, task.file_name, settings_snapshot.conflict_policy, file_size);
+        staged_file_path, task.save_dir, task.file_name, effective_policy, file_size);
     if (!staged_commit.ok()) {
         return Result<TaskModel>::Err(staged_commit.error->code, staged_commit.error->message);
     }
     std::filesystem::path dest_path = *staged_commit.value;
     task.file_name = PathSanitizer::PathToUtf8(dest_path.filename());
+    task.part_path.clear();
+    task.error_code.clear();
+    task.error_message.clear();
 
     if (task.created_at_ms <= 0) {
         task.created_at_ms = NowEpochMs();
@@ -1433,6 +1439,25 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
             }
         }
     } else if (local_task.task_type == TaskType::kHttpFile) {
+        if (local_task.url.rfind("blob:", 0) == 0 && !local_task.part_path.empty()) {
+            auto ingest_res = IngestCompletedTask(local_task, PathSanitizer::Utf8ToPath(local_task.part_path));
+            if (ingest_res.ok()) {
+                local_task = *ingest_res.value;
+            } else {
+                local_task.state = TaskState::kFailed;
+                local_task.error_code = ingest_res.error->code;
+                local_task.error_message = ingest_res.error->message;
+                local_task.status_detail = (ingest_res.error->code == "ERR_FILE_EXISTS")
+                    ? "Waiting for a file conflict choice"
+                    : ("Failed: " + ingest_res.error->message);
+                if (ingest_res.error->code == "ERR_FILE_EXISTS") {
+#ifdef _WIN32
+                    HWND hwnd_main = FindWindowW(L"Radium_MainWindowClass", nullptr);
+                    if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_OPENIDM_SHOW_CONFLICT */, 0, 0);
+#endif
+                }
+            }
+        } else {
         brisk::EngineConfig ecfg;
         ecfg.stall_timeout_ms = stall_timeout_ms;
         ecfg.min_split_bytes = min_split_bytes;
@@ -1575,6 +1600,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 local_task.status_detail = "Failed: " + res.error->message;
                 OPENIDM_LOG_ERROR("Controller", "HTTP task " + task_id + " FAILED [" + local_task.error_code + "]: " + local_task.error_message + " (URL: " + local_task.url + ")");
             }
+        }
         }
     } else {
         stream::StreamAdapterConfig scfg{
