@@ -1,18 +1,18 @@
-# Flux Download Manager — Automated Competitor Benchmark Report
+# Radium Download Manager — Automated Competitor Benchmark Report
 
 **Execution Environment:** `GitHub Actions Hosted Windows Runner`  
 **Execution Timestamp (UTC):** `2026-10-20`  
 **Host Platform:** `Windows 2022Server (AMD64)`  
 **Processor:** `AMD64 Family 25 Model 1 Stepping 1, AuthenticAMD` (4 logical cores)  
 **System RAM:** `15.99 GB`  
-**Runner Label:** `GitHub Actions 1000006455` (GitHub Actions: `True`)  
-**Commit SHA:** [`c5f68f4`](https://github.com/sayedalve/Radium-Download-Manager/commit/c5f68f4c95154e77bb8bfb59993fbd878554598d)  
+**Runner Label:** `GitHub Actions 1000000016` (GitHub Actions: `True`)  
+**Commit SHA:** [`0139aa1`](https://github.com/sayedalve/Radium-Download-Manager/commit/0139aa13af02c0f87f1f43ae680201d5859b9eec)  
 
 ---
 
 ## 1. Executive Summary & Tool Testability Status
 
-This automated benchmark suite executes a controlled, repeatable performance and resource comparison between **Flux Download Manager** and major industry download engines on a dedicated Windows runner.
+This automated benchmark suite executes a controlled, repeatable performance and resource comparison between **Radium Download Manager** and major industry download engines on a dedicated Windows runner.
 
 | Candidate Tool | Tested Configuration | Acquisition / Test Status | Technical Details & Transparency Notes |
 | :--- | :--- | :--- | :--- |
@@ -39,9 +39,9 @@ Evaluates maximum unthrottled loopback throughput, segment scheduling, and memor
 
 | Tool | Connections | Status | Median Time | Median Throughput (MiB/s) | Median Throughput (Mbps) | Peak RSS (MB) | CPU Time (ms) | Peak Conns | SHA256 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Radium Download Manager** | 8 | `COMPLETED` | **1.073 s** | **238.57 MiB/s** | 2001.2 Mbps | 14.02 MB | 281.2 ms | 7 | PASS |
-| **Radium Download Manager** | 32 | `COMPLETED` | **1.521 s** | **168.30 MiB/s** | 1411.8 Mbps | 17.16 MB | 359.4 ms | 7 | PASS |
-| **aria2** | 16 | `COMPLETED` | **1.379 s** | **185.57 MiB/s** | 1556.7 Mbps | 22.65 MB | 437.5 ms | 13 | PASS |
+| **Radium Download Manager** | 8 | `COMPLETED` | **1.049 s** | **244.07 MiB/s** | 2047.4 Mbps | 14.95 MB | 2078.1 ms | 7 | PASS |
+| **Radium Download Manager** | 32 | `COMPLETED` | **1.577 s** | **162.34 MiB/s** | 1361.8 Mbps | 18.42 MB | 2031.2 ms | 8 | PASS |
+| **aria2** | 16 | `COMPLETED` | **1.369 s** | **187.03 MiB/s** | 1568.9 Mbps | 21.54 MB | 421.9 ms | 13 | PASS |
 | **Internet Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **Free Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
@@ -56,9 +56,9 @@ Evaluates parallel work-stealing speedup under server-enforced per-connection ra
 
 | Tool | Connections | Status | Median Time | Median Throughput (MiB/s) | Median Throughput (Mbps) | Peak RSS (MB) | CPU Time (ms) | Peak Conns | SHA256 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Radium Download Manager** | 8 | `COMPLETED` | **8.482 s** | **7.55 MiB/s** | 63.3 Mbps | 14.23 MB | 31.2 ms | 6 | PASS |
-| **Radium Download Manager** | 32 | `COMPLETED` | **2.970 s** | **21.55 MiB/s** | 180.8 Mbps | 23.48 MB | 78.1 ms | 32 | PASS |
-| **aria2** | 16 | `COMPLETED` | **4.360 s** | **14.68 MiB/s** | 123.1 Mbps | 21.89 MB | 78.1 ms | 15 | PASS |
+| **Radium Download Manager** | 8 | `COMPLETED` | **8.173 s** | **7.83 MiB/s** | 65.7 Mbps | 14.87 MB | 406.2 ms | 7 | PASS |
+| **Radium Download Manager** | 32 | `COMPLETED` | **2.708 s** | **23.64 MiB/s** | 198.3 Mbps | 23.67 MB | 468.8 ms | 35 | PASS |
+| **aria2** | 16 | `COMPLETED` | **4.359 s** | **14.68 MiB/s** | 123.2 Mbps | 22.91 MB | 140.6 ms | 14 | PASS |
 | **Internet Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **Free Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
@@ -73,9 +73,9 @@ Verifies graceful single-stream fallback when server does not support RFC 7233 b
 
 | Tool | Connections | Status | Median Time | Median Throughput (MiB/s) | Median Throughput (Mbps) | Peak RSS (MB) | CPU Time (ms) | Peak Conns | SHA256 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Radium Download Manager** | 8 | `COMPLETED` | **0.207 s** | **77.19 MiB/s** | 647.5 Mbps | 11.96 MB | 31.2 ms | 1 | PASS |
-| **Radium Download Manager** | 32 | `COMPLETED` | **0.207 s** | **77.14 MiB/s** | 647.1 Mbps | 11.95 MB | 31.2 ms | 1 | PASS |
-| **aria2** | 16 | `COMPLETED` | **0.107 s** | **148.87 MiB/s** | 1248.8 Mbps | 11.23 MB | 78.1 ms | 7 | PASS |
+| **Radium Download Manager** | 8 | `COMPLETED` | **0.228 s** | **70.19 MiB/s** | 588.8 Mbps | 12.47 MB | 125.0 ms | 1 | PASS |
+| **Radium Download Manager** | 32 | `COMPLETED` | **0.179 s** | **89.61 MiB/s** | 751.7 Mbps | 12.45 MB | 125.0 ms | 1 | PASS |
+| **aria2** | 16 | `COMPLETED` | **0.090 s** | **177.25 MiB/s** | 1486.9 Mbps | 11.30 MB | 78.1 ms | 9 | PASS |
 | **Internet Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **Free Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
@@ -86,8 +86,8 @@ Verifies graceful single-stream fallback when server does not support RFC 7233 b
 
 In **Scenario B** (throttled at 1 MiB/s per connection), the download engine's ability to spawn and saturate parallel connections is directly measured:
 
-1. **Flux (32 connections)** dynamically scales connections up to the configured limit, providing maximum throughput on rate-limited CDN endpoints.
-2. **Flux (8 connections)** saturates exactly 8 connections with minimal CPU and working set memory footprint.
+1. **Radium (32 connections)** dynamically scales connections up to the configured limit, providing maximum throughput on rate-limited CDN endpoints.
+2. **Radium (8 connections)** saturates exactly 8 connections with minimal CPU and working set memory footprint.
 3. **Brisk Work-Stealing Algorithm:** Splits remaining segments dynamically without blocking or leaving unmerged chunk files.
 4. **Zero Leftover Temporary Files:** All temporary files are cleanly renamed upon completion, leaving 0 orphan files.
 
@@ -98,9 +98,9 @@ In **Scenario B** (throttled at 1 MiB/s per connection), the download engine's a
 To reproduce this exact benchmark suite locally or on a private CI runner:
 
 ```powershell
-# 1. Build Flux Release binary
+# 1. Build Radium Release binary
 cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release --target flux
+cmake --build build --config Release --target radium
 
 # 2. Execute benchmark comparison suite
 python scripts/run-competitor-benchmarks.py --mode local
