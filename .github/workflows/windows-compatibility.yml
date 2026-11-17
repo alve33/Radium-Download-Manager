@@ -102,7 +102,7 @@ jobs:
             build/Release/radium_unit_tests.exe
             build/Release/radium_core_tests.exe
             build/Release/N_m3u8DL-RE.exe
-            build/Release/locales/**
+            build/Release/translations/**
             tools/win-x64/**
             dist/**
 
