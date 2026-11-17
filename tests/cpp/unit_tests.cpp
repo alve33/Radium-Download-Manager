@@ -900,6 +900,7 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
 
     // 9. Settings persistence & restore defaults (preserving dark mode palette)
     openidm::AppSettings custom_s = ctrl.GetSettings();
+    custom_s.theme = "dark";
     custom_s.max_concurrent_tasks = 6;
     custom_s.speed_limit_bps = 5242880;
     ASSERT_TRUE(view.ActionSaveSettings(custom_s).ok(), "Save custom settings");
@@ -3426,6 +3427,7 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
 
     // 5. DesktopView Settings Modal Hit Testing Bounds & Click-Through Absorption
     openidm::ui::DesktopView view(ctrl);
+    view.SetTheme("dark");
     auto theme_geometry = view.ComputeLayoutGeometry();
     ASSERT_TRUE(theme_geometry.theme_button_rect.width() > 0 && theme_geometry.theme_button_rect.height() > 0,
                 "Standalone theme switch has a visible toolbar hit target");
@@ -3739,6 +3741,7 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
     t_failed.created_at_ms = 1700000003000ULL;
     ASSERT_TRUE(ctrl.AddTask(t_failed, false, true).ok(), "Add failed task");
 
+    view.SetTheme("dark");
     auto rows = view.BuildVisibleTaskRows();
     ASSERT_TRUE(rows.size() >= 5, "View model generated rows for all tasks");
 
