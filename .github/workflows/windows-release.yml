@@ -771,4 +771,9 @@ jobs:
             Write-Host "Confirmed on GitHub draft: $($asset.name) ($($asset.size) bytes)"
           }
           gh release edit $tag --draft=false
+          $apiAssets = (gh api "repos/${{ github.repository }}/releases/tags/$tag" | ConvertFrom-Json).assets
+          $x64AssetId = ($apiAssets | Where-Object { $_.name -eq "Radium-Setup-x64-$ver.exe" } | Select-Object -First 1).id
+          if ($x64AssetId) {
+            gh api -X PATCH "repos/${{ github.repository }}/releases/assets/$x64AssetId" -f "label=Radium-Setup-x64-$ver.exe (Recommended for most users)" | Out-Null
+          }
           Write-Host "Published official GitHub Release: $($releaseJson.name) ($tag)"
