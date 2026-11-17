@@ -221,12 +221,13 @@ def main():
 
         # Step 2: Verify Installed Binaries and Assets
         print("\n[Step 2/8] Auditing Installed Files and Worker Binaries...")
+        tools_subdir = "win-arm64" if args.arch.upper() == "ARM64" else "win-x64"
         required_files = [
             install_dir / "radium.exe" if (install_dir / "radium.exe").exists() else install_dir / "flux.exe",
             install_dir / "radium-nmh.exe" if (install_dir / "radium-nmh.exe").exists() else install_dir / "flux-nmh.exe",
-            install_dir / "tools" / "win-x64" / "N_m3u8DL-RE.exe",
-            install_dir / "tools" / "win-x64" / "ffmpeg.exe",
-            install_dir / "tools" / "win-x64" / "yt-dlp.exe",
+            install_dir / "tools" / tools_subdir / "N_m3u8DL-RE.exe",
+            install_dir / "tools" / tools_subdir / "ffmpeg.exe",
+            install_dir / "tools" / tools_subdir / "yt-dlp.exe",
             install_dir / "extension" / "manifest.json",
             install_dir / "extension" / "js" / "background.js",
             install_dir / "extension" / "popup.html",
