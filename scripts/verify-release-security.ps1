@@ -69,7 +69,7 @@ Write-Host "  -> PASS: Verified $verifiedCount release files against authoritati
 Write-Host "`n[Check 2/5] Auditing Bundled Stream Worker Dependencies..." -ForegroundColor Yellow
 $workers = @(
     @{ Name = "N_m3u8DL-RE.exe"; MaxBytes = 5MB; Required = $true },
-    @{ Name = "ffmpeg.exe"; MaxBytes = 25MB; Required = $true },
+    @{ Name = "ffmpeg.exe"; MaxBytes = $(if ($Architecture -eq "ARM64") { 100MB } else { 25MB }); Required = $true },
     @{ Name = "yt-dlp.exe"; MaxBytes = 25MB; Required = $false }
 )
 

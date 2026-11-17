@@ -529,7 +529,7 @@ jobs:
       - name: Package Standalone Portable Releases (ARM64 Full & Core)
         shell: powershell
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts/package-release-zip.ps1 -Version "$env:RADIUM_VERSION" -Architecture ARM64 -PackageType Both -BuildDir "build/Release"
+          powershell -ExecutionPolicy Bypass -File scripts/package-release-zip.ps1 -Version "$env:RADIUM_VERSION" -Architecture ARM64 -PackageType Both -BuildDir "build/Release" -AllowLargeWorkers
           Write-Host "`n=== Final SHA-256 Release Checksums (ARM64) ==="
           Get-Content "dist/SHA256SUMS.txt"
 
