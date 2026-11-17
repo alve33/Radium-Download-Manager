@@ -17,7 +17,7 @@ struct ProductInfo {
     static constexpr std::string_view kPublisherDisplayName = "Radium Contributors";
     static constexpr std::string_view kCompanyName = "Radium Open Source Contributors";
     static constexpr std::string_view kCopyright = "Copyright (C) 2026 Sayed Alve and Radium Contributors. Licensed under Apache-2.0.";
-    static constexpr std::string_view kUrl = "https://github.com/sayedalve/Radium-Download-Manager";
+    static constexpr std::string_view kUrl = "https://github.com/alve33/Radium-Download-Manager";
     static constexpr std::string_view kExecutableName = "radium.exe";
     static constexpr std::string_view kNmhName = "radium-nmh.exe";
     static constexpr std::string_view kMsixPackageName = "RadiumDownloadManager";
@@ -96,9 +96,9 @@ struct UpdateAndReleaseConfig {
     static constexpr std::string_view kUpdateCheckPolicy = "manual_and_startup";
     static constexpr std::string_view kStableChannel = "stable";
     static constexpr std::string_view kBetaChannel = "beta";
-    static constexpr std::string_view kGithubRepoUrl = "https://github.com/sayedalve/Radium-Download-Manager";
-    static constexpr std::string_view kApiLatestReleaseUrl = "https://api.github.com/repos/sayedalve/Radium-Download-Manager/releases/latest";
-    static constexpr std::string_view kReleasePrefixUrl = "https://github.com/sayedalve/Radium-Download-Manager/releases/";
+    static constexpr std::string_view kGithubRepoUrl = "https://github.com/alve33/Radium-Download-Manager";
+    static constexpr std::string_view kApiLatestReleaseUrl = "https://api.github.com/repos/alve33/Radium-Download-Manager/releases/latest";
+    static constexpr std::string_view kReleasePrefixUrl = "https://github.com/alve33/Radium-Download-Manager/releases/";
     static constexpr std::string_view kMinSupportedWindowsVersion = "10.0.17763.0";
     static constexpr std::string_view kTargetWindowsVersion = "10.0.26100.0";
 };

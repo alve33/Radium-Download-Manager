@@ -23,13 +23,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="أحدث إصدار" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="تنزيل لنظام Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="أحدث إصدار" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="تنزيل لنظام Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="لغة البرمجة: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="واجهة المستخدم: Win32 أصلية" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
   <img alt="ملحق المتصفح: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
   <img alt="الترخيص: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="بناء إصدار Windows" src="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="بناء إصدار Windows" src="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
 </p>
 
 <p align="center">
@@ -78,8 +78,8 @@
 
 | الحزمة | المعمارية | رابط التنزيل |
 | :--- | :---: | :--- |
-| **Radium المحمول (الكامل)** | x64 | [أرشيف ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
-| **Radium المحمول (النواة الأساسية)** | x64 | [أرشيف ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
+| **Radium المحمول (الكامل)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
+| **Radium المحمول (النواة الأساسية)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
 
 ### التثبيت السريع لملحق المتصفح
 
@@ -265,7 +265,7 @@ flowchart TD
 
 ```powershell
 # استنساخ المستودع
-git clone https://github.com/sayedalve/Radium-Download-Manager.git
+git clone https://github.com/alve33/Radium-Download-Manager.git
 cd Radium-Download-Manager
 
 # بناء كافة الملفات التنفيذية وحزمة التشغيل المحمولة

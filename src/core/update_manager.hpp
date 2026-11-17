@@ -5,10 +5,13 @@
 // and cryptographically verifies release package SHA-256 hashes before staging.
 
 #include <string>
+#include <string_view>
 #include <vector>
+#include <map>
 #include <optional>
 #include <filesystem>
 #include "common/types.hpp"
+#include "common/json_mini.hpp"
 
 namespace radium::core {
 
@@ -42,10 +45,51 @@ struct UpdateCheckResult {
     UpdatePackageInfo latest_package;
 };
 
+struct UpdateAssetInfo {
+    std::string name;
+    std::string download_url;
+    uint64_t size_bytes{0};
+    bool is_installer{false};
+    bool is_core_installer{false};
+};
+
+struct GitHubUpdateEvaluation {
+    bool success{false};
+    bool update_available{false};
+    bool matching_installer{false};
+    bool is_rate_limited{false};
+    bool is_not_found{false};
+    std::string version;
+    std::string release_url;
+    std::string release_notes;
+    std::optional<UpdateAssetInfo> selected_asset;
+    std::string message;
+};
+
 class UpdateManager {
 public:
     UpdateManager() = default;
     ~UpdateManager() = default;
+
+    static std::string CurrentArchitecture();
+
+    static bool IsTrustedReleaseUrl(std::string_view url, std::string_view expected_prefix = {});
+
+    static std::optional<UpdateAssetInfo> SelectReleaseAsset(
+        const openidm::json::Array& assets,
+        std::string_view target_arch,
+        std::string_view expected_release_prefix = {});
+
+    static GitHubUpdateEvaluation EvaluateGitHubReleaseResponse(
+        int http_status,
+        const std::map<std::string, std::string>& response_headers,
+        std::string_view response_body,
+        std::string_view current_version,
+        std::string_view target_arch,
+        bool allow_prerelease = false,
+        std::string_view expected_release_prefix = {});
+
+    static std::string FormatNetworkCheckError(const openidm::Error& error);
 
     // Parses a JSON release manifest (e.g. from GitHub releases or official Radium update server)
     static openidm::Result<UpdatePackageInfo> ParseReleaseManifest(std::string_view json_content);

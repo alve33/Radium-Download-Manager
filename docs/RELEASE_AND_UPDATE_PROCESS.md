@@ -29,7 +29,7 @@ Both the desktop application (`CMakeLists.txt` `VERSION 0.3.0`) and browser exte
    - Builds `Radium-Setup-x64-vX.Y.Z.exe` via Inno Setup 6 (`installer/radium.iss` / `installer/radium.iss`), configured with lowest privilege execution (`{autopf}`) and component selection.
    - Packages standalone portable archives (`Radium-vX.Y.Z-Windows-x64-Full.zip` and `Radium-vX.Y.Z-Windows-x64-Core.zip`) via `scripts/package-release-zip.ps1`.
    - Computes SHA-256 digests for all generated packages in `dist/SHA256SUMS.txt`.
-   - Drafts a GitHub Release on `https://github.com/sayedalve/Radium-Download-Manager/releases` with attached distribution packages and licenses.
+   - Drafts a GitHub Release on `https://github.com/alve33/Radium-Download-Manager/releases` with attached distribution packages and licenses.
 
 ---
 
@@ -52,7 +52,7 @@ Every GitHub Release (`vX.Y.Z`) publishes the following complete artifact set:
 
 ### Current implementation boundary (2026-11-01)
 
-The Settings action queries `https://api.github.com/repos/sayedalve/Radium-Download-Manager/releases/latest`, rejects draft/prerelease/malformed responses, compares the release tag to `RADIUM_VERSION_STRING` using SemVer, displays release notes, and reports whether an x64/ARM64 installer asset is attached. “Open release page” opens only a URL under the official repository releases path.
+The Settings action queries `https://api.github.com/repos/alve33/Radium-Download-Manager/releases/latest`, rejects draft/prerelease/malformed responses, compares the release tag to `RADIUM_VERSION_STRING` using SemVer, displays release notes, and reports whether an x64/ARM64 installer asset is attached. “Open release page” opens only a URL under the official repository releases path.
 
 Automatic installer download or execution is intentionally not implemented. Repository inspection found no published `update-manifest.json`/signature asset, no Ed25519 public key in source or release configuration, no signing workflow/key configuration, and no configured expected Authenticode publisher identity. SHA256SUMS alone is not an authenticated trust root. Until those inputs are provisioned and the release workflow publishes verifiable metadata, the updater must not execute downloaded binaries.
 

@@ -411,3 +411,12 @@ The per-peer outstanding block request window was raised from 6 to 64 (96 KiB to
 | `radium_unit_tests.exe` | **PASS, 81/81 suites**; includes responsive sidebar/table insets, compact toolbar bounds, details actions, DPI metrics, selection, filtering, sorting, and hit testing. |
 | Dark/light reference-scale live visual comparison | **Pending**; the running portable executable must be closed before the staged `dist/Radium.exe` can be replaced and inspected. |
 
+# Startup latency regression (2026-11-17)
+
+`TestSchedulerCapacityWait` in the dedicated core suite isolates exhausted capacity
+without remote networking. Baseline: 1,418,492 scheduler passes in 250 ms (FAIL).
+After fix: 4 passes in 250 ms (PASS); MSVC Release, 82/82 regression suites,
+7/7 dedicated core suites, and 10/10 local HTTP integration checks pass.
+`tests/benchmark_startup.py` performs five fresh-process local 1 MiB transfers,
+records server request arrival and task event timings, and checks SHA-256.
+See `audit/startup-performance-2026-11-17.md` for final results and test limitations.

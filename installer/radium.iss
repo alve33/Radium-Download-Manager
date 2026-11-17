@@ -16,7 +16,7 @@
   #define MyAppVersion "1.0.0"
 #endif
 #define MyAppPublisher "Radium Contributors"
-#define MyAppURL "https://github.com/sayedalve/Radium-Download-Manager"
+#define MyAppURL "https://github.com/alve33/Radium-Download-Manager"
 #define MyAppExeName "radium.exe"
 #define MyAppNmhName "radium-nmh.exe"
 

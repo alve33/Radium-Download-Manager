@@ -735,7 +735,31 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         }
         ParsedUrl pu = *parsed_res.value;
         auto dns_check_start = std::chrono::steady_clock::now();
-        bool host_is_private = pu.is_loopback_or_private || HttpClient::CheckHostResolvesToPrivate(pu.host);
+        bool host_is_private = pu.is_loopback_or_private;
+        if (!host_is_private) {
+            static std::mutex s_dns_cache_mu;
+            struct DnsCacheEntry {
+                bool is_private;
+                std::chrono::steady_clock::time_point expires_at;
+            };
+            static std::map<std::string, DnsCacheEntry> s_dns_cache;
+            const std::string host_key = ToLower(pu.host);
+            const auto now_tp = std::chrono::steady_clock::now();
+            bool cache_hit = false;
+            {
+                std::lock_guard<std::mutex> lk(s_dns_cache_mu);
+                auto it = s_dns_cache.find(host_key);
+                if (it != s_dns_cache.end() && now_tp < it->second.expires_at) {
+                    host_is_private = it->second.is_private;
+                    cache_hit = true;
+                }
+            }
+            if (!cache_hit) {
+                host_is_private = HttpClient::CheckHostResolvesToPrivate(pu.host);
+                std::lock_guard<std::mutex> lk(s_dns_cache_mu);
+                s_dns_cache[host_key] = DnsCacheEntry{host_is_private, now_tp + std::chrono::seconds(60)};
+            }
+        }
         if (net_opts.on_timing) {
             auto dns_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - dns_check_start).count();
@@ -837,12 +861,8 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
                     WinHttpSetOption(hSession, WINHTTP_OPTION_MAX_CONNS_PER_SERVER, &max_conns, sizeof(max_conns));
                     WinHttpSetOption(hSession, WINHTTP_OPTION_MAX_CONNS_PER_1_0_SERVER, &max_conns, sizeof(max_conns));
 
-                    // Enable modern HTTP/2 and HTTP/3 protocol flags for multiplexing and TCP efficiency on supported Windows versions
-                    DWORD http_protocols = WINHTTP_PROTOCOL_FLAG_HTTP2;
-#if defined(WINHTTP_PROTOCOL_FLAG_HTTP3)
-                    http_protocols |= WINHTTP_PROTOCOL_FLAG_HTTP3;
-#endif
-                    WinHttpSetOption(hSession, WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &http_protocols, sizeof(http_protocols));
+                    // Use HTTP/1.1 by default so each segmented worker gets its own independent TCP connection
+                    // rather than multiplexing all workers over a single HTTP/2 TCP stream.
 
                     // Enable TCP Fast Open to eliminate connection handshake RTT
 #if defined(WINHTTP_OPTION_TCP_FAST_OPEN)
@@ -858,8 +878,8 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         }
         int resolve_timeout = std::clamp(timeout_ms, 1500, 5000);
         int connect_timeout = std::clamp(timeout_ms, 1500, 5000);
-        int send_timeout = std::clamp(timeout_ms, 5000, 30000);
-        int recv_timeout = std::clamp(timeout_ms, 5000, 60000);
+        int send_timeout = std::clamp(timeout_ms, 3000, 30000);
+        int recv_timeout = std::clamp(timeout_ms, 3000, 60000);
 
         std::wstring whost = Utf8ToWide(pu.host);
         HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(), pu.port, 0);
@@ -884,7 +904,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         WinHttpSetOption(hRequest, WINHTTP_OPTION_DISABLE_FEATURE, &disable_redirects, sizeof(disable_redirects));
 
         // Optimize TCP read buffer for high-speed segmented downloading
-        DWORD read_buf_size = 262144; // 256 KiB socket read buffer
+        DWORD read_buf_size = 524288; // 512 KiB socket read buffer
         WinHttpSetOption(hRequest, WINHTTP_OPTION_READ_BUFFER_SIZE, &read_buf_size, sizeof(read_buf_size));
 
         // Windows Integrated Authentication (Negotiate / NTLM autologon for domain/intranet)
@@ -1030,7 +1050,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         }
 
         uint64_t bytes_delivered = 0;
-        constexpr size_t kSocketBufSize = 262144;
+        constexpr size_t kSocketBufSize = 524288;
         auto rbuf = std::make_unique<uint8_t[]>(kSocketBufSize);
         auto first_body_byte_start = std::chrono::steady_clock::now();
         bool recorded_first_body_byte = false;
@@ -1039,16 +1059,9 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
                 cleanup_winhttp();
                 return Result<HttpResponseMeta>::Err("ERR_CANCELED", "Transfer canceled");
             }
-            DWORD bytes_avail = 0;
-            if (!WinHttpQueryDataAvailable(hRequest, &bytes_avail)) {
-                DWORD err = GetLastError();
-                cleanup_winhttp();
-                return Result<HttpResponseMeta>::Err("ERR_NET_TIMEOUT", "WinHttpQueryDataAvailable failed (error " + std::to_string(err) + ")", true, true);
-            }
-            if (bytes_avail == 0) break;
-            DWORD to_read = std::clamp<DWORD>(bytes_avail, 4096, static_cast<DWORD>(kSocketBufSize));
-            if (bytes_delivered == 0 && to_read > 16384) {
-                to_read = 16384; // Deliver first chunk immediately without waiting to fill 256 KiB
+            DWORD to_read = static_cast<DWORD>(kSocketBufSize);
+            if (bytes_delivered == 0) {
+                to_read = 16384; // Deliver first chunk immediately without waiting to fill 512 KiB
             }
             DWORD bytes_read = 0;
             if (!WinHttpReadData(hRequest, rbuf.get(), to_read, &bytes_read)) {

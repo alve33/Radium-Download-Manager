@@ -1547,6 +1547,16 @@ runTests().catch((err) => {
     assert.strictEqual(fsaPosted[0].mimeType, 'text/markdown');
     assert.strictEqual(Buffer.from(fsaPosted[0].dataBase64, 'base64').toString('utf8'), '# Radium\n');
     console.log('  -> PASS: File System Access API (showSaveFilePicker) interception regression assertion passed');
+
+    // Verify catch.js synchronous XHR blob lock + data-radium-bypass attribute + content-script ISOLATED fetch fallback
+    assert.ok(catchSrc.includes('xhr.responseType = "blob"'), 'catch.js must synchronously initiate XHR blob lock before URL.revokeObjectURL');
+    assert.ok(catchSrc.includes('setAttribute("data-radium-bypass", "true")'), 'catch.js fallback anchors must set data-radium-bypass DOM attribute');
+    const csFull = fs.readFileSync(path.join(__dirname, '..', 'extension', 'js', 'content-script.js'), 'utf8');
+    assert.ok(csFull.includes('fetch(ev.data.url).then(r => r.blob())'), 'content-script.js must read empty-base64 blob URLs in ISOLATED world before background RPC');
+    const bgFull = fs.readFileSync(path.join(__dirname, '..', 'extension', 'js', 'background.js'), 'utf8');
+    assert.ok(bgFull.includes('action: "radiumFetchBlobData"') && bgFull.includes('Could not read blob payload from page or background context'),
+      'background.js interceptBlobDownload must fall back to radiumFetchBlobData when Service Worker fetch fails');
+    console.log('  -> PASS: Unregistered blob XHR lock, ISOLATED fetch, and radiumFetchBlobData fallback assertions passed');
   })().catch((err) => {
     console.error(err);
     process.exit(1);

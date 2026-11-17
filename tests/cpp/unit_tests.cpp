@@ -1,5 +1,6 @@
 #include "engine_torrent/torrent_creator.hpp"
 #include "core/update_manager.hpp"
+#include "common/central_config.hpp"
 #include "common/settings_serializer.hpp"
 #include "ui/localization.hpp"
 // SPDX-License-Identifier: Apache-2.0
@@ -7114,19 +7115,28 @@ bool TestUniversal11Outof10QualityAndPolish() {
     auto v1 = SemVer::Parse("1.0.0");
     auto v2 = SemVer::Parse("v1.0.1");
     auto v_beta = SemVer::Parse("1.0.1-beta.1");
-    assert(v1.has_value() && v2.has_value() && v_beta.has_value());
+    auto v_alpha2 = SemVer::Parse("1.0.0-alpha.2");
+    auto v_alpha10 = SemVer::Parse("1.0.0-alpha.10");
+    assert(v1.has_value() && v2.has_value() && v_beta.has_value() && v_alpha2.has_value() && v_alpha10.has_value());
     assert(*v1 < *v2);
     assert(*v_beta < *v2);
+    assert(*v_alpha2 < *v_alpha10);
     assert(UpdateManager::IsNewerVersion("1.0.0", "1.0.1"));
     assert(!UpdateManager::IsNewerVersion("1.0.1", "1.0.0"));
     assert(!UpdateManager::IsNewerVersion("2.0.0", "1.9.9"));
+    assert(UpdateManager::IsNewerVersion("1.0.0-alpha.2", "1.0.0-alpha.10"));
+    assert(UpdateManager::IsNewerVersion("1.0.0-rc.1", "1.0.0"));
 
-    std::cout << "  [2/4] Testing Release Manifest parsing & package SHA-256 verification..." << std::endl;
+    std::cout << "  [2/4] Testing GitHub Update config, Release Manifest parsing, asset selection & SHA-256 verification..." << std::endl;
+    assert(radium::config::UpdateAndReleaseConfig::kGithubRepoUrl == "https://github.com/alve33/Radium-Download-Manager");
+    assert(radium::config::UpdateAndReleaseConfig::kApiLatestReleaseUrl == "https://api.github.com/repos/alve33/Radium-Download-Manager/releases/latest");
+    assert(radium::config::UpdateAndReleaseConfig::kReleasePrefixUrl == "https://github.com/alve33/Radium-Download-Manager/releases/");
+
     std::string manifest_json = R"({
       "tag_name": "v1.1.0",
       "name": "Radium 1.1.0 Feature Release",
       "body": "Includes A++ Polish and Automated Updater",
-      "browser_download_url": "https://github.com/sayedalve/radium/releases/download/v1.1.0/Radium-Setup-1.1.0.exe",
+      "browser_download_url": "https://github.com/alve33/Radium-Download-Manager/releases/download/v1.1.0/Radium-Setup-x64-1.1.0.exe",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "mandatory": false
     })";
@@ -7134,6 +7144,112 @@ bool TestUniversal11Outof10QualityAndPolish() {
     assert(parse_res.ok());
     assert(parse_res.value->version == "v1.1.0");
     assert(parse_res.value->expected_sha256 == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+    // GitHub API release evaluation: newer release with multi-arch assets (prefers full Setup over Core)
+    const std::string gh_newer_release = R"({
+      "tag_name": "v1.2.0",
+      "name": "Radium 1.2.0",
+      "draft": false,
+      "prerelease": false,
+      "html_url": "https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.2.0",
+      "body": "Bug fixes and performance improvements.",
+      "assets": [
+        {
+          "name": "Radium-Setup-ARM64-1.2.0.exe",
+          "size": 18000000,
+          "browser_download_url": "https://github.com/alve33/Radium-Download-Manager/releases/download/v1.2.0/Radium-Setup-ARM64-1.2.0.exe"
+        },
+        {
+          "name": "Radium-Setup-x64-Core-1.2.0.exe",
+          "size": 2500000,
+          "browser_download_url": "https://github.com/alve33/Radium-Download-Manager/releases/download/v1.2.0/Radium-Setup-x64-Core-1.2.0.exe"
+        },
+        {
+          "name": "Radium-Setup-x64-1.2.0.exe",
+          "size": 19500000,
+          "browser_download_url": "https://github.com/alve33/Radium-Download-Manager/releases/download/v1.2.0/Radium-Setup-x64-1.2.0.exe"
+        },
+        {
+          "name": "Radium-v1.2.0-Windows-x64-Full.zip",
+          "size": 20000000,
+          "browser_download_url": "https://github.com/alve33/Radium-Download-Manager/releases/download/v1.2.0/Radium-v1.2.0-Windows-x64-Full.zip"
+        }
+      ]
+    })";
+    auto eval_x64 = UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_newer_release, "1.0.0", "x64");
+    assert(eval_x64.success && eval_x64.update_available && eval_x64.matching_installer);
+    assert(eval_x64.version == "v1.2.0");
+    assert(eval_x64.release_url == "https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.2.0");
+    assert(eval_x64.selected_asset.has_value());
+    assert(eval_x64.selected_asset->name == "Radium-Setup-x64-1.2.0.exe");
+    assert(eval_x64.selected_asset->download_url == "https://github.com/alve33/Radium-Download-Manager/releases/download/v1.2.0/Radium-Setup-x64-1.2.0.exe");
+
+    auto eval_arm64 = UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_newer_release, "1.0.0", "arm64");
+    assert(eval_arm64.success && eval_arm64.update_available && eval_arm64.matching_installer);
+    assert(eval_arm64.selected_asset.has_value() && eval_arm64.selected_asset->name == "Radium-Setup-ARM64-1.2.0.exe");
+
+    // No newer release available (equal and older remote versions)
+    auto eval_uptodate = UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_newer_release, "1.2.0", "x64");
+    assert(eval_uptodate.success && !eval_uptodate.update_available);
+    auto eval_older = UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_newer_release, "2.0.0", "x64");
+    assert(eval_older.success && !eval_older.update_available);
+
+    // Release exists but has no compatible artifact for x64
+    const std::string gh_arm64_only = R"({
+      "tag_name": "v1.2.0",
+      "draft": false,
+      "prerelease": false,
+      "html_url": "https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.2.0",
+      "body": "ARM64 only",
+      "assets": [
+        {
+          "name": "Radium-Setup-ARM64-1.2.0.exe",
+          "size": 18000000,
+          "browser_download_url": "https://github.com/alve33/Radium-Download-Manager/releases/download/v1.2.0/Radium-Setup-ARM64-1.2.0.exe"
+        }
+      ]
+    })";
+    auto eval_no_asset = UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_arm64_only, "1.0.0", "x64");
+    assert(eval_no_asset.success && eval_no_asset.update_available && !eval_no_asset.matching_installer);
+    assert(!eval_no_asset.selected_asset.has_value());
+
+    // Draft and prerelease rejection
+    const std::string gh_draft = R"({"tag_name":"v1.3.0","draft":true,"prerelease":false,"assets":[]})";
+    assert(!UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_draft, "1.0.0", "x64").success);
+    const std::string gh_pre = R"({"tag_name":"v1.3.0-beta.1","draft":false,"prerelease":true,"assets":[]})";
+    assert(!UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_pre, "1.0.0", "x64").success);
+
+    // Untrusted release/download URL rejection
+    const std::string gh_untrusted = R"({
+      "tag_name": "v1.2.0",
+      "draft": false,
+      "prerelease": false,
+      "html_url": "https://evil.example.com/releases/v1.2.0",
+      "body": "Spoofed",
+      "assets": [
+        {
+          "name": "Radium-Setup-x64-1.2.0.exe",
+          "browser_download_url": "http://github.com/alve33/Radium-Download-Manager/releases/download/v1.2.0/Radium-Setup-x64-1.2.0.exe"
+        }
+      ]
+    })";
+    auto eval_untrusted = UpdateManager::EvaluateGitHubReleaseResponse(200, {}, gh_untrusted, "1.0.0", "x64");
+    assert(eval_untrusted.success && eval_untrusted.release_url.empty() && !eval_untrusted.matching_installer);
+
+    // HTTP 404, 403/429 rate limits, and network error formatting
+    auto eval_404 = UpdateManager::EvaluateGitHubReleaseResponse(404, {}, R"({"message":"Not Found"})", "1.0.0", "x64");
+    assert(!eval_404.success && !eval_404.update_available && eval_404.is_not_found);
+
+    auto eval_403_rl = UpdateManager::EvaluateGitHubReleaseResponse(
+        403, {{"X-RateLimit-Remaining", "0"}, {"Retry-After", "45"}}, "{}", "1.0.0", "x64");
+    assert(!eval_403_rl.success && eval_403_rl.is_rate_limited);
+    assert(eval_403_rl.message.find("45") != std::string::npos);
+
+    auto eval_429_rl = UpdateManager::EvaluateGitHubReleaseResponse(429, {}, "{}", "1.0.0", "x64");
+    assert(!eval_429_rl.success && eval_429_rl.is_rate_limited);
+
+    auto net_err_msg = UpdateManager::FormatNetworkCheckError(openidm::Error{"ERR_NET_TIMEOUT", "WinHttpReceiveResponse timed out", true, true});
+    assert(net_err_msg.find("timed out") != std::string::npos);
 
     // Test package SHA-256 validation
     auto temp_pkg = std::filesystem::temp_directory_path() / "test_radium_pkg.bin";
@@ -7147,6 +7263,10 @@ bool TestUniversal11Outof10QualityAndPolish() {
     auto verify_corrupted = UpdateManager::VerifyPackageSha256(temp_pkg, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
     assert(!verify_corrupted.ok());
     assert(verify_corrupted.error->code == "ERR_HASH_MISMATCH");
+
+    auto verify_missing = UpdateManager::VerifyPackageSha256(temp_pkg.string() + ".missing", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert(!verify_missing.ok());
+    assert(verify_missing.error->code == "ERR_FILE_NOT_FOUND");
 
     std::error_code ec;
     std::filesystem::remove(temp_pkg, ec);

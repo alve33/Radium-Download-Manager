@@ -728,9 +728,40 @@ var playerConfig = {
     return true;
 }
 
+bool TestSchedulerCapacityWait() {
+    using namespace openidm;
+    auto root = std::filesystem::temp_directory_path() / ("radium_capacity_" + GenerateUuidV4());
+    std::filesystem::create_directories(root);
+    std::atomic<unsigned> passes{0};
+    ControllerConfig cfg;
+    cfg.state_db_path = root / "state.db";
+    cfg.default_download_dir = root / "downloads";
+    cfg.temp_root_dir = root / "tmp";
+    // No available slots isolates scheduling from DNS/server timing.
+    cfg.max_concurrent_tasks = 0;
+    cfg.local_time_override = [&]() { ++passes; return std::string("12:00"); };
+    unsigned observed = 0;
+    {
+        DownloadController controller(cfg);
+        TEST_ASSERT(controller.Initialize().ok(), "Initialize capacity fixture");
+        TaskModel task;
+        task.url = "https://example.com/capacity.bin";
+        task.file_name = "capacity.bin";
+        TEST_ASSERT(controller.AddTask(task).ok(), "Queue capacity fixture");
+        passes.store(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        observed = passes.load();
+        controller.Shutdown();
+    }
+    std::filesystem::remove_all(root);
+    std::cout << "Capacity-exhausted scheduler passes / 250 ms: " << observed << '\n';
+    TEST_ASSERT(observed < 30, "Full scheduler must wait rather than spin on queued work");
+    return true;
+}
+
 int main() {
     int passed = 0;
-    const int total = 6;
+    const int total = 7;
 
     std::cout << "====================================================\n";
     std::cout << " Radium Core Dedicated Unit Test Suite (Fast CTest)\n";
@@ -755,6 +786,7 @@ int main() {
     };
 
     run_test("PathSanitizer Comprehensive Unit Tests", TestDedicatedPathSanitizer);
+    run_test("Scheduler waits when capacity is exhausted", TestSchedulerCapacityWait);
     run_test("JsonMini RFC 8259 Parser & Builder Tests", TestDedicatedJsonMini);
     run_test("Bencode & TorrentParser Tests", TestDedicatedBencodeAndTorrentParser);
     run_test("SegmentScheduler Invariant & Work-Stealing Tests", TestDedicatedSegmentScheduler);

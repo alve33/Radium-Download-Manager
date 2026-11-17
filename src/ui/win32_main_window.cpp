@@ -6,12 +6,14 @@
 #include "common/startup_diagnostic.hpp"
 
 #include "brisk_engine/http_client.hpp"
+#include "common/central_config.hpp"
 #include "common/crypto_utils.hpp"
 #include "common/json_mini.hpp"
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 #include "common/semver.hpp"
 #include "common/version.hpp"
+#include "core/update_manager.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -3706,11 +3708,16 @@ void StartGitHubUpdateCheck(HWND hwnd) {
         result->title = L"Radium Update Check";
         std::atomic<bool> canceled{false};
         std::string response;
+        int http_status = 0;
+        std::map<std::string, std::string> response_headers;
         auto fetched = brisk::HttpClient::PerformGet(
-            "https://api.github.com/repos/sayedalve/Radium-Download-Manager/releases/latest",
-            {{"Accept", "application/vnd.github+json"}, {"User-Agent", "Radium-Download-Manager"}},
+            std::string(radium::config::UpdateAndReleaseConfig::kApiLatestReleaseUrl),
+            {{"Accept", "application/vnd.github+json"},
+             {"User-Agent", std::string(radium::config::NetworkPoliciesConfig::kUserAgent)}},
             std::nullopt, std::nullopt, 15000, false, canceled,
-            [](const brisk::HttpResponseMeta& meta) {
+            [&http_status, &response_headers](const brisk::HttpResponseMeta& meta) {
+                http_status = meta.status_code;
+                response_headers = meta.raw_headers;
                 return meta.status_code == 200 ? brisk::HeaderAction::kContinue : brisk::HeaderAction::kAbort;
             },
             [&response](const uint8_t* data, size_t len) {
@@ -3718,44 +3725,21 @@ void StartGitHubUpdateCheck(HWND hwnd) {
                 response.append(reinterpret_cast<const char*>(data), len);
                 return true;
             });
-        if (!fetched.ok()) {
-            result->message = Utf8ToW("Could not check GitHub Releases: " + fetched.error->message);
+        if (http_status != 0) {
+            auto eval = radium::core::UpdateManager::EvaluateGitHubReleaseResponse(
+                http_status,
+                response_headers,
+                response,
+                RADIUM_VERSION_STRING,
+                radium::core::UpdateManager::CurrentArchitecture());
+            result->available = eval.update_available;
+            result->matching_installer = eval.matching_installer;
+            result->release_url = Utf8ToW(eval.release_url);
+            result->message = Utf8ToW(eval.message);
+        } else if (!fetched.ok()) {
+            result->message = Utf8ToW(radium::core::UpdateManager::FormatNetworkCheckError(*fetched.error));
         } else {
-            try {
-                const auto release = json::Parse(response);
-                const std::string version = release["tag_name"].as_string();
-                const auto comparison = CompareSemanticVersions(version, RADIUM_VERSION_STRING);
-                if (!release.is_object() || version.empty() || release["draft"].as_bool(true) ||
-                    release["prerelease"].as_bool(false) || !comparison.has_value()) {
-                    result->message = L"GitHub returned an invalid or non-stable release response.";
-                } else if (*comparison <= 0) {
-                    result->message = Utf8ToW("Radium " + std::string(RADIUM_VERSION_STRING) +
-                        " is up to date. Latest stable release: " + version + ".");
-                } else {
-                    result->available = true;
-                    result->release_url = Utf8ToW(release["html_url"].as_string());
-                    std::string arch =
-#if defined(_M_ARM64)
-                        "arm64";
-#else
-                        "x64";
-#endif
-                    for (const auto& asset : release["assets"].as_array()) {
-                        std::string name = asset["name"].as_string();
-                        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                        if (name.find("setup") != std::string::npos && name.find(arch) != std::string::npos && name.ends_with(".exe"))
-                            result->matching_installer = true;
-                    }
-                    std::string notes = release["body"].as_string();
-                    if (notes.size() > 1000) notes.resize(1000);
-                    result->message = Utf8ToW("Version " + version + " is available.\n" +
-                        std::string(result->matching_installer ? "A matching Windows installer is attached.\n\n" : "No matching Windows installer is attached.\n\n") +
-                        "Release notes:\n" + notes +
-                        "\n\nAutomatic installation is disabled: this repository has no published Ed25519-signed update manifest/public key or configured Authenticode publisher identity. You can open the official release page and install manually.");
-                }
-            } catch (...) {
-                result->message = L"GitHub returned an invalid release response.";
-            }
+            result->message = L"GitHub returned an unexpected empty response.";
         }
         if (!IsWindow(hwnd) || !PostMessageW(hwnd, WM_OPENIDM_UPDATE_CHECK_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) delete result;
     }).detach();
@@ -5436,6 +5420,9 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     } else {
                         SetWindowTextW(ctx->hFileSizeLabel, L"Download Size: Unknown size");
                     }
+                } else if (u.rfind("blob:", 0) == 0 && ctx->initial_file_size > 0) {
+                    std::wstring s_sz = L"Download Size: " + Utf8ToW(DesktopView::FormatSizePretty(static_cast<uint64_t>(ctx->initial_file_size)));
+                    SetWindowTextW(ctx->hFileSizeLabel, s_sz.c_str());
                 } else if (u.rfind("http://", 0) == 0 || u.rfind("https://", 0) == 0) {
                     SetWindowTextW(ctx->hFileSizeLabel, L"Download Size: Checking size…");
                     uint64_t req_id = ++ctx->current_probe_id;
@@ -11247,9 +11234,9 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             if (!update) return 0;
             const int choice = MessageBoxW(hwnd, update->message.c_str(), update->title.c_str(),
                 update->available && update->matching_installer ? MB_YESNO | MB_ICONINFORMATION : MB_OK | MB_ICONINFORMATION);
-            constexpr std::wstring_view release_prefix = L"https://github.com/sayedalve/Radium-Download-Manager/releases/";
+            const std::wstring release_prefix = Utf8ToW(std::string(radium::config::UpdateAndReleaseConfig::kReleasePrefixUrl));
             if (update->available && update->matching_installer && choice == IDYES &&
-                update->release_url.rfind(release_prefix, 0) == 0) {
+                !update->release_url.empty() && update->release_url.rfind(release_prefix, 0) == 0) {
                 ShellExecuteW(hwnd, L"open", update->release_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             }
             return 0;

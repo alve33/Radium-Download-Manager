@@ -1114,12 +1114,18 @@
         try {
           if (anchor && typeof fallbackFn === "function") {
             anchor.__radiumBypass = true;
+            if (typeof anchor.setAttribute === "function") {
+              anchor.setAttribute("data-radium-bypass", "true");
+            }
             fallbackFn.call(anchor);
           } else if (win.document) {
             const fb = win.document.createElement("a");
             fb.href = href;
             fb.download = effectiveFilename;
             fb.__radiumBypass = true;
+            if (typeof fb.setAttribute === "function") {
+              fb.setAttribute("data-radium-bypass", "true");
+            }
             (win.document.body || win.document.documentElement).appendChild(fb);
             fb.click();
             fb.remove();
@@ -1176,10 +1182,29 @@
         processAndSend(blobObj);
         return true; // Intercepted! Native browser download shelf suppressed!
       } else {
-        // Blob object not in local registry (e.g. created inside Web Worker, sandboxed frame, or pre-script).
-        // DO NOT call win.fetch() here! Sites with strict CSP (such as ChatGPT's default-src 'none')
-        // will block win.fetch(blobUrl). Extension background Service Worker has host permissions
-        // and can fetch the blobUrl without CSP restrictions.
+        // Blob object not in local registry (e.g. created before script injection, in a Worker, or via cached createObjectURL).
+        // Start an in-flight XHR/fetch synchronously BEFORE returning from a.click() so Chromium pins the
+        // BlobDataHandle even if the caller calls URL.revokeObjectURL(href) on the very next synchronous line!
+        // If page CSP blocks XHR/fetch on blob:, fall back to deliverPayload("") so content-script.js (ISOLATED world) fetches it.
+        if (typeof win.XMLHttpRequest === "function") {
+          try {
+            const xhr = new win.XMLHttpRequest();
+            xhr.open("GET", href, true);
+            xhr.responseType = "blob";
+            xhr.onload = () => {
+              if (xhr.status === 200 && xhr.response) {
+                processAndSend(xhr.response);
+              } else {
+                deliverPayload("");
+              }
+            };
+            xhr.onerror = () => {
+              deliverPayload("");
+            };
+            xhr.send();
+            return true;
+          } catch (_) {}
+        }
         deliverPayload("");
         return true; // Intercepted! Native browser download shelf suppressed!
       }
@@ -1501,6 +1526,9 @@
               fb.href = fallbackUrl;
               fb.download = fallbackName;
               fb.__radiumBypass = true;
+              if (typeof fb.setAttribute === "function") {
+                fb.setAttribute("data-radium-bypass", "true");
+              }
               (win.document.body || win.document.documentElement).appendChild(fb);
               fb.click();
               fb.remove();

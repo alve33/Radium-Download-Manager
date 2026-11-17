@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Последний релиз" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Скачать для Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Последний релиз" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Скачать для Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="Язык: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="Интерфейс: Нативный Win32" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
   <img alt="Расширение: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
   <img alt="Лицензия: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Сборка релиза Windows" src="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Сборка релиза Windows" src="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
 </p>
 
 <p align="center">
@@ -76,8 +76,8 @@ Radium распространяется в виде готовых портат�
 
 | Пакет | Архитектура | Ссылка |
 | :--- | :---: | :--- |
-| **Radium Portable (Полный)** | x64 | [ZIP-архив](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
-| **Radium Portable (Базовый)** | x64 | [ZIP-архив](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
+| **Radium Portable (Полный)** | x64 | [ZIP-архив](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
+| **Radium Portable (Базовый)** | x64 | [ZIP-архив](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
 
 ### Быстрая установка расширения для браузера
 
@@ -263,7 +263,7 @@ flowchart TD
 
 ```powershell
 # Клонировать репозиторий
-git clone https://github.com/sayedalve/Radium-Download-Manager.git
+git clone https://github.com/alve33/Radium-Download-Manager.git
 cd Radium-Download-Manager
 
 # Собрать все бинарные файлы и создать портативный пакет

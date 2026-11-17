@@ -76,7 +76,7 @@ struct StartupLogDialogContext {
             lvi.lParam = static_cast<LPARAM>(i);
 
             // Col 0: File Name / ID
-            std::wstring wname = rep.filename.empty() ? Utf8ToW(rep.download_id) : Utf8ToW(rep.filename);
+            std::wstring wname = Utf8ToW(rep.filename + " [" + rep.download_id + "]");
             lvi.pszText = const_cast<LPWSTR>(wname.c_str());
             SendMessageW(hReportList, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&lvi));
 

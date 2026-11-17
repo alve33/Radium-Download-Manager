@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="最新リリース" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Windows版をダウンロード" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="最新リリース" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Windows版をダウンロード" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="開発言語: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="UI: ネイティブ Win32" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
   <img alt="拡張機能: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
   <img alt="ライセンス: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows リリースビルド" src="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows リリースビルド" src="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
 </p>
 
 <p align="center">
@@ -86,19 +86,19 @@ Radium は、広告が多く肥大化した従来ツールに代わる、軽量�
 
 ## ダウンロードとインストール
 
-最新の公開リリースは **[v1.0.0](https://github.com/sayedalve/Radium-Download-Manager/releases/tag/v1.0.0)** です。64-bit Windows 向けに以下のパッケージが提供されています：
+最新の公開リリースは **[v1.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0)** です。64-bit Windows 向けに以下のパッケージが提供されています：
 
 | パッケージ | アーキテクチャ | 形式 | 説明 |
 | :--- | :---: | :---: | :--- |
-| **Radium インストーラー (通常版)** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Windows 11 / 10 x64 推奨インストーラー |
-| **Radium ポータブル フル版** | x64 | [ZIP アーカイブ](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | N_m3u8DL-RE と FFmpeg ワーカーを同梱したポータブル版 |
-| **Radium ポータブル コア版** | x64 | [ZIP アーカイブ](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | コアのみ（ストリームツールは別途準備が必要） |
-| **Radium コアインストーラー** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | ストリームツールを含まない軽量インストーラー |
-| **Radium インストーラー (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Windows 11 on ARM 向けネイティブインストーラー |
-| **Radium ポータブル フル版 (ARM64)** | ARM64 | [ZIP アーカイブ](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | ARM64 向けストリームツール同梱のポータブル版 |
+| **Radium インストーラー (通常版)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Windows 11 / 10 x64 推奨インストーラー |
+| **Radium ポータブル フル版** | x64 | [ZIP アーカイブ](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | N_m3u8DL-RE と FFmpeg ワーカーを同梱したポータブル版 |
+| **Radium ポータブル コア版** | x64 | [ZIP アーカイブ](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | コアのみ（ストリームツールは別途準備が必要） |
+| **Radium コアインストーラー** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | ストリームツールを含まない軽量インストーラー |
+| **Radium インストーラー (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Windows 11 on ARM 向けネイティブインストーラー |
+| **Radium ポータブル フル版 (ARM64)** | ARM64 | [ZIP アーカイブ](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | ARM64 向けストリームツール同梱のポータブル版 |
 | **ブラウザー拡張機能** | 各種ブラウザー | [拡張機能ソース](extension/) | Chrome、Brave、Edge、Firefox 向け Manifest V3 拡張機能 |
 
-リリースバイナリの暗号化チェックサムは [SHA256SUMS.txt](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt) で確認できます。
+リリースバイナリの暗号化チェックサムは [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt) で確認できます。
 
 > [!IMPORTANT]
 > ### 🧩 ブラウザー拡張機能のセットアップ手順（手動設定が必要）
@@ -434,7 +434,7 @@ flowchart TD
 ソースコードからビルドするには、**Windows 11**、**Visual Studio 2022**（C++ によるデスクトップ開発）、および **CMake 3.25 以上** が必要です：
 
 ```powershell
-git clone https://github.com/sayedalve/Radium-Download-Manager.git
+git clone https://github.com/alve33/Radium-Download-Manager.git
 cd Radium-Download-Manager
 cmake -B build/win-x64 -A x64
 cmake --build build/win-x64 --config Release
@@ -454,7 +454,7 @@ Radium では、ダウンロードエンジン、ワークスティーリング�
 
 - [機能マトリックス](docs/FEATURE_MATRIX.md)
 - [テストマトリックス](docs/TEST_MATRIX.md)
-- [Windows リリースワークフロー](https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml)
+- [Windows リリースワークフロー](https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml)
 
 <br>
 

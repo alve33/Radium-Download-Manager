@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="最新发布" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="下載 Windows 版" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="最新发布" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="下載 Windows 版" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="开发语言: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="UI: 原生 Win32" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
   <img alt="擴充功能: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
   <img alt="开源许可: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows 建置状态" src="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows 建置状态" src="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
 </p>
 
 <p align="center">
@@ -86,19 +86,19 @@ Radium 是一款专为 Windows 11 打造的高效能、轻量化下載管理器�
 
 ## 下載与安装
 
-最新公开发行版本为 **[v1.0.0](https://github.com/sayedalve/Radium-Download-Manager/releases/tag/v1.0.0)**。为 Windows 64 位平台提供以下安裝檔：
+最新公开发行版本为 **[v1.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0)**。为 Windows 64 位平台提供以下安裝檔：
 
 | 軟體包 | 架构 | 格式 | 说明 |
 | :--- | :---: | :---: | :--- |
-| **Radium 标准安裝檔** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | 推荐适用于 Windows 11 / 10 x64 的完整安裝程式 |
-| **Radium 可攜式完整版** | x64 | [ZIP 封存](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | 免安装可攜式包，內建 N_m3u8DL-RE 与 FFmpeg 工具 |
-| **Radium 可攜式核心版** | x64 | [ZIP 封存](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | 核心轻量包（流媒体工具需单独設定） |
-| **Radium 核心安裝檔** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | 不含流媒体外部依赖的小体积安裝檔 |
-| **Radium ARM64 安裝檔** | ARM64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | 专为 ARM 架构 Windows 11 设备原生编译 |
-| **Radium ARM64 可攜式版** | ARM64 | [ZIP 封存](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | 包含 ARM64 流媒体工具的完整可攜式包 |
+| **Radium 标准安裝檔** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | 推荐适用于 Windows 11 / 10 x64 的完整安裝程式 |
+| **Radium 可攜式完整版** | x64 | [ZIP 封存](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | 免安装可攜式包，內建 N_m3u8DL-RE 与 FFmpeg 工具 |
+| **Radium 可攜式核心版** | x64 | [ZIP 封存](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | 核心轻量包（流媒体工具需单独設定） |
+| **Radium 核心安裝檔** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | 不含流媒体外部依赖的小体积安裝檔 |
+| **Radium ARM64 安裝檔** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | 专为 ARM 架构 Windows 11 设备原生编译 |
+| **Radium ARM64 可攜式版** | ARM64 | [ZIP 封存](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | 包含 ARM64 流媒体工具的完整可攜式包 |
 | **瀏覽器擴充功能源码** | 跨瀏覽器 | [extension 目录](extension/) | 适用于 Chrome、Edge、Firefox 等瀏覽器的 MV3 擴充功能 |
 
-发布构件的 SHA256 校验和见 [SHA256SUMS.txt](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt)。
+发布构件的 SHA256 校验和见 [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt)。
 
 > [!IMPORTANT]
 > ### 🧩 瀏覽器擴充功能安装指南（需手动加载）
@@ -434,7 +434,7 @@ flowchart TD
 如需自行编译 Radium，请准备 **Windows 11** 环境、**Visual Studio 2022**（包含 C++ 桌面开发工作负载）以及 **CMake 3.25 或更高版本**：
 
 ```powershell
-git clone https://github.com/sayedalve/Radium-Download-Manager.git
+git clone https://github.com/alve33/Radium-Download-Manager.git
 cd Radium-Download-Manager
 cmake -B build/win-x64 -A x64
 cmake --build build/win-x64 --config Release
@@ -454,7 +454,7 @@ cmake --build build/win-x64 --config Release
 
 - [功能矩阵](docs/FEATURE_MATRIX.md)
 - [测试矩阵](docs/TEST_MATRIX.md)
-- [Windows 发布工作流](https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml)
+- [Windows 发布工作流](https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml)
 
 <br>
 

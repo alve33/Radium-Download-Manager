@@ -1148,25 +1148,47 @@ function initContentScript() {
         if (!isBlobOrDataUrl && !dataBase64) {
           return;
         }
-        safeSendRuntimeMessage({
-          action: "interceptBlobDownload",
-          url: ev.data.url,
-          filename: ev.data.filename,
-          mimeType: ev.data.mimeType,
-          size: ev.data.size,
-          dataBase64,
-          correlationId: ev.data.correlationId,
-          pageTitle: ev.data.pageTitle || (typeof document !== "undefined" ? document.title : ""),
-          pageUrl: ev.data.pageUrl || (typeof location !== "undefined" ? location.href : "")
-        }, (resp) => {
-          if (!resp || !resp.success) {
-            window.postMessage({
-              action: "radiumBlobFallback",
-              url: ev.data.url,
-              filename: ev.data.filename
-            }, "*");
-          }
-        });
+        const dispatchBlobToBackground = (resolvedB64, resolvedMime, resolvedSize) => {
+          safeSendRuntimeMessage({
+            action: "interceptBlobDownload",
+            url: ev.data.url,
+            filename: ev.data.filename,
+            mimeType: resolvedMime || ev.data.mimeType,
+            size: resolvedSize || ev.data.size,
+            dataBase64: resolvedB64,
+            correlationId: ev.data.correlationId,
+            pageTitle: ev.data.pageTitle || (typeof document !== "undefined" ? document.title : ""),
+            pageUrl: ev.data.pageUrl || (typeof location !== "undefined" ? location.href : "")
+          }, (resp) => {
+            if (!resp || !resp.success) {
+              safeSendRuntimeMessage({ action: "bypassNextDownload", url: ev.data.url, correlationId: ev.data.correlationId });
+              window.postMessage({
+                action: "radiumBlobFallback",
+                url: ev.data.url,
+                filename: ev.data.filename
+              }, "*");
+            }
+          });
+        };
+        // If MAIN world could not read the blob bytes (e.g. strict page CSP or Worker-created blob),
+        // read the blob here in the ISOLATED content script (same origin as the page, exempt from page CSP),
+        // because the chrome-extension:// Service Worker cannot fetch cross-origin blob:https:// URLs!
+        if (!dataBase64 && typeof ev.data.url === "string" && ev.data.url.startsWith("blob:") &&
+            typeof fetch === "function" && typeof FileReader === "function") {
+          fetch(ev.data.url).then(r => r.blob()).then(blob => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const res = String(reader.result || "");
+              const commaIdx = res.indexOf(",");
+              const b64 = commaIdx >= 0 ? res.slice(commaIdx + 1) : res;
+              dispatchBlobToBackground(b64, blob.type || ev.data.mimeType, blob.size || ev.data.size);
+            };
+            reader.onerror = () => dispatchBlobToBackground("", ev.data.mimeType, ev.data.size);
+            reader.readAsDataURL(blob);
+          }).catch(() => dispatchBlobToBackground("", ev.data.mimeType, ev.data.size));
+        } else {
+          dispatchBlobToBackground(dataBase64, ev.data.mimeType, ev.data.size);
+        }
       } else if (ev.data.action === "fluxAnchorClicked" || ev.data.action === "radiumAnchorClicked") {
         safeSendRuntimeMessage({
           action: "linkClicked",

@@ -383,8 +383,8 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     break;
                 }
                 bool acquired = false;
-                for (int idle_retry = 0; idle_retry < 300; ++idle_retry) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                for (int idle_retry = 0; idle_retry < 600; ++idle_retry) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
                     if (fatal_abort.load() || pause_requested.load() || cancel_requested.load() || scheduler->AllCompleted()) {
                         break;
                     }
@@ -605,7 +605,18 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
                         // Unlock segment write lock before metrics/return
                         write_lk.Unlock();
-                        emit_segmented_progress_if_due(false);
+                        if (!should_terminate_chunk && client_bytes_received > 0) {
+                            const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - request_start_tp).count();
+                            // Recycle trickle-throttled connections (< 48 KiB/s after 5s) when segment still has > 2 MiB left
+                            if (elapsed_ms >= 5000 &&
+                                (client_bytes_received * 1000ULL / static_cast<uint64_t>(elapsed_ms)) < 49152ULL &&
+                                seg->end_offset.load() > seg->current_offset.load() + (2ULL << 20)) {
+                                cancel_reason = "trickle_recycle";
+                                req_cancel.store(true);
+                                return false;
+                            }
+                        }
                         return !should_terminate_chunk;
                     },
                     m_cfg.net_opts);
@@ -665,6 +676,12 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     last_progress_offset = cur_pos;
                     retries = 0;
                     scheduler->RecordSuccess();
+                    scheduler->TryRampUpConnections(max_conns);
+                }
+
+                if (cancel_reason == "trickle_recycle") {
+                    // Immediately reconnect on a fresh TCP socket without penalty
+                    continue;
                 }
 
                 if (!res.ok()) {
@@ -709,14 +726,10 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                                res.error->code == "ERR_NET_CONNECT" ||
                                res.error->code == "ERR_NET_TIMEOUT" ||
                                res.error->code == "ERR_NET_SEND") {
-                        if (fail_streak >= 3) {
-                            scheduler->ReduceConnectionsByHalf();
-                            uint32_t current_max = scheduler->GetMaxConnections();
-                            if (running_workers.load() > current_max && running_workers.load() > 1) {
-                                seg->active_worker.store(false);
-                                stop_worker();
-                                return;
-                            }
+                        // Do not permanently halve connections on transient TCP/stall timeouts;
+                        // only back off if we see a severe streak (>= 8) and let TryRampUpConnections recover.
+                        if (fail_streak >= 8) {
+                            scheduler->ReduceConnectionsStepped();
                         }
                     }
 

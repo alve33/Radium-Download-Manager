@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="최신 릴리스" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Windows용 다운로드" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="최신 릴리스" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Windows용 다운로드" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="개발 언어: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="UI: Native Win32" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
   <img alt="확장 프로그램: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
   <img alt="라이선스: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows 릴리스 빌드" src="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows 릴리스 빌드" src="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
 </p>
 
 <p align="center">
@@ -86,19 +86,19 @@ Radium은 복잡하고 광고가 많은 기존 다운로드 프로그램을 대�
 
 ## 다운로드 및 설치
 
-최신 공식 릴리스는 **[v1.0.0](https://github.com/sayedalve/Radium-Download-Manager/releases/tag/v1.0.0)** 입니다. 64비트 Windows용 패키지가 제공됩니다:
+최신 공식 릴리스는 **[v1.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0)** 입니다. 64비트 Windows용 패키지가 제공됩니다:
 
 | 패키지 | 아키텍처 | 형식 | 설명 |
 | :--- | :---: | :---: | :--- |
-| **Radium 표준 설치 프로그램** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Windows 11 / 10 x64 권장 설치 파일 |
-| **Radium 포터블 풀 패키지** | x64 | [ZIP 압축](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | N_m3u8DL-RE 및 FFmpeg 도구가 포함된 무설치 포터블 패키지 |
-| **Radium 포터블 코어** | x64 | [ZIP 압축](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | 코어 패키지 (스트림 도구 별도 준비 필요) |
-| **Radium 코어 설치 프로그램** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | 외부 도구가 포함되지 않은 가벼운 인스톨러 |
-| **Radium ARM64 설치 프로그램** | ARM64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | ARM 기반 Windows 11 기기를 위한 네이티브 설치 파일 |
-| **Radium ARM64 포터블 풀 패키지** | ARM64 | [ZIP 압축](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | ARM64용 스트림 도구가 포함된 포터블 패키지 |
+| **Radium 표준 설치 프로그램** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Windows 11 / 10 x64 권장 설치 파일 |
+| **Radium 포터블 풀 패키지** | x64 | [ZIP 압축](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | N_m3u8DL-RE 및 FFmpeg 도구가 포함된 무설치 포터블 패키지 |
+| **Radium 포터블 코어** | x64 | [ZIP 압축](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | 코어 패키지 (스트림 도구 별도 준비 필요) |
+| **Radium 코어 설치 프로그램** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | 외부 도구가 포함되지 않은 가벼운 인스톨러 |
+| **Radium ARM64 설치 프로그램** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | ARM 기반 Windows 11 기기를 위한 네이티브 설치 파일 |
+| **Radium ARM64 포터블 풀 패키지** | ARM64 | [ZIP 압축](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | ARM64용 스트림 도구가 포함된 포터블 패키지 |
 | **브라우저 확장 소스** | 크로스 브라우저 | [extension 소스](extension/) | Chrome, Edge, Brave, Firefox용 Manifest V3 확장 프로그램 |
 
-SHA256 체크섬은 [SHA256SUMS.txt](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt)에서 확인하실 수 있습니다.
+SHA256 체크섬은 [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt)에서 확인하실 수 있습니다.
 
 > [!IMPORTANT]
 > ### 🧩 브라우저 확장 프로그램 설치 안내 (수동 로드 필요)
@@ -434,7 +434,7 @@ flowchart TD
 Radium을 직접 컴파일하려면 **Windows 11**, **Visual Studio 2022**(C++ 데스크톱 개발 워크로드) 및 **CMake 3.25 이상**이 필요합니다:
 
 ```powershell
-git clone https://github.com/sayedalve/Radium-Download-Manager.git
+git clone https://github.com/alve33/Radium-Download-Manager.git
 cd Radium-Download-Manager
 cmake -B build/win-x64 -A x64
 cmake --build build/win-x64 --config Release
@@ -454,7 +454,7 @@ cmake --build build/win-x64 --config Release
 
 - [기능 매트릭스](docs/FEATURE_MATRIX.md)
 - [테스트 매트릭스](docs/TEST_MATRIX.md)
-- [Windows 릴리스 워크플로](https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml)
+- [Windows 릴리스 워크플로](https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml)
 
 <br>
 

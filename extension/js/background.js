@@ -2577,24 +2577,54 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
 
     (async () => {
       try {
-        // If dataBase64 was not supplied by page context (e.g. blob generated in Web Worker under strict CSP),
-        // fetch it directly here in the Background Service Worker where page CSP does not apply.
+        // If dataBase64 was not supplied by page context, attempt background fetch first,
+        // then fall back to querying the tab's ISOLATED content script (radiumFetchBlobData)
+        // because Chromium Service Workers cannot fetch cross-origin blob:https:// URLs directly.
         if (!dataB64 && msg.url && msg.url.startsWith("blob:") && typeof fetch === "function") {
-          const resp = await fetch(msg.url);
-          if (!resp.ok) {
-            throw new Error(`Failed to fetch blob in background: ${resp.status}`);
+          try {
+            const resp = await fetch(msg.url);
+            if (resp && resp.ok) {
+              const blob = await resp.blob();
+              totalBytes = blob.size;
+              if (blob.type) mime = blob.type;
+              const arrayBuf = await blob.arrayBuffer();
+              const bytes = new Uint8Array(arrayBuf);
+              let binary = "";
+              const chunk = 32768;
+              for (let i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+              }
+              dataB64 = btoa(binary);
+            }
+          } catch (_) {}
+        }
+
+        if (!dataB64 && msg.url && msg.url.startsWith("blob:") && tabId > 0 &&
+            typeof chrome !== "undefined" && chrome.tabs && typeof chrome.tabs.sendMessage === "function") {
+          const tabResp = await new Promise((resolve) => {
+            try {
+              chrome.tabs.sendMessage(tabId, {
+                action: "radiumFetchBlobData",
+                blobUrl: msg.url,
+                filename,
+                correlationId
+              }, (r) => {
+                if (chrome.runtime) void chrome.runtime.lastError;
+                resolve(r || null);
+              });
+            } catch (_) {
+              resolve(null);
+            }
+          });
+          if (tabResp && tabResp.success && typeof tabResp.dataBase64 === "string" && tabResp.dataBase64) {
+            dataB64 = tabResp.dataBase64;
+            if (tabResp.mimeType) mime = tabResp.mimeType;
+            if (tabResp.size) totalBytes = tabResp.size;
           }
-          const blob = await resp.blob();
-          totalBytes = blob.size;
-          if (blob.type) mime = blob.type;
-          const arrayBuf = await blob.arrayBuffer();
-          const bytes = new Uint8Array(arrayBuf);
-          let binary = "";
-          const chunk = 32768;
-          for (let i = 0; i < bytes.length; i += chunk) {
-            binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
-          }
-          dataB64 = btoa(binary);
+        }
+
+        if (!dataB64 && msg.url && msg.url.startsWith("blob:")) {
+          throw new Error("Could not read blob payload from page or background context");
         }
 
         if (dataB64) {

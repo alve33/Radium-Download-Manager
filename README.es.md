@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Descargar para Windows" src="https://img.shields.io/badge/Descarga-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Descargar para Windows" src="https://img.shields.io/badge/Descarga-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="Lenguaje: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="UI: Nativa Win32" src="https://img.shields.io/badge/UI-Nativa%20Win32-22c55e?style=flat-square">
   <img alt="Extensión: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
   <img alt="Licencia: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Compilación de Windows" src="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Compilación de Windows" src="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
 </p>
 
 <p align="center">
@@ -86,19 +86,19 @@ Radium es un gestor de descargas rápido y ligero para Windows 11 diseñado para
 
 ## Descargas e Instalación
 
-La versión publicada más reciente es **[v1.0.0](https://github.com/sayedalve/Radium-Download-Manager/releases/tag/v1.0.0)**. Paquetes para Windows de 64 bits:
+La versión publicada más reciente es **[v1.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0)**. Paquetes para Windows de 64 bits:
 
 | Paquete | Arquitectura | Formato | Descripción |
 | :--- | :---: | :---: | :--- |
-| **Instalador de Radium (Estándar)** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Instalador recomendado para Windows 11 / 10 x64 |
-| **Radium Portable Completo** | x64 | [Archivo ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | Paquete portable que incluye las herramientas N_m3u8DL-RE y FFmpeg |
-| **Radium Portable Básico** | x64 | [Archivo ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | Paquete básico (herramientas de transmisión requeridas por separado) |
-| **Instalador Básico** | x64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | Instalador ligero sin herramientas de transmisión incluidas |
-| **Instalador ARM64** | ARM64 | [Setup (.exe)](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Instalador nativo para dispositivos Windows 11 en ARM |
-| **Radium Portable Completo (ARM64)** | ARM64 | [Archivo ZIP](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | Paquete portable completo con herramientas para ARM64 |
+| **Instalador de Radium (Estándar)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Instalador recomendado para Windows 11 / 10 x64 |
+| **Radium Portable Completo** | x64 | [Archivo ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | Paquete portable que incluye las herramientas N_m3u8DL-RE y FFmpeg |
+| **Radium Portable Básico** | x64 | [Archivo ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | Paquete básico (herramientas de transmisión requeridas por separado) |
+| **Instalador Básico** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | Instalador ligero sin herramientas de transmisión incluidas |
+| **Instalador ARM64** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Instalador nativo para dispositivos Windows 11 en ARM |
+| **Radium Portable Completo (ARM64)** | ARM64 | [Archivo ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | Paquete portable completo con herramientas para ARM64 |
 | **Extensión de Navegador** | Multi-navegador | [código de extensión](extension/) | Extensión Manifest V3 para Chrome, Brave, Edge y Firefox |
 
-Las sumas de comprobación SHA256 están disponibles en [SHA256SUMS.txt](https://github.com/sayedalve/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt).
+Las sumas de comprobación SHA256 están disponibles en [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt).
 
 > [!IMPORTANT]
 > ### 🧩 Instalación de la Extensión del Navegador (Carga Manual)
@@ -378,7 +378,7 @@ flowchart TD
 Requisitos: **Windows 11**, **Visual Studio 2022** (Desarrollo para el escritorio con C++) y **CMake 3.25+**:
 
 ```powershell
-git clone https://github.com/sayedalve/Radium-Download-Manager.git
+git clone https://github.com/alve33/Radium-Download-Manager.git
 cd Radium-Download-Manager
 cmake -B build/win-x64 -A x64
 cmake --build build/win-x64 --config Release
@@ -394,7 +394,7 @@ cmake --build build/win-x64 --config Release
 
 - [Matriz de características](docs/FEATURE_MATRIX.md)
 - [Matriz de pruebas](docs/TEST_MATRIX.md)
-- [Flujo de trabajo de versiones de Windows](https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml)
+- [Flujo de trabajo de versiones de Windows](https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml)
 
 <br>
 

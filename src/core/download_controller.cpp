@@ -528,6 +528,9 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
     } else if (stream::RtspMmsAdapter::IsStreamUrl(task.url)) {
         task.task_type = TaskType::kRtsp;
         if (task.file_name.empty()) task.file_name = "stream_" + GenerateUuidV4().substr(0, 8) + ".mp4";
+    } else if (task.url.rfind("blob:", 0) == 0 && !task.part_path.empty()) {
+        // Staged browser blob transfer from IPC download.completeChunkedTransfer
+        task.task_type = TaskType::kHttpFile;
     } else {
         if (task.task_type == TaskType::kHttpFile && PathSanitizer::IsWebpageWatchUrl(task.url)) {
             return Result<TaskModel>::Err(
@@ -859,13 +862,17 @@ Result<stream::StreamProbeResult> DownloadController::ProbeStream(
 void DownloadController::ScheduleLoop() {
     std::map<std::string, std::chrono::steady_clock::time_point> retry_schedule;
     bool had_active = false;
+    std::string last_queue_hh_mm;
+    std::vector<QueueConfig> cached_queues;
 
     while (true) {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_cv.wait_for(lock, std::chrono::milliseconds(50), [&]() {
             if (m_stopping) return true;
-            for (const auto& [id, t] : m_tasks) {
-                if (t.state == TaskState::kQueued && m_active.find(id) == m_active.end()) return true;
+            if (m_active.size() < m_max_concurrent.load()) {
+                for (const auto& [id, t] : m_tasks) {
+                    if (t.state == TaskState::kQueued && m_active.find(id) == m_active.end()) return true;
+                }
             }
             for (const auto& [id, ctrl] : m_active) {
                 if (ctrl->finished.load()) return true;
@@ -973,8 +980,6 @@ void DownloadController::ScheduleLoop() {
         }
 
         // 2. Check multi-queue schedules (cached per minute to eliminate redundant repetitive SQLite queries)
-        static std::string last_queue_hh_mm;
-        static std::vector<QueueConfig> cached_queues;
         // An empty queue list is a valid cached result. Retrying ListQueues on
         // every 50 ms scheduler pass kept SQLite work inside m_mutex forever
         // for the common no-custom-queues case, blocking AddTask/StartTask from

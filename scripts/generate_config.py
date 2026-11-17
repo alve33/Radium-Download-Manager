@@ -258,7 +258,7 @@ struct ProductInfo {{
     static constexpr std::string_view kPublisherDisplayName = "{prod.get('publisher_display_name', 'Radium Contributors')}";
     static constexpr std::string_view kCompanyName = "{company_name}";
     static constexpr std::string_view kCopyright = "{copyright_str}";
-    static constexpr std::string_view kUrl = "{prod.get('url', 'https://github.com/sayedalve/Radium-Download-Manager')}";
+    static constexpr std::string_view kUrl = "{prod.get('url', 'https://github.com/alve33/Radium-Download-Manager')}";
     static constexpr std::string_view kExecutableName = "{prod.get('executable_name', 'radium.exe')}";
     static constexpr std::string_view kNmhName = "{prod.get('nmh_name', 'radium-nmh.exe')}";
     static constexpr std::string_view kMsixPackageName = "{prod.get('msix_package_name', 'RadiumDownloadManager')}";
@@ -337,9 +337,9 @@ struct UpdateAndReleaseConfig {{
     static constexpr std::string_view kUpdateCheckPolicy = "{update_cfg.get('update_check_policy', 'manual_and_startup')}";
     static constexpr std::string_view kStableChannel = "{update_cfg.get('stable_channel', 'stable')}";
     static constexpr std::string_view kBetaChannel = "{update_cfg.get('beta_channel', 'beta')}";
-    static constexpr std::string_view kGithubRepoUrl = "{update_cfg.get('github_repo_url', 'https://github.com/sayedalve/Radium-Download-Manager')}";
-    static constexpr std::string_view kApiLatestReleaseUrl = "{update_cfg.get('api_latest_release_url', 'https://api.github.com/repos/sayedalve/Radium-Download-Manager/releases/latest')}";
-    static constexpr std::string_view kReleasePrefixUrl = "{update_cfg.get('release_prefix_url', 'https://github.com/sayedalve/Radium-Download-Manager/releases/')}";
+    static constexpr std::string_view kGithubRepoUrl = "{update_cfg.get('github_repo_url', 'https://github.com/alve33/Radium-Download-Manager')}";
+    static constexpr std::string_view kApiLatestReleaseUrl = "{update_cfg.get('api_latest_release_url', 'https://api.github.com/repos/alve33/Radium-Download-Manager/releases/latest')}";
+    static constexpr std::string_view kReleasePrefixUrl = "{update_cfg.get('release_prefix_url', 'https://github.com/alve33/Radium-Download-Manager/releases/')}";
     static constexpr std::string_view kMinSupportedWindowsVersion = "{update_cfg.get('min_supported_windows_version', '10.0.17763.0')}";
     static constexpr std::string_view kTargetWindowsVersion = "{update_cfg.get('target_windows_version', '10.0.26100.0')}";
 }};

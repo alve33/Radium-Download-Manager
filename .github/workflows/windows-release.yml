@@ -655,31 +655,73 @@ jobs:
         shell: powershell
         run: |
           $ver = "${{ needs.build-and-package-x64.outputs.version }}"
+          $armVer = "${{ needs.build-and-package-arm64.outputs.version }}"
+          $repoVer = (Get-Content "VERSION" -Raw).Trim()
+          if ($ver -ne $armVer -or $ver -ne $repoVer -or "v$ver" -ne "${{ github.ref_name }}") {
+            throw "Version mismatch: x64='$ver', arm64='$armVer', VERSION='$repoVer', ref='${{ github.ref_name }}'"
+          }
           Write-Host "Publishing Verified GitHub Release for Radium v$ver (x64 + ARM64)..."
           Get-ChildItem -Recurse -Path dist
-          $expectedPatterns = @(
-            "Radium-Setup-x64-*.exe",
-            "Radium-Setup-ARM64-*.exe",
-            "Radium-v*-Windows-x64-Full.zip",
-            "Radium-v*-Windows-x64-Core.zip",
-            "Radium-v*-Windows-ARM64-Full.zip",
-            "Radium-v*-Windows-ARM64-Core.zip",
+          $expectedFiles = @(
+            "Radium-Setup-x64-$ver.exe",
+            "Radium-Setup-x64-Core-$ver.exe",
+            "Radium-Setup-ARM64-$ver.exe",
+            "Radium-Setup-ARM64-Core-$ver.exe",
+            "Radium-v$ver-Windows-x64-Full.zip",
+            "Radium-v$ver-Windows-x64-Core.zip",
+            "Radium-v$ver-Windows-ARM64-Full.zip",
+            "Radium-v$ver-Windows-ARM64-Core.zip",
             "SHA256SUMS.txt"
           )
-          foreach ($p in $expectedPatterns) {
-            $f = Get-ChildItem -Recurse -Path dist -Filter $p | Select-Object -First 1
-            if (-not $f) {
-              throw "Release validation failed: Required artifact missing matching '$p'"
+          foreach ($name in $expectedFiles) {
+            $f = Get-ChildItem -Recurse -Path dist -Filter $name | Select-Object -First 1
+            if (-not $f -or $f.Length -le 0) {
+              throw "Release validation failed: Required artifact missing or empty: '$name'"
             }
             $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash
-            Write-Host "Verified asset: $($f.Name) [SHA256: $hash]"
+            Write-Host "Verified asset: $($f.Name) ($($f.Length) bytes) [SHA256: $hash]"
           }
 
-      - name: Publish Official GitHub Release
+          # Verify portable ZIP contents and PE machine types (x64=0x8664, ARM64=0xAA64)
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zipChecks = @(
+            @{ Zip = "dist\Radium-v$ver-Windows-x64-Full.zip"; ExpectedMachine = 0x8664 },
+            @{ Zip = "dist\Radium-v$ver-Windows-x64-Core.zip"; ExpectedMachine = 0x8664 },
+            @{ Zip = "dist\Radium-v$ver-Windows-ARM64-Full.zip"; ExpectedMachine = 0xAA64 },
+            @{ Zip = "dist\Radium-v$ver-Windows-ARM64-Core.zip"; ExpectedMachine = 0xAA64 }
+          )
+          foreach ($zc in $zipChecks) {
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($zc.Zip)
+            try {
+              $exeEntry = $archive.Entries | Where-Object { $_.FullName -match '(^|/)radium\.exe$' } | Select-Object -First 1
+              $infoEntry = $archive.Entries | Where-Object { $_.FullName -match '(^|/)PACKAGE_INFO\.json$' } | Select-Object -First 1
+              if (-not $exeEntry -or -not $infoEntry) {
+                throw "Portable archive $($zc.Zip) missing radium.exe or PACKAGE_INFO.json"
+              }
+              $stream = $exeEntry.Open()
+              try {
+                $ms = New-Object System.IO.MemoryStream
+                $stream.CopyTo($ms)
+                $bytes = $ms.ToArray()
+                $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+                $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+                if ($machine -ne $zc.ExpectedMachine) {
+                  throw "Portable archive $($zc.Zip) PE machine mismatch: got 0x$($machine.ToString('X4')), expected 0x$($zc.ExpectedMachine.ToString('X4'))"
+                }
+                Write-Host "Verified portable PE in $($zc.Zip): 0x$($machine.ToString('X4'))"
+              } finally {
+                $stream.Dispose()
+              }
+            } finally {
+              $archive.Dispose()
+            }
+          }
+
+      - name: Create Draft GitHub Release & Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          name: "Radium Download Manager ${{ github.ref_name }}"
-          draft: false
+          name: "Radium Download Manager ${{ needs.build-and-package-x64.outputs.version }}"
+          draft: true
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
@@ -690,12 +732,43 @@ jobs:
             dist/**/Radium-Setup-ARM64-Core-*.exe
             dist/**/Radium-v*-Windows-x64-Full.zip
             dist/**/Radium-v*-Windows-x64-Core.zip
-            dist/**/Radium-v*-Windows-x64.zip
             dist/**/Radium-v*-Windows-ARM64-Full.zip
             dist/**/Radium-v*-Windows-ARM64-Core.zip
-            dist/**/Radium-v*-Windows-ARM64.zip
             dist/**/SHA256SUMS.txt
             LICENSE
             THIRD_PARTY_NOTICES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Draft Release Assets & Publish
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = "${{ needs.build-and-package-x64.outputs.version }}"
+          $releaseJson = gh release view $tag --json assets,isDraft,name | ConvertFrom-Json
+          if (-not $releaseJson) { throw "Failed to query draft release $tag" }
+          $assetNames = $releaseJson.assets | ForEach-Object { $_.name }
+          $required = @(
+            "Radium-Setup-x64-$ver.exe",
+            "Radium-Setup-x64-Core-$ver.exe",
+            "Radium-Setup-ARM64-$ver.exe",
+            "Radium-Setup-ARM64-Core-$ver.exe",
+            "Radium-v$ver-Windows-x64-Full.zip",
+            "Radium-v$ver-Windows-x64-Core.zip",
+            "Radium-v$ver-Windows-ARM64-Full.zip",
+            "Radium-v$ver-Windows-ARM64-Core.zip",
+            "SHA256SUMS.txt",
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md"
+          )
+          foreach ($req in $required) {
+            $asset = $releaseJson.assets | Where-Object { $_.name -eq $req } | Select-Object -First 1
+            if (-not $asset -or $asset.size -le 0) {
+              throw "Draft release missing or empty asset on GitHub: $req"
+            }
+            Write-Host "Confirmed on GitHub draft: $($asset.name) ($($asset.size) bytes)"
+          }
+          gh release edit $tag --draft=false
+          Write-Host "Published official GitHub Release: $($releaseJson.name) ($tag)"

@@ -70,6 +70,11 @@
 
 ## 3. Non-Functional Requirements Matrix (`NFR-001` to `NFR-016`)
 
+Startup audit (2026-11-17): capacity-aware scheduler wake predicate, controller-local
+queue cache, nonblocking foreground stream cache lookups, and explicit worker
+extraction diagnostics. Execution evidence and limitations are tracked in
+`audit/startup-performance-2026-11-17.md`.
+
 | Req ID | Requirement Summary | Responsible Module | Verification Status | Measured / Verified Result |
 | :--- | :--- | :--- | :--- | :--- |
 | **NFR-001** | Core Binary Size (`<= 3.0 MB` uncompressed) | `CMakeLists.txt` | `Verified by Execution` | `2,047.0 KB` (`flux.exe` 2,040.3 KB + `flux-nmh.exe` 55.8 KB <= 3,072 KB budget) |
@@ -121,4 +126,3 @@
 | Native task-row hover | Hover background is drawn at full strength and old/new row regions redraw synchronously on mouse movement | MSVC Release build and 71/71 C++ suites passed; updated executable staged in `dist/Radium.exe` |
 
 | Multi-site video extraction & website compatibility (`VideoExtractionManager`) | Modular `IVideoExtractor` architecture (`BilibiliExtractor`, `FacebookExtractor`, `AdultPlatformExtractor`, `GeneralYtDlpExtractor`), root-domain Netscape cookie generation (`ExtractRegistrableDomain`), `fbcdn.net` `bytestart`/`byteend` stripping, Bilibili `__playinfo__` DASH video+audio pairing and multipart episode resolution, non-fake quality probing in Add Download dialog (`WM_OPENIDM_PROBE_COMPLETE`) and `video.extract` IPC, and FFmpeg merge fallback preservation | MSVC Release build (`radium.exe`, `radium-nmh.exe`, `radium_core_tests.exe`, `radium_unit_tests.exe`) and Node extension suite (`19/19` suites, `28/28` scenarios) passed |
-

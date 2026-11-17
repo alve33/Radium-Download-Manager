@@ -2348,6 +2348,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
     // an older signed URL. Consult prewarm only when direct browser URLs are
     // unavailable or still require cipher extraction or are UMP chunks (sabr=1).
     if (video_url.empty() || requires_cipher || IsUmpChunkUrl(video_url)) {
+        diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+            task.task_id, "Stream cache lookup started", "Nonblocking lookup of already resolved formats");
         std::string pre_v, pre_a, pre_res, pre_cookies;
         std::string vid_to_lookup;
         std::smatch vid_m;
@@ -2360,10 +2362,9 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             vid_to_lookup = vid_m[1].str();
         }
         std::map<std::string, std::string> pre_v_headers, pre_a_headers;
-        if (!vid_to_lookup.empty() && YouTubeStreamPrewarmer::Instance().ResolveSync(
-                vid_to_lookup, watch_url, req_filter, pre_v, pre_a, pre_res,
-                &pre_cookies, &pre_v_headers, &pre_a_headers,
-                std::chrono::milliseconds(8000))) {
+        if (!vid_to_lookup.empty() && YouTubeStreamPrewarmer::Instance().GetDirectUrls(
+                vid_to_lookup, req_filter, pre_v, pre_a, pre_res,
+                &pre_cookies, &pre_v_headers, &pre_a_headers)) {
             const bool replaced_page_url = !video_url.empty() && video_url != pre_v;
             video_url = pre_v;
             audio_url = pre_a;
@@ -2393,6 +2394,10 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                              ") - bypassing page scraping & yt-dlp on click!");
         }
     }
+
+    diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
+        task.task_id, "Stream URL preparation completed",
+        video_url.empty() ? "No resolved media URL; extraction required" : "Resolved media URL available");
 
     if (watch_url.empty() || is_raw_googlevideo(watch_url)) {
         std::string src_for_id = (!task.url.empty() && is_raw_googlevideo(task.url)) ? task.url : video_url;
@@ -3203,8 +3208,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             vid_to_lookup = vid_m[1].str();
         }
         std::map<std::string, std::string> pre_v_headers, pre_a_headers;
-        if (!vid_to_lookup.empty() && YouTubeStreamPrewarmer::Instance().ResolveSync(
-                vid_to_lookup, watch_url, req_filter, pre_v, pre_a, pre_res, &pre_cookies, &pre_v_headers, &pre_a_headers)) {
+        if (!vid_to_lookup.empty() && YouTubeStreamPrewarmer::Instance().GetDirectUrls(
+                vid_to_lookup, req_filter, pre_v, pre_a, pre_res, &pre_cookies, &pre_v_headers, &pre_a_headers)) {
             video_url = pre_v;
             audio_url = pre_a;
             video_track_headers = pre_v_headers;
@@ -3527,6 +3532,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
 
             // Real-time live status updates during extraction so UI never freezes on "Connecting..."
             if (line.find("Extracting URL") != std::string::npos || line.find("Downloading webpage") != std::string::npos) {
+                diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(task.task_id, "Extractor webpage request", "Observed worker status; not a packet timestamp");
                 task.state = TaskState::kProbing;
                 task.status_detail = "Extracting YouTube stream...";
                 if (on_progress) {
@@ -3540,6 +3546,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     on_progress(sp);
                 }
             } else if (line.find("Downloading player") != std::string::npos || line.find("client config") != std::string::npos) {
+                diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(task.task_id, "Extractor player configuration request");
                 task.state = TaskState::kProbing;
                 task.status_detail = "Loading YouTube player config...";
                 if (on_progress) {
@@ -3553,6 +3560,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     on_progress(sp);
                 }
             } else if (line.find("Solving JS") != std::string::npos || line.find("[jsc:") != std::string::npos) {
+                diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(task.task_id, "Extractor JavaScript challenge");
                 task.state = TaskState::kProbing;
                 task.status_detail = "Solving YouTube stream tokens...";
                 if (on_progress) {
@@ -3566,6 +3574,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     on_progress(sp);
                 }
             } else if (line.find("player API JSON") != std::string::npos || line.find("Downloading m3u8") != std::string::npos) {
+                diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(task.task_id, "Extractor stream metadata request");
                 task.state = TaskState::kProbing;
                 task.status_detail = "Resolving video & audio streams...";
                 if (on_progress) {
@@ -3582,6 +3591,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
 
             std::smatch dest_m;
             if (std::regex_search(line, dest_m, kYtDlpDestRe)) {
+                diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(task.task_id, "Extractor transfer destination ready", "Payload progress has not yet been observed for this track");
                 std::string dest_fn = std::filesystem::path(dest_m[1].str()).filename().string();
                 if (!dest_fn.empty()) {
                     current_dest = PathSanitizer::SanitizeFileName(dest_fn);
@@ -3592,12 +3602,12 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                                            current_dest.find(".f251") != std::string::npos)
                                            ? "audio stream (2/2)"
                                            : "video stream (1/2)";
-                task.state = TaskState::kDownloading;
-                task.status_detail = "Downloading YouTube " + track_label + "...";
+                task.state = TaskState::kProbing;
+                task.status_detail = "Connecting YouTube " + track_label + "...";
                 if (on_progress) {
                     StreamProgress sp;
                     sp.task_id = task.task_id;
-                    sp.phase = TaskState::kDownloading;
+                    sp.phase = task.state;
                     sp.percent = task.stream_percent;
                     sp.downloaded_bytes = task.downloaded_bytes;
                     sp.total_bytes = task.total_bytes;
@@ -3647,7 +3657,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     recorded_first_byte_diag = true;
                     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                         task.task_id, "First data bytes received",
-                        "yt-dlp received initial stream payload for " + current_dest);
+                        "First positive yt-dlp progress report; includes stdout reporting delay");
                 }
 
                 std::smatch sm;

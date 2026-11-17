@@ -157,6 +157,14 @@ For YouTube streams and watch URLs requiring JS signature decryption, adaptive f
 
 ## 7. Modular Multi-Site Video Extraction Architecture (`VideoExtractionManager`)
 
+Startup correction (2026-11-17): both foreground cache checks use `GetDirectUrls`,
+which neither waits for navigation prewarming nor launches a duplicate extraction.
+The separate 403 recovery path retains its bounded 1500 ms refresh opportunity.
+Diagnostics record worker-observed webpage, player, challenge, metadata and
+destination stages without copying worker text or signed URLs. A destination
+announcement remains probing; positive payload progress marks downloading.
+The yt-dlp first-byte event is a stdout progress observation, not packet-level TTFB.
+
 To support broad website compatibility beyond YouTube—including **Bilibili**, **Facebook**, **Adult Video Platforms** (Pornhub, XVideos, XNXX, xHamster, SpankBang, RedTube, YouPorn, Eporner, etc.), and general third-party streaming platforms (Vimeo, Dailymotion, Twitch, X/Twitter, Instagram, TikTok, Reddit, Streamable, PeerTube)—Radium implements `IVideoExtractor` and `VideoExtractionManager` in `src/engine_stream/video_extractor.hpp/.cpp`:
 
 1. **Modular Extractor Interface (`IVideoExtractor`):**
@@ -168,4 +176,3 @@ To support broad website compatibility beyond YouTube—including **Bilibili**, 
    - The Add Download dialog (`WM_OPENIDM_PROBE_COMPLETE`) and `video.extract` IPC method populate quality selectors strictly from actual formats returned by `VideoExtractionManager`.
    - `ParseUrlExpirationEpoch` and `IsStreamUrlExpired` inspect `expire=`, `expires=`, `e=`, `oe=`, `validto=`, and `hdnea=` parameters so expired CDN URLs are automatically refreshed before transfer or retry.
    - `ExtractionDiagnosticReport::ToRedactedJson()` logs structured diagnostic telemetry with all sensitive cookies, tokens, and authorization headers redacted via `Logger::RedactSensitiveData`.
-

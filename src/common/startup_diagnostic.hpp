@@ -403,6 +403,8 @@ public:
                 ev_obj["epoch_ms"] = static_cast<int64_t>(ev.epoch_ms);
                 ev_obj["elapsed_ms"] = static_cast<double>(ev.elapsed_us) / 1000.0;
                 ev_obj["duration_ms"] = static_cast<double>(ev.duration_us) / 1000.0;
+                ev_obj["delta_since_previous_event_ms"] = static_cast<double>(ev.duration_us) / 1000.0;
+                ev_obj["download_id"] = rep.download_id;
                 ev_obj["detail"] = ev.detail;
                 events_arr.mutable_array().push_back(std::move(ev_obj));
             }

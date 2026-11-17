@@ -427,7 +427,7 @@ Official Upstream Projects:
             architecture = $Architecture
             buildDate = [DateTime]::UtcNow.ToString("o")
             gitCommit = $gitCommit
-            repository = "https://github.com/sayedalve/Radium-Download-Manager"
+            repository = "https://github.com/alve33/Radium-Download-Manager"
             license = "Apache-2.0"
             installedDiskFootprintBytes = $uncompressedBytes
             installedDiskFootprintMB = $uncompressedMb

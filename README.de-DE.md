@@ -21,13 +21,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Neueste Version" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/releases/latest"><img alt="Für Windows herunterladen" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Neueste Version" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Für Windows herunterladen" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="Sprache: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="Benutzeroberfläche: Natives Win32" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
   <img alt="Erweiterung: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
   <img alt="Lizenz: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg?style=flat-square">
-  <a href="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows Release Build" src="https://github.com/sayedalve/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml"><img alt="Windows Release Build" src="https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml/badge.svg?branch=main"></a>
 </p>
 
 <p align="center">
@@ -76,8 +76,8 @@ Radium wird als vorkonfiguriertes, portables Windows x64-Paket und als optionale
 
 | Paket | Architektur | Download |
 | :--- | :---: | :--- |
-| **Radium Portable (Vollversion)** | x64 | [ZIP-Archiv](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
-| **Radium Portable (Kern)** | x64 | [ZIP-Archiv](https://github.com/sayedalve/Radium-Download-Manager/releases/latest) |
+| **Radium Portable (Vollversion)** | x64 | [ZIP-Archiv](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
+| **Radium Portable (Kern)** | x64 | [ZIP-Archiv](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
 
 ### Schnelleinrichtung der Browser-Erweiterung
 
@@ -263,7 +263,7 @@ Voraussetzungen: **Windows 11 x64**, **Visual Studio 2022 (MSVC 19.38+)** mit C+
 
 ```powershell
 # Repository klonen
-git clone https://github.com/sayedalve/Radium-Download-Manager.git
+git clone https://github.com/alve33/Radium-Download-Manager.git
 cd Radium-Download-Manager
 
 # Kompilieren und portables Paket erstellen
