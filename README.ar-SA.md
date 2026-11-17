@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="أحدث إصدار" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="أحدث إصدار" src="https://img.shields.io/github/v/release/alve33/Radium-Download-Manager?style=flat-square"></a>
   <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="تنزيل لنظام Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="لغة البرمجة: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="واجهة المستخدم: Win32 أصلية" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
@@ -74,12 +74,18 @@
 
 ## التنزيل والتثبيت
 
-يتوفر برنامج Radium في صورة حزم محمولة مسبقة الإعداد لنظام Windows x64، بالإضافة إلى حزم التثبيت القياسية MSIX وInno Setup.
+أحدث إصدار منشور هو **[v1.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0)**. الحزم المتوفرة لنظام Windows:
 
-| الحزمة | المعمارية | رابط التنزيل |
-| :--- | :---: | :--- |
-| **Radium المحمول (الكامل)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
-| **Radium المحمول (النواة الأساسية)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
+| الحزمة | المعمارية | الصيغة | الوصف |
+| :--- | :---: | :---: | :--- |
+| **مثبت Radium (القياسي)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | المثبت الموصى به لمعظم المستخدمين (Windows 11 / 10 x64) |
+| **Radium المحمول (الكامل)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | حزمة محمولة تتضمن أدوات البث N_m3u8DL-RE وFFmpeg |
+| **Radium المحمول (النواة الأساسية)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | الحزمة الأساسية (تتطلب أدوات البث بشكل منفصل) |
+| **مثبت Radium (النواة الأساسية)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | مثبت خفيف الوزن بدون أدوات البث المدمجة |
+| **مثبت Radium (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | مثبت أصلي لأجهزة Windows 11 بمعالج ARM |
+| **Radium المحمول الكامل (ARM64)** | ARM64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | حزمة محمولة كاملة مع أدوات البث لـ ARM64 |
+
+تتوفر بصمات التحقق SHA256 لملفات الإصدار المنشورة في [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt).
 
 ### التثبيت السريع لملحق المتصفح
 

@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="최신 릴리스" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="최신 릴리스" src="https://img.shields.io/github/v/release/alve33/Radium-Download-Manager?style=flat-square"></a>
   <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Windows용 다운로드" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="개발 언어: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="UI: Native Win32" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">

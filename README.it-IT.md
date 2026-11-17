@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Ultima versione" src="https://img.shields.io/github/v/release/sayedalve/Radium-Download-Manager?style=flat-square"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Ultima versione" src="https://img.shields.io/github/v/release/alve33/Radium-Download-Manager?style=flat-square"></a>
   <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Scarica per Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="Linguaggio: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="Interfaccia: Win32 nativa" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
@@ -72,12 +72,18 @@ Radium è un download manager open source nativo ad alte prestazioni, sviluppato
 
 ## Download e Installazione
 
-Radium è disponibile sia come pacchetto portatile preconfigurato per Windows x64, sia come programma di installazione standard MSIX / Inno Setup.
+L'ultima versione pubblicata è **[v1.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0)**. Pacchetti disponibili per Windows:
 
-| Pacchetto | Architettura | Collegamento |
-| :--- | :---: | :--- |
-| **Radium Portatile (Completo)** | x64 | [Archivio ZIP](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
-| **Radium Portatile (Core)** | x64 | [Archivio ZIP](https://github.com/alve33/Radium-Download-Manager/releases/latest) |
+| Pacchetto | Architettura | Formato | Descrizione |
+| :--- | :---: | :---: | :--- |
+| **Installer Radium (Standard)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Installer consigliato per la maggior parte degli utenti (Windows 11 / 10 x64) |
+| **Radium Portatile (Completo)** | x64 | [Archivio ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | Pacchetto portatile con strumenti N_m3u8DL-RE e FFmpeg inclusi |
+| **Radium Portatile (Core)** | x64 | [Archivio ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | Pacchetto base (strumenti di streaming richiesti separatamente) |
+| **Installer Radium Core** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | Installer leggero senza strumenti di streaming integrati |
+| **Installer Radium (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Installer nativo per dispositivi Windows 11 su ARM |
+| **Radium Portatile Completo (ARM64)** | ARM64 | [Archivio ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | Pacchetto portatile completo con strumenti per ARM64 |
+
+I checksum SHA256 per i file rilasciati sono disponibili in [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt).
 
 ### Configurazione rapida dell'estensione per il browser
 
