@@ -29,13 +29,17 @@ param(
     [ValidateSet("x64", "ARM64")]
     [string]$Architecture = "x64",
 
-    [string]$Version = "1.0.0.0",
+    [string]$Version = "",
 
-    [string]$PackageName = "RadiumDownloadManager",
+    [string]$PackageName = "",
 
-    [string]$Publisher = "CN=TestPublisher",
+    [string]$Publisher = "",
 
-    [string]$PublisherDisplayName = "Radium Contributors",
+    [string]$PublisherDisplayName = "",
+
+    [string]$BuildDir = "",
+
+    [string]$ToolsDir = "",
 
     [switch]$SignForTesting = $false,
 
@@ -47,28 +51,55 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
 
-# Resolve authoritative version from root VERSION file if not explicitly provided or defaulted
-if (-not $Version -or $Version -eq "1.0.0.0") {
-    $versionFilePath = Join-Path $RepoRoot "VERSION"
-    if (Test-Path $versionFilePath) {
-        $rawVer = (Get-Content $versionFilePath -Raw).Trim()
-        if ($rawVer -match '^(\d+)\.(\d+)\.(\d+)') {
-            $Version = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+# Resolve authoritative version from parameter, RADIUM_VERSION, or root VERSION file,
+# and convert SemVer (Major.Minor.Patch[-prerelease]) to 4-part MSIX version (Major.Minor.Patch.0).
+if (-not $Version) {
+    if ($env:RADIUM_VERSION) {
+        $Version = $env:RADIUM_VERSION
+    } else {
+        $versionFilePath = Join-Path $RepoRoot "VERSION"
+        if (Test-Path $versionFilePath) {
+            $Version = (Get-Content $versionFilePath -Raw).Trim()
+        } else {
+            $Version = "1.0.0"
         }
     }
 }
+if ($Version -match '^v?(\d+)\.(\d+)\.(\d+)\.(\d+)$') {
+    $Version = "$($Matches[1]).$($Matches[2]).$($Matches[3]).$($Matches[4])"
+} elseif ($Version -match '^v?(\d+)\.(\d+)\.(\d+)(?:[.-].+)?$') {
+    $Version = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+} else {
+    throw "Invalid version format '$Version'. Expected SemVer (e.g. 1.0.0) or 4-part MSIX version (e.g. 1.0.0.0)."
+}
+
+# Resolve Package Identity (explicit parameter > environment variable > config/radium_config.json > default)
+if (-not $PackageName -and $env:MSIX_PACKAGE_NAME) { $PackageName = $env:MSIX_PACKAGE_NAME }
+if (-not $Publisher -and $env:MSIX_PUBLISHER) { $Publisher = $env:MSIX_PUBLISHER }
+if (-not $PublisherDisplayName -and $env:MSIX_PUBLISHER_DISPLAY_NAME) { $PublisherDisplayName = $env:MSIX_PUBLISHER_DISPLAY_NAME }
 
 $configFilePath = Join-Path $RepoRoot "config\radium_config.json"
 if (Test-Path $configFilePath) {
     try {
         $cfgJson = Get-Content $configFilePath -Raw | ConvertFrom-Json
-        if ($cfgJson.product.msix_package_name -and ($PackageName -eq "RadiumDownloadManager")) {
+        if (-not $PackageName -and $cfgJson.product.msix_package_name) {
             $PackageName = $cfgJson.product.msix_package_name
         }
-        if ($cfgJson.product.publisher_display_name -and ($PublisherDisplayName -eq "Radium Contributors")) {
+        if (-not $Publisher -and $cfgJson.product.msix_publisher) {
+            $Publisher = $cfgJson.product.msix_publisher
+        }
+        if (-not $PublisherDisplayName -and $cfgJson.product.publisher_display_name) {
             $PublisherDisplayName = $cfgJson.product.publisher_display_name
         }
     } catch {}
+}
+
+if (-not $PackageName) { $PackageName = "RadiumDownloadManager" }
+if (-not $Publisher) { $Publisher = "CN=TestPublisher" }
+if (-not $PublisherDisplayName) { $PublisherDisplayName = "Radium Contributors" }
+
+if ($Publisher -eq "CN=TestPublisher") {
+    Write-Warning "MSIX Publisher is set to '$Publisher' (development placeholder). Set MSIX_PUBLISHER / -Publisher to your Microsoft Partner Center Publisher ID before Store submission."
 }
 
 if (-not $OutputDir) {
@@ -119,11 +150,19 @@ if (-not $makeappxExe) {
 }
 Write-Host "[+] Found Windows SDK tools: $(Split-Path -Parent $makeappxExe)" -ForegroundColor Green
 
-# 2. Locate built binaries
+# 2. Locate built binaries & validate PE32+ architecture
 $radiumExe = $null
 $radiumNmhExe = $null
 
-$searchPaths = @(
+$searchPaths = @()
+if ($BuildDir) {
+    $resolvedBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $RepoRoot $BuildDir }
+    $searchPaths += @(
+        $resolvedBuildDir,
+        (Join-Path $resolvedBuildDir "Release")
+    )
+}
+$searchPaths += @(
     (Join-Path $RepoRoot "build\win-$Architecture\Release"),
     (Join-Path $RepoRoot "build\win-$Architecture"),
     (Join-Path $RepoRoot "dist\$Architecture"),
@@ -145,8 +184,22 @@ foreach ($sp in $searchPaths) {
 if (-not $radiumExe -or -not $radiumNmhExe) {
     throw "Required binaries (radium.exe and radium-nmh.exe) for $Architecture were not found.`nSearched:`n - $($searchPaths -join "`n - ")"
 }
-Write-Host "[+] Found application executable: $radiumExe" -ForegroundColor Green
-Write-Host "[+] Found native host executable : $radiumNmhExe" -ForegroundColor Green
+
+$expectedMachine = if ($Architecture -eq "ARM64") { [uint16]0xAA64 } else { [uint16]0x8664 }
+foreach ($bin in @($radiumExe, $radiumNmhExe)) {
+    $bytes = [System.IO.File]::ReadAllBytes($bin)
+    if ($bytes.Length -lt 256 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        throw "Invalid PE header (missing MZ) in $bin"
+    }
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+    if ($machine -ne $expectedMachine) {
+        throw "PE architecture mismatch for ${bin}: expected 0x$($expectedMachine.ToString('X4')) ($Architecture), got 0x$($machine.ToString('X4'))"
+    }
+}
+
+Write-Host "[+] Found application executable: $radiumExe ($Architecture)" -ForegroundColor Green
+Write-Host "[+] Found native host executable : $radiumNmhExe ($Architecture)" -ForegroundColor Green
 
 # 3. Create staging directory
 $stageDir = Join-Path $env:TEMP "radium_msix_stage_$Architecture"
@@ -166,6 +219,17 @@ Copy-Item (Join-Path $RepoRoot "README.md") $stageDir
 Copy-Item (Join-Path $RepoRoot "LICENSE") $stageDir
 Copy-Item (Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md") $stageDir
 
+# Copy offline desktop translation catalog (required by src/ui/localization.cpp)
+$desktopCatalogSrc = Join-Path $RepoRoot "translations\desktop.json"
+if (Test-Path $desktopCatalogSrc) {
+    $translationsDst = Join-Path $stageDir "translations"
+    New-Item -ItemType Directory -Path $translationsDst -Force | Out-Null
+    Copy-Item $desktopCatalogSrc (Join-Path $translationsDst "desktop.json") -Force
+    Write-Host "[+] Staged translations\desktop.json" -ForegroundColor Green
+} else {
+    throw "Required translation catalog missing: $desktopCatalogSrc"
+}
+
 # Copy Visual Assets
 $assetsSource = Join-Path $RepoRoot "installer\msix\Assets"
 if (Test-Path $assetsSource) {
@@ -174,8 +238,16 @@ if (Test-Path $assetsSource) {
     throw "MSIX visual assets directory missing: $assetsSource"
 }
 
-# Copy Manifests & scripts
-Copy-Item (Join-Path $RepoRoot "installer\manifests\*") (Join-Path $stageDir "manifests")
+# Copy Manifests (rewriting host path to package-relative ..\radium-nmh.exe) & scripts
+$manifestsSrc = Join-Path $RepoRoot "installer\manifests"
+$manifestsDst = Join-Path $stageDir "manifests"
+$utf8NoBomManifest = New-Object System.Text.UTF8Encoding($false)
+Get-ChildItem -Path $manifestsSrc -Filter "*.json" | ForEach-Object {
+    $mObj = Get-Content $_.FullName -Raw | ConvertFrom-Json
+    $mObj.path = "..\radium-nmh.exe"
+    $jsonOut = $mObj | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText((Join-Path $manifestsDst $_.Name), $jsonOut, $utf8NoBomManifest)
+}
 Copy-Item (Join-Path $RepoRoot "scripts\register-native-messaging.ps1") (Join-Path $stageDir "scripts")
 
 # Copy Browser Extension (excluding dev files)
@@ -196,9 +268,23 @@ Get-ChildItem -Path $extSrc -Recurse | Where-Object {
 }
 
 # Copy stream workers if present (clean minimal set only)
-$toolsSrc = Join-Path $RepoRoot "tools\win-x64"
-if (Test-Path $toolsSrc) {
-    $toolsDst = Join-Path $stageDir "tools\win-x64"
+$archToolsSubdir = if ($Architecture -eq "ARM64") { "win-arm64" } else { "win-x64" }
+$toolsSrc = $null
+if ($ToolsDir) {
+    $resolvedTools = if ([System.IO.Path]::IsPathRooted($ToolsDir)) { $ToolsDir } else { Join-Path $RepoRoot $ToolsDir }
+    if (Test-Path $resolvedTools) { $toolsSrc = $resolvedTools }
+}
+if (-not $toolsSrc) {
+    $archToolsPath = Join-Path $RepoRoot "tools\$archToolsSubdir"
+    $fallbackToolsPath = Join-Path $RepoRoot "tools\win-x64"
+    if (Test-Path $archToolsPath) {
+        $toolsSrc = $archToolsPath
+    } elseif (Test-Path $fallbackToolsPath) {
+        $toolsSrc = $fallbackToolsPath
+    }
+}
+if ($toolsSrc -and (Test-Path $toolsSrc)) {
+    $toolsDst = Join-Path $stageDir "tools\$archToolsSubdir"
     New-Item -ItemType Directory -Path $toolsDst -Force | Out-Null
     foreach ($w in @("ffmpeg.exe", "N_m3u8DL-RE.exe", "yt-dlp.exe")) {
         $workerPath = Join-Path $toolsSrc $w
@@ -206,7 +292,7 @@ if (Test-Path $toolsSrc) {
             Copy-Item $workerPath (Join-Path $toolsDst $w) -Force
         }
     }
-    Write-Host "[+] Staged bundled stream workers from: $toolsSrc" -ForegroundColor Green
+    Write-Host "[+] Staged bundled stream workers from: $toolsSrc -> tools\$archToolsSubdir" -ForegroundColor Green
 }
 
 # 5. Generate AppxManifest.xml
@@ -230,19 +316,51 @@ $manifestContent = $manifestContent.Replace('${PUBLISHER_DISPLAY_NAME}', $Publis
 $manifestOut = Join-Path $stageDir "AppxManifest.xml"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($manifestOut, $manifestContent, $utf8NoBom)
-Write-Host "[+] Generated AppxManifest.xml ($Architecture, v$Version)" -ForegroundColor Green
+
+# Validate AppxManifest.xml structure and referenced assets
+[xml]$manifestXml = Get-Content -Path $manifestOut -Raw
+if ($manifestXml.Package.Identity.Name -ne $PackageName) {
+    throw "AppxManifest Identity Name mismatch: $($manifestXml.Package.Identity.Name)"
+}
+if ($manifestXml.Package.Identity.Publisher -ne $Publisher) {
+    throw "AppxManifest Identity Publisher mismatch: $($manifestXml.Package.Identity.Publisher)"
+}
+if ($manifestXml.Package.Identity.Version -ne $Version) {
+    throw "AppxManifest Identity Version mismatch: $($manifestXml.Package.Identity.Version)"
+}
+if ($manifestXml.Package.Identity.ProcessorArchitecture -ne $manifestArch) {
+    throw "AppxManifest ProcessorArchitecture mismatch: $($manifestXml.Package.Identity.ProcessorArchitecture)"
+}
+$requiredAssets = @(
+    "Assets\StoreLogo.png",
+    "Assets\Square44x44Logo.png",
+    "Assets\Square71x71Logo.png",
+    "Assets\Square150x150Logo.png",
+    "Assets\Square310x310Logo.png",
+    "Assets\Wide310x150Logo.png",
+    "Assets\SplashScreen.png"
+)
+foreach ($assetRel in $requiredAssets) {
+    $assetFull = Join-Path $stageDir $assetRel
+    if (-not (Test-Path $assetFull)) {
+        throw "AppxManifest referenced asset missing from staging dir: $assetRel"
+    }
+}
+Write-Host "[+] Generated & validated AppxManifest.xml ($manifestArch, v$Version)" -ForegroundColor Green
 
 # 6. Build PRI (Package Resource Index)
 $priconfigPath = Join-Path $RepoRoot "installer\msix\priconfig.xml"
 if (-not (Test-Path $priconfigPath)) {
     & $makepriExe createconfig /cf $priconfigPath /dq en-US /o /pv 10.0.0 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "makepri createconfig failed with exit code $LASTEXITCODE" }
 }
 
 $priOutput = Join-Path $stageDir "resources.pri"
 & $makepriExe new /pr $stageDir /cf $priconfigPath /of $priOutput /o | Out-Null
-if (Test-Path $priOutput) {
-    Write-Host "[+] Generated Package Resource Index: $priOutput" -ForegroundColor Green
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $priOutput)) {
+    throw "makepri new failed with exit code $LASTEXITCODE"
 }
+Write-Host "[+] Generated Package Resource Index: $priOutput" -ForegroundColor Green
 
 # 7. Pack with MakeAppx
 $outMsixName = "Radium-$Architecture-$Version.msix"
@@ -255,10 +373,28 @@ if (Test-Path $outMsixPath) {
 Write-Host "==> Packaging into MSIX: $outMsixPath..." -ForegroundColor Yellow
 $packArgs = @("pack", "/d", $stageDir, "/p", $outMsixPath, "/o")
 & $makeappxExe $packArgs
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $outMsixPath)) {
     throw "MakeAppx failed with exit code $LASTEXITCODE"
 }
 Write-Host "[+] Successfully created MSIX package: $outMsixPath" -ForegroundColor Green
+
+# Validate generated MSIX via MakeAppx unpack round-trip
+$verifyDir = Join-Path $env:TEMP "radium_msix_verify_$Architecture"
+if (Test-Path $verifyDir) {
+    Remove-Item -Recurse -Force $verifyDir
+}
+& $makeappxExe unpack /p $outMsixPath /d $verifyDir /o | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "MakeAppx unpack validation failed for $outMsixPath (exit code $LASTEXITCODE)"
+}
+foreach ($reqFile in @("AppxManifest.xml", "radium.exe", "radium-nmh.exe", "translations\desktop.json", "resources.pri", "Assets\StoreLogo.png")) {
+    $unpackedPath = Join-Path $verifyDir $reqFile
+    if (-not (Test-Path $unpackedPath) -or (Get-Item $unpackedPath).Length -le 0) {
+        throw "MSIX validation failed: missing or empty payload file '$reqFile' inside $outMsixPath"
+    }
+}
+Remove-Item -Recurse -Force $verifyDir
+Write-Host "[+] Verified MSIX payload integrity via MakeAppx unpack." -ForegroundColor Green
 
 # Clean staging directory
 Remove-Item -Recurse -Force $stageDir

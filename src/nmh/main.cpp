@@ -237,20 +237,35 @@ int main(int argc, char* argv[]) {
 
     std::string sock_path = openidm::ipc::GetDefaultIpcSocketPath();
     std::filesystem::path daemon_bin;
+#ifdef _WIN32
+    {
+        wchar_t mod_buf[32768]{};
+        DWORD mod_len = GetModuleFileNameW(nullptr, mod_buf, 32767);
+        std::filesystem::path self_dir;
+        if (mod_len > 0 && mod_len < 32767) {
+            self_dir = std::filesystem::path(mod_buf).parent_path();
+        } else if (argc > 0 && argv[0]) {
+            self_dir = std::filesystem::path(argv[0]).parent_path();
+        }
+        if (!self_dir.empty()) {
+            std::filesystem::path candidate = self_dir / "radium.exe";
+            if (!std::filesystem::exists(candidate)) {
+                candidate = self_dir / "Radium.exe";
+            }
+            if (std::filesystem::exists(candidate)) {
+                daemon_bin = candidate;
+            }
+        }
+    }
+#else
     if (argc > 0 && argv[0]) {
         std::filesystem::path self_path = std::filesystem::path(argv[0]);
-#ifdef _WIN32
-        std::filesystem::path candidate = self_path.parent_path() / "radium.exe";
-        if (!std::filesystem::exists(candidate)) {
-            candidate = self_path.parent_path() / "Radium.exe";
-        }
-#else
         std::filesystem::path candidate = self_path.parent_path() / "radium";
-#endif
         if (std::filesystem::exists(candidate)) {
             daemon_bin = candidate;
         }
     }
+#endif
 
 #ifdef _WIN32
     HANDLE hPipe = INVALID_HANDLE_VALUE;

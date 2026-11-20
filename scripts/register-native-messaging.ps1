@@ -83,7 +83,8 @@ if (-not $HostExePath) {
         (Join-Path $RepoRoot "build\flux-nmh.exe"),
         (Join-Path $RepoRoot "build\radium-nmh.exe"),
         (Join-Path $RepoRoot "dist\flux-nmh.exe"),
-        (Join-Path $RepoRoot "flux-nmh.exe")
+        (Join-Path $RepoRoot "flux-nmh.exe"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\radium-nmh.exe")
     )
     foreach ($cand in $candidates) {
         if (Test-Path $cand) {
