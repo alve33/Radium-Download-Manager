@@ -2,11 +2,10 @@
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  IgnorableNamespaces="uap uap3 uap5 rescap desktop">
+  IgnorableNamespaces="uap uap5 rescap desktop">
 
   <Identity
     Name="${PACKAGE_NAME}"
@@ -27,7 +26,7 @@
   </Dependencies>
 
   <Resources>
-    <Resource Language="x-generate" />
+    <Resource Language="en-US" />
   </Resources>
 
   <Applications>
@@ -61,19 +60,6 @@
             <uap5:ExecutionAlias Alias="radium-nmh.exe" />
           </uap5:AppExecutionAlias>
         </uap5:Extension>
-
-        <!-- Microsoft Edge Native Messaging Host Extension -->
-        <uap3:Extension Category="windows.appExtension">
-          <uap3:AppExtension
-            Name="com.microsoft.edge.extension"
-            Id="com.radium.downloadmanager"
-            DisplayName="Radium Download Manager Native Host"
-            PublicFolder="manifests">
-            <uap3:Properties>
-              <NativeMessagingHost>manifests\com.radium.downloadmanager.chromium.json</NativeMessagingHost>
-            </uap3:Properties>
-          </uap3:AppExtension>
-        </uap3:Extension>
 
         <!-- Startup Task (Optional Tray Launch) -->
         <desktop:Extension Category="windows.startupTask" Executable="radium.exe" EntryPoint="Windows.FullTrustApplication">

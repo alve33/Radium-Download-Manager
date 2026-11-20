@@ -41,6 +41,8 @@ param(
 
     [string]$ToolsDir = "",
 
+    [switch]$StoreSubmission = $false,
+
     [switch]$SignForTesting = $false,
 
     [string]$OutputDir = ""
@@ -78,28 +80,52 @@ if (-not $PackageName -and $env:MSIX_PACKAGE_NAME) { $PackageName = $env:MSIX_PA
 if (-not $Publisher -and $env:MSIX_PUBLISHER) { $Publisher = $env:MSIX_PUBLISHER }
 if (-not $PublisherDisplayName -and $env:MSIX_PUBLISHER_DISPLAY_NAME) { $PublisherDisplayName = $env:MSIX_PUBLISHER_DISPLAY_NAME }
 
-$configFilePath = Join-Path $RepoRoot "config\radium_config.json"
-if (Test-Path $configFilePath) {
-    try {
-        $cfgJson = Get-Content $configFilePath -Raw | ConvertFrom-Json
-        if (-not $PackageName -and $cfgJson.product.msix_package_name) {
-            $PackageName = $cfgJson.product.msix_package_name
-        }
-        if (-not $Publisher -and $cfgJson.product.msix_publisher) {
-            $Publisher = $cfgJson.product.msix_publisher
-        }
-        if (-not $PublisherDisplayName -and $cfgJson.product.publisher_display_name) {
-            $PublisherDisplayName = $cfgJson.product.publisher_display_name
-        }
-    } catch {}
-}
+if ($StoreSubmission) {
+    if ($SignForTesting) {
+        throw "Store submission packages must NOT be signed with a local test certificate (-SignForTesting cannot be combined with -StoreSubmission)."
+    }
+    if ([string]::IsNullOrWhiteSpace($PackageName)) {
+        throw "Store submission requires MSIX_PACKAGE_NAME (-PackageName) from Microsoft Partner Center. Placeholder/config defaults are forbidden."
+    }
+    if ([string]::IsNullOrWhiteSpace($Publisher)) {
+        throw "Store submission requires MSIX_PUBLISHER (-Publisher) from Microsoft Partner Center. Placeholder/config defaults are forbidden."
+    }
+    if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
+        throw "Store submission requires MSIX_PUBLISHER_DISPLAY_NAME (-PublisherDisplayName) from Microsoft Partner Center. Placeholder/config defaults are forbidden."
+    }
+    if ($Publisher -match 'TestPublisher') {
+        throw "Store submission rejected: Publisher '$Publisher' is a development placeholder."
+    }
+    if ($Publisher -match '2\.25\.311718361087948018008814957342246049000') {
+        throw "Store submission rejected: Publisher '$Publisher' uses the unsigned development OID."
+    }
+    if ($Publisher -notmatch '^CN=.+') {
+        throw "Store submission rejected: Publisher '$Publisher' must start with 'CN=' and match Partner Center."
+    }
+} else {
+    $configFilePath = Join-Path $RepoRoot "config\radium_config.json"
+    if (Test-Path $configFilePath) {
+        try {
+            $cfgJson = Get-Content $configFilePath -Raw | ConvertFrom-Json
+            if (-not $PackageName -and $cfgJson.product.msix_package_name) {
+                $PackageName = $cfgJson.product.msix_package_name
+            }
+            if (-not $Publisher -and $cfgJson.product.msix_publisher) {
+                $Publisher = $cfgJson.product.msix_publisher
+            }
+            if (-not $PublisherDisplayName -and $cfgJson.product.publisher_display_name) {
+                $PublisherDisplayName = $cfgJson.product.publisher_display_name
+            }
+        } catch {}
+    }
 
-if (-not $PackageName) { $PackageName = "RadiumDownloadManager" }
-if (-not $Publisher) { $Publisher = "CN=TestPublisher" }
-if (-not $PublisherDisplayName) { $PublisherDisplayName = "Radium Contributors" }
+    if (-not $PackageName) { $PackageName = "RadiumDownloadManager" }
+    if (-not $Publisher) { $Publisher = "CN=TestPublisher" }
+    if (-not $PublisherDisplayName) { $PublisherDisplayName = "Radium Contributors" }
 
-if ($Publisher -eq "CN=TestPublisher") {
-    Write-Warning "MSIX Publisher is set to '$Publisher' (development placeholder). Set MSIX_PUBLISHER / -Publisher to your Microsoft Partner Center Publisher ID before Store submission."
+    if ($Publisher -eq "CN=TestPublisher") {
+        Write-Warning "MSIX Publisher is set to '$Publisher' (development placeholder). Set MSIX_PUBLISHER / -Publisher to your Microsoft Partner Center Publisher ID before Store submission."
+    }
 }
 
 if (-not $OutputDir) {
@@ -331,6 +357,13 @@ if ($manifestXml.Package.Identity.Version -ne $Version) {
 if ($manifestXml.Package.Identity.ProcessorArchitecture -ne $manifestArch) {
     throw "AppxManifest ProcessorArchitecture mismatch: $($manifestXml.Package.Identity.ProcessorArchitecture)"
 }
+$manifestRawCheck = Get-Content -Path $manifestOut -Raw
+if ($manifestRawCheck -match 'x-generate') {
+    throw "AppxManifest validation failed: unresolved 'x-generate' language placeholder found."
+}
+if ($manifestRawCheck -match 'com\.microsoft\.edge\.extension') {
+    throw "AppxManifest validation failed: reserved 'com.microsoft.edge.extension' declaration found."
+}
 $requiredAssets = @(
     "Assets\StoreLogo.png",
     "Assets\Square44x44Logo.png",
@@ -391,6 +424,20 @@ foreach ($reqFile in @("AppxManifest.xml", "radium.exe", "radium-nmh.exe", "tran
     $unpackedPath = Join-Path $verifyDir $reqFile
     if (-not (Test-Path $unpackedPath) -or (Get-Item $unpackedPath).Length -le 0) {
         throw "MSIX validation failed: missing or empty payload file '$reqFile' inside $outMsixPath"
+    }
+}
+if ($StoreSubmission) {
+    $sigFile = Join-Path $verifyDir "AppxSignature.p7x"
+    if (Test-Path $sigFile) {
+        throw "Store submission validation failed: AppxSignature.p7x found inside $outMsixPath (Store packages must be unsigned)."
+    }
+    $unpackedManifestText = Get-Content (Join-Path $verifyDir "AppxManifest.xml") -Raw
+    if ($unpackedManifestText -match 'TestPublisher' -or $unpackedManifestText -match '2\.25\.311718361087948018008814957342246049000') {
+        throw "Store submission validation failed: placeholder publisher or dev OID found in unpacked AppxManifest.xml."
+    }
+    [xml]$unpackedXml = $unpackedManifestText
+    if ($unpackedXml.Package.Properties.PublisherDisplayName -ne $PublisherDisplayName) {
+        throw "Store submission validation failed: PublisherDisplayName mismatch."
     }
 }
 Remove-Item -Recurse -Force $verifyDir
