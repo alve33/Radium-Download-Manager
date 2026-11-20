@@ -257,6 +257,26 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/verify-release-security.ps1 -DistDir "dist" -ToolsDir "tools/win-x64"
 
+      - name: Build & Validate MSIX Package (x64)
+        shell: powershell
+        env:
+          MSIX_PACKAGE_NAME: ${{ vars.MSIX_PACKAGE_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File installer/msix/build-msix.ps1 `
+            -Architecture x64 `
+            -Version "$env:RADIUM_VERSION" `
+            -BuildDir "build/Release" `
+            -ToolsDir "tools/win-x64" `
+            -OutputDir "release/msix"
+
+      - name: Upload MSIX Package (Windows x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: radium-msix-windows-x64
+          path: release/msix/*.msix
+
       - name: Upload Release Distribution Packages
         uses: actions/upload-artifact@v4
         with:
@@ -538,6 +558,26 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/verify-release-security.ps1 -DistDir "dist" -ToolsDir "tools/win-x64" -Architecture ARM64
 
+      - name: Build & Validate MSIX Package (ARM64)
+        shell: powershell
+        env:
+          MSIX_PACKAGE_NAME: ${{ vars.MSIX_PACKAGE_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File installer/msix/build-msix.ps1 `
+            -Architecture ARM64 `
+            -Version "$env:RADIUM_VERSION" `
+            -BuildDir "build/Release" `
+            -ToolsDir "tools/win-x64" `
+            -OutputDir "release/msix"
+
+      - name: Upload MSIX Package (Windows ARM64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: radium-msix-windows-arm64
+          path: release/msix/*.msix
+
       - name: Upload Release Distribution Packages (ARM64)
         uses: actions/upload-artifact@v4
         with:
@@ -605,6 +645,54 @@ jobs:
             ${{ runner.temp }}/radium_install_*.log
             ${{ runner.temp }}/radium_smoke_*/**
           if-no-files-found: ignore
+
+  # =========================================================================
+  # JOB 3B: Assemble & Validate Combined Multi-Arch MSIX Bundle (x64 + ARM64)
+  # =========================================================================
+  package-msix-bundle:
+    name: Package & Validate MSIX Bundle (x64 + ARM64)
+    needs: [build-and-package-x64, build-and-package-arm64]
+    runs-on: windows-2022
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Download x64 MSIX Package
+        uses: actions/download-artifact@v4
+        with:
+          name: radium-msix-windows-x64
+          path: release/msix
+
+      - name: Download ARM64 MSIX Package
+        uses: actions/download-artifact@v4
+        with:
+          name: radium-msix-windows-arm64
+          path: release/msix
+
+      - name: Build & Validate Combined MSIX Bundle
+        shell: powershell
+        run: |
+          $ver = "${{ needs.build-and-package-x64.outputs.version }}"
+          $armVer = "${{ needs.build-and-package-arm64.outputs.version }}"
+          if ($ver -ne $armVer) {
+            throw "MSIX bundle version mismatch: x64='$ver', arm64='$armVer'"
+          }
+          powershell -ExecutionPolicy Bypass -File installer/msix/build-msixbundle.ps1 `
+            -InputDir "release/msix" `
+            -OutputDir "release/msix-bundle" `
+            -Version "$ver" `
+            -RequireArchitectures x64,ARM64
+
+      - name: Upload Combined MSIX Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: radium-msix-bundle
+          path: release/msix-bundle/*.msixbundle
 
   # =========================================================================
   # JOB 4: Publish Official GitHub Release (Guarded by Validation)

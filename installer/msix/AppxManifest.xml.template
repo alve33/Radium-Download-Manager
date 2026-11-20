@@ -3,9 +3,10 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  IgnorableNamespaces="uap uap3 rescap desktop">
+  IgnorableNamespaces="uap uap3 uap5 rescap desktop">
 
   <Identity
     Name="${PACKAGE_NAME}"
@@ -22,6 +23,7 @@
 
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+    <PackageDependency Name="Microsoft.VCLibs.140.00.UWPDesktop" MinVersion="14.0.33728.0" Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
   </Dependencies>
 
   <Resources>
@@ -53,6 +55,13 @@
       </uap:VisualElements>
 
       <Extensions>
+        <!-- App Execution Alias for Native Messaging Host (stable %LOCALAPPDATA%\Microsoft\WindowsApps\radium-nmh.exe) -->
+        <uap5:Extension Category="windows.appExecutionAlias" Executable="radium-nmh.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="radium-nmh.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+
         <!-- Microsoft Edge Native Messaging Host Extension -->
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension

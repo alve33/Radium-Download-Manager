@@ -95,7 +95,27 @@ powershell -ExecutionPolicy Bypass -File scripts\package-release-zip.ps1 -Versio
 
 All routine production builds, full regression verification, clean-machine installation tests, browser extension runtime tests, and release publications are strictly automated via GitHub Actions on hosted `windows-2022` runners:
 
-1. **Deterministic Build & Regression (`build-and-package`):** Builds MSVC C++20 executables, executes `radium_unit_tests.exe`, `test_extension_detection.js`, `run_all_integration_tests.py`, and `run-benchmarks.py`. Compiles both Full and Core Inno Setup installers, packages portable ZIPs, and enforces package size budgets (`report-package-sizes.ps1 -FailOnExceeded`) and security checksums (`verify-release-security.ps1`).
-2. **Clean Installation Smoke Test (`clean-install-smoke-test`):** On an isolated fresh runner, downloads the generated installer and executes `tests/test_installer_smoke.py`: runs silent install, verifies all worker binaries and manifests, confirms HKCU registry entries, performs a real loopback HTTP download with exact SHA256 match, tests mid-stream reset auto-resume, verifies zero leftover `.part` files, tests database state persistence across restart, and validates safe uninstallation preserving `%LOCALAPPDATA%\Radium Download Manager`.
-3. **Browser Extension Runtime Test (`browser-extension-runtime-test`):** On an isolated fresh runner, launches Chromium via Playwright with the real unpacked extension loaded (`tests/browser/test_extension_runtime.js`): validates download interception, closed Shadow DOM video overlay attachment, dynamic HLS/DASH manifest detection, popup UI filtering, and service worker persistence.
-4. **Guarded Release Publishing (`publish-release`):** Strictly blocked until jobs 1, 2, and 3 have all passed; executes only on semantic version tags (`v*`), ensuring no unverified or broken build can ever be published.
+1. **Deterministic Build & Regression (`build-and-package`):** Builds MSVC C++20 executables, executes `radium_unit_tests.exe`, `test_extension_detection.js`, `run_all_integration_tests.py`, and `run-benchmarks.py`. Compiles both Full and Core Inno Setup installers, packages portable ZIPs, enforces package size budgets (`report-package-sizes.ps1 -FailOnExceeded`) and security checksums (`verify-release-security.ps1`), and packages unsigned Store-ready `.msix` artifacts (`installer/msix/build-msix.ps1`) uploaded separately as `radium-msix-windows-x64` and `radium-msix-windows-arm64`.
+2. **Combined MSIX Bundle (`package-msix-bundle`):** Downloads `radium-msix-windows-x64` and `radium-msix-windows-arm64`, assembles and validates `Radium-<version>.0.msixbundle` (`installer/msix/build-msixbundle.ps1`), and uploads `radium-msix-bundle` separately from GitHub Release EXE/ZIP assets.
+3. **Clean Installation Smoke Test (`clean-install-smoke-test`):** On an isolated fresh runner, downloads the generated installer and executes `tests/test_installer_smoke.py`: runs silent install, verifies all worker binaries and manifests, confirms HKCU registry entries, performs a real loopback HTTP download with exact SHA256 match, tests mid-stream reset auto-resume, verifies zero leftover `.part` files, tests database state persistence across restart, and validates safe uninstallation preserving `%LOCALAPPDATA%\Radium Download Manager`.
+4. **Browser Extension Runtime Test (`browser-extension-runtime-test`):** On an isolated fresh runner, launches Chromium via Playwright with the real unpacked extension loaded (`tests/browser/test_extension_runtime.js`): validates download interception, closed Shadow DOM video overlay attachment, dynamic HLS/DASH manifest detection, popup UI filtering, and service worker persistence.
+5. **Guarded Release Publishing (`publish-release`):** Strictly blocked until jobs 1, 2, and 3 have all passed; executes only on semantic version tags (`v*`), ensuring no unverified or broken build can ever be published.
+
+---
+
+## 6. Windows Package Manager (WinGet) Manifests
+
+WinGet manifests for `Radium.RadiumDownloadManager` are maintained under `installer/winget/r/Radium/RadiumDownloadManager/<version>/` (targeting the full `x64` and `arm64` Inno Setup installers) and validated locally with:
+
+```powershell
+winget validate --manifest installer\winget\r\Radium\RadiumDownloadManager\1.0.0
+```
+
+Automated release submissions to `microsoft/winget-pkgs` (via `wingetcreate`) and `alve33/scoop-bucket` are configured in `.github/workflows/package-managers-sync.yml` (requires a `WINGET_TOKEN` repository secret with `public_repo` scope).
+
+---
+
+## 7. Scoop & Chocolatey Packaging
+
+- **Scoop:** `installer/scoop/radium.json` targets the `x64` and `arm64` Full portable ZIPs and is published in the `alve33/scoop-bucket` Scoop bucket (`scoop bucket add alve33 https://github.com/alve33/scoop-bucket && scoop install alve33/radium`).
+- **Chocolatey:** `installer/chocolatey/radium.nuspec` and `installer/chocolatey/tools/` package the silent Inno Setup `x64` installer. `.github/workflows/chocolatey-publish.yml` packs the `.nupkg` on `windows-latest` and pushes to `https://push.chocolatey.org/` when `CHOCOLATEY_API_KEY` is configured.
