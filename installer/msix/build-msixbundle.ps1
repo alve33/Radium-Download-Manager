@@ -124,8 +124,9 @@ foreach ($pkg in $unbundledMsix) {
     Write-Host "[+] Verified bundled MSIX: $($pkg.Name) | Identity=$pkgId | Version=$pkgVer | Arch=$pkgArch (PE=0x$($machine.ToString('X4')))" -ForegroundColor Green
 }
 
-foreach ($reqArch in $RequireArchitectures) {
-    if ($foundArchitectures -notcontains $reqArch.ToLower()) {
+$expandedReqArch = $RequireArchitectures | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ }
+foreach ($reqArch in $expandedReqArch) {
+    if ($foundArchitectures -notcontains $reqArch) {
         throw "Bundle validation failed: required architecture '$reqArch' is missing from $bundlePath (found: $($foundArchitectures -join ', '))"
     }
 }
