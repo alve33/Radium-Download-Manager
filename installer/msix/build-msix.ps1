@@ -357,6 +357,13 @@ if ($manifestXml.Package.Identity.Version -ne $Version) {
 if ($manifestXml.Package.Identity.ProcessorArchitecture -ne $manifestArch) {
     throw "AppxManifest ProcessorArchitecture mismatch: $($manifestXml.Package.Identity.ProcessorArchitecture)"
 }
+$manifestRawCheck = Get-Content -Path $manifestOut -Raw
+if ($manifestRawCheck -match 'x-generate') {
+    throw "AppxManifest validation failed: unresolved 'x-generate' language placeholder found."
+}
+if ($manifestRawCheck -match 'com\.microsoft\.edge\.extension') {
+    throw "AppxManifest validation failed: reserved 'com.microsoft.edge.extension' declaration found."
+}
 $requiredAssets = @(
     "Assets\StoreLogo.png",
     "Assets\Square44x44Logo.png",
