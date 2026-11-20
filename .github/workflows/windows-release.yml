@@ -257,7 +257,7 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/verify-release-security.ps1 -DistDir "dist" -ToolsDir "tools/win-x64"
 
-      - name: Build & Validate MSIX Package (x64)
+      - name: Build & Validate Store MSIX Package (x64)
         shell: powershell
         env:
           MSIX_PACKAGE_NAME: ${{ vars.MSIX_PACKAGE_NAME }}
@@ -269,7 +269,8 @@ jobs:
             -Version "$env:RADIUM_VERSION" `
             -BuildDir "build/Release" `
             -ToolsDir "tools/win-x64" `
-            -OutputDir "release/msix"
+            -OutputDir "release/msix" `
+            -StoreSubmission
 
       - name: Upload MSIX Package (Windows x64)
         uses: actions/upload-artifact@v4
@@ -558,7 +559,7 @@ jobs:
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/verify-release-security.ps1 -DistDir "dist" -ToolsDir "tools/win-x64" -Architecture ARM64
 
-      - name: Build & Validate MSIX Package (ARM64)
+      - name: Build & Validate Store MSIX Package (ARM64)
         shell: powershell
         env:
           MSIX_PACKAGE_NAME: ${{ vars.MSIX_PACKAGE_NAME }}
@@ -570,7 +571,8 @@ jobs:
             -Version "$env:RADIUM_VERSION" `
             -BuildDir "build/Release" `
             -ToolsDir "tools/win-x64" `
-            -OutputDir "release/msix"
+            -OutputDir "release/msix" `
+            -StoreSubmission
 
       - name: Upload MSIX Package (Windows ARM64)
         uses: actions/upload-artifact@v4
@@ -686,13 +688,17 @@ jobs:
             -InputDir "release/msix" `
             -OutputDir "release/msix-bundle" `
             -Version "$ver" `
-            -RequireArchitectures x64,ARM64
+            -RequireArchitectures x64,ARM64 `
+            -StoreSubmission
+          Copy-Item "release/msix/*.msix" "release/msix-bundle/" -Force
 
-      - name: Upload Combined MSIX Bundle
+      - name: Upload Store Submission MSIX Packages & Bundle
         uses: actions/upload-artifact@v4
         with:
-          name: radium-msix-bundle
-          path: release/msix-bundle/*.msixbundle
+          name: radium-msix-store-submission
+          path: |
+            release/msix-bundle/*.msixbundle
+            release/msix-bundle/*.msix
 
   # =========================================================================
   # JOB 4: Publish Official GitHub Release (Guarded by Validation)

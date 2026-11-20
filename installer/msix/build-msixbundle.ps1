@@ -15,7 +15,9 @@ param(
 
     [string]$Version = "",
 
-    [string[]]$RequireArchitectures = @()
+    [string[]]$RequireArchitectures = @(),
+
+    [switch]$StoreSubmission = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,7 +114,20 @@ foreach ($pkg in $unbundledMsix) {
     [xml]$mXml = Get-Content (Join-Path $pkgVerifyDir "AppxManifest.xml") -Raw
     $pkgArch = $mXml.Package.Identity.ProcessorArchitecture
     $pkgId = $mXml.Package.Identity.Name
+    $pkgPub = $mXml.Package.Identity.Publisher
+    $pkgPubDisplay = $mXml.Package.Properties.PublisherDisplayName
     $pkgVer = $mXml.Package.Identity.Version
+    if ($StoreSubmission) {
+        if (Test-Path (Join-Path $pkgVerifyDir "AppxSignature.p7x")) {
+            throw "Store submission bundle validation failed: AppxSignature.p7x found in $($pkg.Name) (must be unsigned)."
+        }
+        if ([string]::IsNullOrWhiteSpace($pkgId) -or [string]::IsNullOrWhiteSpace($pkgPub) -or [string]::IsNullOrWhiteSpace($pkgPubDisplay)) {
+            throw "Store submission bundle validation failed: blank Identity/Publisher in $($pkg.Name)."
+        }
+        if ($pkgPub -match 'TestPublisher' -or $pkgPub -match '2\.25\.311718361087948018008814957342246049000') {
+            throw "Store submission bundle validation failed: placeholder/dev OID Publisher '$pkgPub' in $($pkg.Name)."
+        }
+    }
     $exeBytes = [System.IO.File]::ReadAllBytes((Join-Path $pkgVerifyDir "radium.exe"))
     $peOffset = [BitConverter]::ToInt32($exeBytes, 0x3C)
     $machine = [BitConverter]::ToUInt16($exeBytes, $peOffset + 4)
