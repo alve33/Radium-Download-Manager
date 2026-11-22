@@ -3,10 +3,10 @@
 **Execution Environment:** `GitHub Actions Hosted Windows Runner`  
 **Execution Timestamp (UTC):** `2026-10-20`  
 **Host Platform:** `Windows 2022Server (AMD64)`  
-**Processor:** `AMD64 Family 25 Model 1 Stepping 1, AuthenticAMD` (4 logical cores)  
+**Processor:** `AMD64 Family 25 Model 17 Stepping 1, AuthenticAMD` (4 logical cores)  
 **System RAM:** `15.99 GB`  
-**Runner Label:** `GitHub Actions 1000000016` (GitHub Actions: `True`)  
-**Commit SHA:** [`0139aa1`](https://github.com/sayedalve/Radium-Download-Manager/commit/0139aa13af02c0f87f1f43ae680201d5859b9eec)  
+**Runner Label:** `GitHub Actions 1000000169` (GitHub Actions: `True`)  
+**Commit SHA:** [`08f1934`](https://github.com/alve33/Radium-Download-Manager/commit/08f1934594d660d4930b6b93188be53714bd6cf3)  
 
 ---
 
@@ -39,9 +39,9 @@ Evaluates maximum unthrottled loopback throughput, segment scheduling, and memor
 
 | Tool | Connections | Status | Median Time | Median Throughput (MiB/s) | Median Throughput (Mbps) | Peak RSS (MB) | CPU Time (ms) | Peak Conns | SHA256 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Radium Download Manager** | 8 | `COMPLETED` | **1.049 s** | **244.07 MiB/s** | 2047.4 Mbps | 14.95 MB | 2078.1 ms | 7 | PASS |
-| **Radium Download Manager** | 32 | `COMPLETED` | **1.577 s** | **162.34 MiB/s** | 1361.8 Mbps | 18.42 MB | 2031.2 ms | 8 | PASS |
-| **aria2** | 16 | `COMPLETED` | **1.369 s** | **187.03 MiB/s** | 1568.9 Mbps | 21.54 MB | 421.9 ms | 13 | PASS |
+| **Radium Download Manager** | 8 | `COMPLETED` | **1.040 s** | **246.16 MiB/s** | 2064.9 Mbps | 16.67 MB | 296.9 ms | 7 | PASS |
+| **Radium Download Manager** | 32 | `COMPLETED` | **1.904 s** | **134.43 MiB/s** | 1127.7 Mbps | 18.66 MB | 390.6 ms | 7 | PASS |
+| **aria2** | 16 | `COMPLETED` | **1.365 s** | **187.57 MiB/s** | 1573.5 Mbps | 21.03 MB | 453.1 ms | 12 | PASS |
 | **Internet Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **Free Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
@@ -56,9 +56,9 @@ Evaluates parallel work-stealing speedup under server-enforced per-connection ra
 
 | Tool | Connections | Status | Median Time | Median Throughput (MiB/s) | Median Throughput (Mbps) | Peak RSS (MB) | CPU Time (ms) | Peak Conns | SHA256 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Radium Download Manager** | 8 | `COMPLETED` | **8.173 s** | **7.83 MiB/s** | 65.7 Mbps | 14.87 MB | 406.2 ms | 7 | PASS |
-| **Radium Download Manager** | 32 | `COMPLETED` | **2.708 s** | **23.64 MiB/s** | 198.3 Mbps | 23.67 MB | 468.8 ms | 35 | PASS |
-| **aria2** | 16 | `COMPLETED` | **4.359 s** | **14.68 MiB/s** | 123.2 Mbps | 22.91 MB | 140.6 ms | 14 | PASS |
+| **Radium Download Manager** | 8 | `COMPLETED` | **8.174 s** | **7.83 MiB/s** | 65.7 Mbps | 16.90 MB | 46.9 ms | 8 | PASS |
+| **Radium Download Manager** | 32 | `COMPLETED` | **2.912 s** | **21.98 MiB/s** | 184.4 Mbps | 31.51 MB | 125.0 ms | 36 | PASS |
+| **aria2** | 16 | `COMPLETED` | **4.342 s** | **14.74 MiB/s** | 123.7 Mbps | 22.13 MB | 171.9 ms | 16 | PASS |
 | **Internet Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **Free Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
@@ -73,9 +73,9 @@ Verifies graceful single-stream fallback when server does not support RFC 7233 b
 
 | Tool | Connections | Status | Median Time | Median Throughput (MiB/s) | Median Throughput (Mbps) | Peak RSS (MB) | CPU Time (ms) | Peak Conns | SHA256 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Radium Download Manager** | 8 | `COMPLETED` | **0.228 s** | **70.19 MiB/s** | 588.8 Mbps | 12.47 MB | 125.0 ms | 1 | PASS |
-| **Radium Download Manager** | 32 | `COMPLETED` | **0.179 s** | **89.61 MiB/s** | 751.7 Mbps | 12.45 MB | 125.0 ms | 1 | PASS |
-| **aria2** | 16 | `COMPLETED` | **0.090 s** | **177.25 MiB/s** | 1486.9 Mbps | 11.30 MB | 78.1 ms | 9 | PASS |
+| **Radium Download Manager** | 8 | `COMPLETED` | **0.127 s** | **126.00 MiB/s** | 1057.0 Mbps | 12.51 MB | 46.9 ms | 1 | PASS |
+| **Radium Download Manager** | 32 | `COMPLETED` | **0.127 s** | **126.08 MiB/s** | 1057.6 Mbps | 12.48 MB | 46.9 ms | 1 | PASS |
+| **aria2** | 16 | `COMPLETED` | **0.090 s** | **178.50 MiB/s** | 1497.3 Mbps | 11.23 MB | 78.1 ms | 9 | PASS |
 | **Internet Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 | **Free Download Manager** | 16 | `SKIPPED` | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
 
