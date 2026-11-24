@@ -812,7 +812,7 @@ jobs:
           }
 
       - name: Create Draft GitHub Release & Upload Assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "Radium Download Manager ${{ needs.build-and-package-x64.outputs.version }}"
           draft: true
