@@ -1557,6 +1557,165 @@ runTests().catch((err) => {
     assert.ok(bgFull.includes('action: "radiumFetchBlobData"') && bgFull.includes('Could not read blob payload from page or background context'),
       'background.js interceptBlobDownload must fall back to radiumFetchBlobData when Service Worker fetch fails');
     console.log('  -> PASS: Unregistered blob XHR lock, ISOLATED fetch, and radiumFetchBlobData fallback assertions passed');
+
+    // [22/22] GitHub Actions Artifact Redirect, ChatGPT Signed URL & Gemini Download Regression Tests
+    console.log("\n[22/22] Testing GitHub Actions, ChatGPT Signed URL & Gemini Download Capture...");
+    const ghArtifactInitial = "https://github.com/alve33/Radium-Download-Manager/actions/runs/44728468936/artifacts/987654";
+    const ghArtifactFinal = "https://productionresultssa0.blob.core.windows.net/actions-results/run123?sv=2021-06-08&se=2026-11-22T00%3A00%3A00Z&sr=b&sp=r&rscd=attachment%3B+filename%3Dradium-win-x64.zip&sig=testtoken";
+    assert.strictEqual(isWebpageWatchUrl(ghArtifactFinal), false, "Azure SAS sv= URL must never be classified as webpage watch URL");
+    assert.strictEqual(isSupportedVideoSiteWatchUrl(ghArtifactInitial), false, "GitHub Actions artifact URL must not be video watch URL");
+
+    const ghElig = isDownloadEligible({
+      url: ghArtifactInitial,
+      finalUrl: ghArtifactFinal,
+      filename: "radium-win-x64.zip",
+      mime: "application/zip",
+      isAttachment: true,
+      tabUrl: "https://github.com/alve33/Radium-Download-Manager/actions/runs/44728468936",
+      phase: "determine"
+    });
+    assert.strictEqual(ghElig.eligible, true, "GitHub Actions artifact must be eligible");
+    assert.strictEqual(ghElig.filename, "radium-win-x64.zip");
+
+    // Simulate origin request headers on github.com -> redirect -> blob.core.windows.net and verify Cookie/Auth are stripped
+    onBeforeSendHeadersHandler({
+      requestId: "req-gh-1",
+      url: ghArtifactInitial,
+      tabId: 501,
+      type: "main_frame",
+      requestHeaders: [
+        { name: "Cookie", value: "user_session=secret_gh_cookie" },
+        { name: "Authorization", value: "Bearer secret_gh_token" },
+        { name: "User-Agent", value: "Mozilla/5.0" }
+      ]
+    });
+    onHeadersReceivedHandler({
+      requestId: "req-gh-1",
+      url: ghArtifactInitial,
+      statusCode: 302,
+      tabId: 501,
+      type: "main_frame",
+      responseHeaders: [{ name: "Location", value: ghArtifactFinal }]
+    });
+    onHeadersReceivedHandler({
+      requestId: "req-gh-1",
+      url: ghArtifactFinal,
+      statusCode: 200,
+      tabId: 501,
+      type: "main_frame",
+      responseHeaders: [
+        { name: "Content-Type", value: "application/zip" },
+        { name: "Content-Length", value: "2048576" },
+        { name: "Content-Disposition", value: "attachment; filename=\"radium-win-x64.zip\"" }
+      ]
+    });
+
+    let ghOfferPayload = null;
+    let ghCanceled = false;
+    const ghRes = await onDownloadCreatedHandler(
+      {
+        id: 5001,
+        url: ghArtifactInitial,
+        finalUrl: ghArtifactFinal,
+        filename: "radium-win-x64.zip",
+        mime: "application/zip",
+        fileSize: 2048576,
+        tabId: 501,
+        referrer: "https://github.com/alve33/Radium-Download-Manager/actions/runs/44728468936"
+      },
+      async (rpcReq) => {
+        if (rpcReq && rpcReq.method === "download.offer") {
+          ghOfferPayload = rpcReq.params;
+          return { accepted: true, taskId: "task-gh-5001", fileName: rpcReq.params.filename };
+        }
+        return {};
+      },
+      async () => { ghCanceled = true; },
+      () => {},
+      "determine"
+    );
+    assert.strictEqual(ghRes.intercepted, true, "GitHub Actions artifact must be intercepted");
+    assert.strictEqual(ghCanceled, true, "Browser download must be canceled after Radium acceptance");
+    assert.ok(ghOfferPayload, "download.offer payload must be sent");
+    assert.strictEqual(ghOfferPayload.headers.Cookie, undefined, "github.com Cookie must NOT leak to blob.core.windows.net");
+    assert.strictEqual(ghOfferPayload.headers.Authorization, undefined, "github.com Authorization must NOT leak to blob.core.windows.net");
+
+    // Gemini googleusercontent.com / contribution.usercontent.google.com must not be blocked by isThumbnailOrPreviewHost
+    const geminiUrl = "https://contribution.usercontent.google.com/download?c=CgxiYXJk&filename=radium-redesign.zip&authuser=0";
+    onHeadersReceivedHandler({
+      requestId: "req-gem-1",
+      url: geminiUrl,
+      statusCode: 200,
+      tabId: 502,
+      type: "main_frame",
+      responseHeaders: [
+        { name: "Content-Type", value: "application/zip" },
+        { name: "Content-Disposition", value: "attachment; filename=\"radium-redesign.zip\"" }
+      ]
+    });
+    const gemElig = isDownloadEligible({
+      url: geminiUrl,
+      finalUrl: geminiUrl,
+      filename: "radium-redesign.zip",
+      mime: "application/zip",
+      isAttachment: true,
+      tabUrl: "https://gemini.google.com/app",
+      phase: "determine"
+    });
+    assert.strictEqual(gemElig.eligible, true, "Gemini contribution.usercontent.google.com download must be eligible");
+    assert.strictEqual(gemElig.filename, "radium-redesign.zip");
+    console.log("  -> PASS: GitHub Actions redirect, ChatGPT signed URL, and Gemini download assertions passed");
+
+    // Phase 3: POST body capture & consumption
+    const bgModule = require("../extension/js/background.js");
+    bgModule.capturePostBodyFromRequest({
+      method: "POST",
+      url: "https://example.com/export?fmt=csv",
+      requestId: "req-post-1",
+      requestBody: { formData: { token: ["xyz123"], format: ["csv"] } }
+    });
+    const consumedPost = bgModule.consumeCapturedPostBody("https://example.com/export?fmt=csv");
+    assert.ok(consumedPost && consumedPost.post.includes("token=xyz123") && consumedPost.postType === "application/x-www-form-urlencoded",
+      "POST formData must be captured and consumed for download.offer");
+    assert.strictEqual(bgModule.consumeCapturedPostBody("https://example.com/export?fmt=csv"), null,
+      "Consumed POST body must not be returned twice");
+    console.log("  -> PASS: Phase 3 POST body capture & consumption assertions passed");
+
+    // Repeated same-URL download attempts (2nd and 3rd attempts must get fresh correlationIds)
+    const repeatUrl = "https://cdn.example.com/releases/radium-setup.zip";
+    G.clickedLinksByUrl.set(repeatUrl, {
+      url: repeatUrl,
+      normalizedUrl: repeatUrl,
+      correlationId: "click-repeat-initial",
+      time: Date.now(),
+      clickTime: Date.now()
+    });
+    const sentRepeatCorrs = [];
+    for (let attempt = 1; attempt <= 3; ++attempt) {
+      const res = await bgModule.onDownloadCreatedHandler(
+        {
+          id: 9100 + attempt,
+          url: repeatUrl,
+          finalUrl: repeatUrl,
+          filename: "radium-setup.zip",
+          fileSize: 1024 * 1024,
+          mime: "application/zip",
+          tabId: 42
+        },
+        async (rpc) => {
+          if (rpc.method === "download.offer") {
+            sentRepeatCorrs.push(rpc.params.correlationId);
+            return { accepted: true, taskId: "repeat-task-" + attempt, fileName: "radium-setup.zip" };
+          }
+          return {};
+        },
+        async () => {}
+      );
+      assert.strictEqual(res.intercepted, true, `Attempt ${attempt} of same URL must be intercepted`);
+    }
+    assert.strictEqual(sentRepeatCorrs.length, 3, "All 3 consecutive attempts must send download.offer");
+    assert.strictEqual(new Set(sentRepeatCorrs).size, 3, "All 3 consecutive attempts must use distinct correlationIds");
+    console.log("  -> PASS: 3 consecutive same-URL interception attempts used distinct correlationIds");
   })().catch((err) => {
     console.error(err);
     process.exit(1);

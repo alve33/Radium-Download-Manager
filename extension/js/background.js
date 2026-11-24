@@ -66,14 +66,16 @@ function getNativePortRecord(hostName) {
   return record;
 }
 
+const RPC_TIMEOUT_MS = 25000;
+
 function sendNativePortRequest(hostName, payload) {
   const record = getNativePortRecord(hostName);
   const requestId = String(payload.id);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       record.pending.delete(requestId);
-      reject(new Error("Native Messaging RPC timed out after 5000ms"));
-    }, 5000);
+      reject(new Error(`Native Messaging RPC timed out after ${RPC_TIMEOUT_MS}ms`));
+    }, RPC_TIMEOUT_MS);
     record.pending.set(requestId, { resolve, reject, timer });
     try {
       record.port.postMessage(payload);
@@ -468,25 +470,34 @@ async function collectCookiesForDownload(targetUrl, referrerUrl = "", originalUr
   const urlsToQuery = [];
   const domainsToQuery = new Set();
 
+  let targetBaseDomain = "";
+  try {
+    const th = new URL(targetUrl).hostname.toLowerCase();
+    const tparts = th.split(".");
+    targetBaseDomain = tparts.length >= 2 ? tparts.slice(-2).join(".") : th;
+  } catch (_) {}
+
+  const sameSiteDomain = (u) => {
+    if (!targetBaseDomain || !u) return false;
+    try {
+      const h = new URL(u).hostname.toLowerCase();
+      return h === targetBaseDomain || h.endsWith("." + targetBaseDomain);
+    } catch (_) {
+      return false;
+    }
+  };
+
   const addTarget = (u) => {
     if (u && !u.startsWith("blob:") && !u.startsWith("data:")) {
       urlsToQuery.push(u);
-      try {
-        const h = new URL(u).hostname;
-        if (h) {
-          domainsToQuery.add(h);
-          const parts = h.split(".");
-          if (parts.length >= 2) {
-            domainsToQuery.add("." + parts.slice(-2).join("."));
-          }
-        }
-      } catch (_) {}
     }
   };
 
   addTarget(targetUrl);
-  if (originalUrl && originalUrl !== targetUrl) addTarget(originalUrl);
-  if (referrerUrl) addTarget(referrerUrl);
+  // Only include originalUrl / referrerUrl cookies when they belong to the same registrable domain
+  // as targetUrl; never leak origin cookies (e.g. github.com, chatgpt.com) onto presigned CDN URLs.
+  if (originalUrl && originalUrl !== targetUrl && sameSiteDomain(originalUrl)) addTarget(originalUrl);
+  if (referrerUrl && referrerUrl !== targetUrl && sameSiteDomain(referrerUrl)) addTarget(referrerUrl);
 
   if (typeof chrome !== "undefined" && chrome.cookies && typeof chrome.cookies.getAll === "function") {
     const queryCookies = (details) => new Promise((resolve) => {
@@ -510,10 +521,6 @@ async function collectCookiesForDownload(targetUrl, referrerUrl = "", originalUr
       // Chromium 110+ CHIPS / Partitioned cookies require partitionKey: {} (matches FDM CookieManager)
       queryTasks.push(queryCookies({ url: u, partitionKey: {} }));
     }
-    for (const dom of domainsToQuery) {
-      queryTasks.push(queryCookies({ domain: dom }));
-      queryTasks.push(queryCookies({ domain: dom, partitionKey: {} }));
-    }
     try {
       const results = await Promise.all(queryTasks);
       for (const list of results) {
@@ -535,12 +542,26 @@ function findRecentRequestHeadersForUrl(url) {
   if (!url || !G.requestMetaMap) return {};
   try {
     const norm = normalizeCorrelationUrl(url);
+    let targetOrigin = "";
+    try { targetOrigin = new URL(url).origin; } catch (_) {}
     for (const meta of G.requestMetaMap.values()) {
       if (meta && meta.headers) {
         const curNorm = meta.currentUrl ? normalizeCorrelationUrl(meta.currentUrl) : "";
         const initNorm = meta.initialUrl ? normalizeCorrelationUrl(meta.initialUrl) : "";
         if (curNorm === norm || initNorm === norm) {
-          return Object.assign({}, meta.headers);
+          const cloned = Object.assign({}, meta.headers);
+          const sourceUrl = (curNorm === norm ? meta.currentUrl : meta.initialUrl) || "";
+          let sourceOrigin = "";
+          try { sourceOrigin = new URL(sourceUrl).origin; } catch (_) {}
+          if (targetOrigin && sourceOrigin && targetOrigin !== sourceOrigin) {
+            for (const k of Object.keys(cloned)) {
+              const kl = k.toLowerCase();
+              if (kl === "cookie" || kl === "authorization" || kl === "proxy-authorization") {
+                delete cloned[k];
+              }
+            }
+          }
+          return cloned;
         }
       }
     }
@@ -791,9 +812,32 @@ function onHeadersReceivedHandler(details) {
     let resolvedTarget = loc;
     try { resolvedTarget = new URL(loc, details.url).href; } catch (_) {}
     recordRedirectHop(details.url, resolvedTarget, details.requestId, effectiveTabId);
+    let origOrigin = "";
+    let nextOrigin = "";
+    try { origOrigin = new URL(details.url).origin; } catch (_) {}
+    try { nextOrigin = new URL(resolvedTarget).origin; } catch (_) {}
+    const crossOriginRedirect = Boolean(origOrigin && nextOrigin && origOrigin !== nextOrigin);
+    if (crossOriginRedirect && details.requestId && G.requestHeadersMap && G.requestHeadersMap.has(details.requestId)) {
+      const prevHdrs = Object.assign({}, G.requestHeadersMap.get(details.requestId));
+      for (const k of Object.keys(prevHdrs)) {
+        const kl = k.toLowerCase();
+        if (kl === "cookie" || kl === "authorization" || kl === "proxy-authorization") {
+          delete prevHdrs[k];
+        }
+      }
+      G.requestHeadersMap.set(details.requestId, prevHdrs);
+    }
     if (details.requestId && G.requestMetaMap) {
       const meta = G.requestMetaMap.get(details.requestId) || { initialUrl: details.url };
       meta.currentUrl = resolvedTarget;
+      if (crossOriginRedirect && meta.headers) {
+        for (const k of Object.keys(meta.headers)) {
+          const kl = k.toLowerCase();
+          if (kl === "cookie" || kl === "authorization" || kl === "proxy-authorization") {
+            delete meta.headers[k];
+          }
+        }
+      }
       G.requestMetaMap.set(details.requestId, meta);
     }
     return null;
@@ -801,8 +845,10 @@ function onHeadersReceivedHandler(details) {
 
   // 2b. Record eligible attachment / binary download response metadata for correlation with chrome.downloads
   const cdHeader = hmap["content-disposition"] || "";
-  const cdFilename = extractFilenameFromContentDisposition(cdHeader);
-  const isAttachment = isAttachmentContentDisposition(cdHeader);
+  const queryFilename = typeof extractFilenameFromUrlQuery === "function" ? extractFilenameFromUrlQuery(details.url) : "";
+  const cdFilename = extractFilenameFromContentDisposition(cdHeader) || queryFilename;
+  const hasQueryAttachment = /[?&](?:rscd|response-content-disposition)=attachment/i.test(details.url);
+  const isAttachment = isAttachmentContentDisposition(cdHeader) || hasQueryAttachment;
   const contentType = (hmap["content-type"] || "").split(";")[0].trim().toLowerCase();
   const totalSize = parseTotalSizeFromHeaders(hmap, details.url);
   const ext = extractUrlExtension(cdFilename) || extractUrlExtension(details.url);
@@ -811,15 +857,17 @@ function onHeadersReceivedHandler(details) {
 
   const passiveResource = PASSIVE_DOWNLOAD_REQUEST_TYPES.has(String(details.type || "").toLowerCase());
   const isImageMime = contentType.startsWith("image/");
-  const isThumbnailOrPreviewHost = details.url.includes("ytimg.com") || details.url.includes("/an_webp/") || details.url.includes("googleusercontent.com");
-  const binaryOrMediaMime = !isThumbnailOrPreviewHost && !isImageMime && (contentType.startsWith("video/") || contentType.startsWith("audio/") ||
+  const isThumbnailOrPreviewHost = details.url.includes("ytimg.com") || details.url.includes("/an_webp/");
+  const isExplicitAiDownloadHost = details.url.includes("contribution.usercontent.google.com") ||
+                                   details.url.includes("files.oaiusercontent.com");
+  const binaryOrMediaMime = !isThumbnailOrPreviewHost && (!isImageMime || isExplicitAiDownloadHost) && (contentType.startsWith("video/") || contentType.startsWith("audio/") ||
     (contentType !== "" && !contentType.startsWith("text/") &&
       !/(?:json|xml|javascript|ecmascript|graphql)(?:$|\+)/i.test(contentType)));
   const matchesDownloadExtension = G.InterceptFileExts.has(ext);
   const matchesDownloadMime = G.InterceptMimeTypes && G.InterceptMimeTypes.has(contentType);
   // Ordinary page XHR/XML, scripts, stylesheets, and passive web images/thumbnails are not user downloads.
-  // Keep attachment responses and binary/media XHRs so download correlation and media capture work.
-  const shouldTrackDownloadResponse = isAttachment ||
+  // Keep attachment responses, explicit AI download endpoints, and binary/media XHRs so download correlation works.
+  const shouldTrackDownloadResponse = isAttachment || isExplicitAiDownloadHost ||
     ((!passiveResource || binaryOrMediaMime) && (matchesDownloadExtension || matchesDownloadMime) && !isThumbnailOrPreviewHost && !isImageMime);
 
   if (shouldTrackDownloadResponse) {
@@ -1039,6 +1087,7 @@ async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationI
   }
 
   // 1b. Direct Background Service Worker fetch for blob: URLs (immune to webpage CSP)
+  // Stream in bounded 192 KiB slices (~256 KiB Base64) so large blobs never spike memory.
   if (!directDataB64 && blobUrl && blobUrl.startsWith("blob:") && typeof fetch === "function") {
     try {
       const resp = await fetch(blobUrl);
@@ -1046,14 +1095,58 @@ async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationI
         const b = await resp.blob();
         directTotalBytes = b.size;
         if (b.type) directMime = b.type;
-        const arrayBuf = await b.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuf);
-        let binary = "";
-        const chunk = 32768;
-        for (let i = 0; i < bytes.length; i += chunk) {
-          binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+        const transferId = "blob-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+        const startRes = await sendNativeRpc("download.startChunkedTransfer", {
+          taskId: transferId,
+          filename: filename || "artifact_download",
+          totalBytes: directTotalBytes,
+          mimeType: directMime,
+          correlationId
+        }, customTransport);
+
+        if (!startRes || !startRes.accepted) {
+          throw new Error((startRes && startRes.reason) || "Chunked transfer rejected by Radium");
         }
-        directDataB64 = btoa(binary);
+
+        const effectiveTaskId = startRes.taskId || transferId;
+        const rawSliceBytes = 196608; // 192 KiB raw -> ~256 KiB Base64 per RPC frame
+        let chunkIndex = 0;
+        for (let offset = 0; offset < b.size || (b.size === 0 && chunkIndex === 0); offset += rawSliceBytes) {
+          const slice = typeof b.slice === "function"
+            ? b.slice(offset, Math.min(offset + rawSliceBytes, b.size))
+            : b;
+          const arrayBuf = await slice.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuf);
+          let binary = "";
+          const subChunk = 32768;
+          for (let i = 0; i < bytes.length; i += subChunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + subChunk, bytes.length)));
+          }
+          await sendNativeRpc("download.transferChunk", {
+            taskId: effectiveTaskId,
+            chunkIndex,
+            dataBase64: btoa(binary)
+          }, customTransport);
+          chunkIndex++;
+          if (b.size === 0) break;
+        }
+
+        const completeRes = await sendNativeRpc("download.completeChunkedTransfer", {
+          taskId: effectiveTaskId,
+          totalBytes: directTotalBytes
+        }, customTransport);
+
+        if (!completeRes || !completeRes.success) {
+          throw new Error((completeRes && completeRes.error) || "Complete chunked transfer failed");
+        }
+
+        return {
+          accepted: true,
+          success: true,
+          taskId: effectiveTaskId,
+          fileName: completeRes.fileName || filename,
+          filename: completeRes.fileName || filename
+        };
       }
     } catch (_) {}
   }
@@ -1351,9 +1444,17 @@ async function onDownloadCreatedHandler(
                        (netMeta ? netMeta.tabUrl : "") ||
                        (rec.tabId && G.tabUrlMap && G.tabUrlMap.get(rec.tabId)) || "";
 
-  rec.correlationId = (clickedInfo && clickedInfo.correlationId) ||
-                      (netMeta && netMeta.correlationId) ||
-                      rec.correlationId;
+  const clickCorr = (clickedInfo && clickedInfo.correlationId &&
+                     (!clickedInfo._consumedByDownloadId || clickedInfo._consumedByDownloadId === rec.downloadId))
+                    ? clickedInfo.correlationId : "";
+  if (clickCorr && clickedInfo) clickedInfo._consumedByDownloadId = rec.downloadId;
+
+  const netCorr = (!clickCorr && netMeta && netMeta.correlationId &&
+                   (!netMeta._consumedByDownloadId || netMeta._consumedByDownloadId === rec.downloadId))
+                  ? netMeta.correlationId : "";
+  if (netCorr && netMeta) netMeta._consumedByDownloadId = rec.downloadId;
+
+  rec.correlationId = clickCorr || netCorr || rec.correlationId;
 
   // Build redirect chain representation
   const chain = [];
@@ -1480,7 +1581,20 @@ async function onDownloadCreatedHandler(
     try {
       // Collect request headers and session cookies
       const recentHeaders = findRecentRequestHeadersForUrl(targetUrl);
-      const headers = Object.assign({}, recentHeaders, (netMeta && netMeta.headers) || {}, downloadItem.headers || {});
+      const netHeaders = Object.assign({}, (netMeta && netMeta.headers) || {});
+      try {
+        const targetOrigin = new URL(targetUrl).origin;
+        const netOrigin = netMeta && netMeta.url ? new URL(netMeta.url).origin : "";
+        if (targetOrigin && netOrigin && targetOrigin !== netOrigin) {
+          for (const k of Object.keys(netHeaders)) {
+            const kl = k.toLowerCase();
+            if (kl === "cookie" || kl === "authorization" || kl === "proxy-authorization") {
+              delete netHeaders[k];
+            }
+          }
+        }
+      } catch (_) {}
+      const headers = Object.assign({}, recentHeaders, netHeaders, downloadItem.headers || {});
       if (pageReferrer && !headers.Referer && !headers.referer) {
         headers.Referer = pageReferrer;
       }
@@ -1518,7 +1632,8 @@ async function onDownloadCreatedHandler(
         });
         result = await transferBlobToRadium(effectiveTabId, targetUrl, cleanFilename, mime, rec.correlationId, customTransport);
       } else {
-        result = await sendNativeRpc("download.offer", {
+        const postInfo = consumeCapturedPostBody(targetUrl) || consumeCapturedPostBody(rec.originalUrl);
+        const offerPayload = {
           url: targetUrl,
           originalUrl: rec.originalUrl,
           filename: cleanFilename,
@@ -1530,7 +1645,12 @@ async function onDownloadCreatedHandler(
           clientClickTime: (rec.clickedInfo && rec.clickedInfo.clickTime) ? rec.clickedInfo.clickTime : Date.now(),
           headers,
           autoStart: false // Browser intercepted downloads must NEVER start transferring silently!
-        }, customTransport);
+        };
+        if (postInfo && postInfo.post) {
+          offerPayload.post = postInfo.post;
+          offerPayload.postType = postInfo.postType;
+        }
+        result = await sendNativeRpc("download.offer", offerPayload, customTransport);
       }
 
       logPipelineStage(rec.correlationId, "NATIVE_OFFER_RESPONSE", {
@@ -2880,7 +3000,8 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
           stage: "STAGE_NATIVE_RPC"
         });
 
-        const offerPromise = sendNativeRpc("download.offer", {
+        const postInfo = consumeCapturedPostBody(targetUrl) || consumeCapturedPostBody(msg.url);
+        const clickOfferPayload = {
           url: targetUrl,
           originalUrl: targetUrl,
           filename: cleanFilename,
@@ -2891,13 +3012,16 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
           correlationId,
           clientClickTime: msg.clickTime || Date.now(),
           headers
-        });
+        };
+        if (postInfo && postInfo.post) {
+          clickOfferPayload.post = postInfo.post;
+          clickOfferPayload.postType = postInfo.postType;
+        }
+        const offerPromise = sendNativeRpc("download.offer", clickOfferPayload);
 
         G.inFlightClickOffers.set(clickKey, offerPromise);
         offerPromise.finally(() => {
-          setTimeout(() => {
-            if (G.inFlightClickOffers) G.inFlightClickOffers.delete(clickKey);
-          }, 8000);
+          if (G.inFlightClickOffers) G.inFlightClickOffers.delete(clickKey);
         });
 
         const result = await offerPromise;
@@ -3000,19 +3124,116 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
   return false;
 }
 
+const POST_BODY_TTL_MS = 60000;
+const POST_BODY_MAX_ENTRIES = 64;
+const POST_BODY_MAX_BYTES = 1048576;
+
+function capturePostBodyFromRequest(details) {
+  if (!details || details.method !== "POST" || !details.url || !details.requestBody) return;
+  let post = "";
+  let postType = "";
+  if (details.requestBody.formData) {
+    const params = new URLSearchParams();
+    for (const [key, values] of Object.entries(details.requestBody.formData)) {
+      if (Array.isArray(values)) {
+        for (const val of values) params.append(key, String(val));
+      }
+    }
+    post = params.toString();
+    postType = "application/x-www-form-urlencoded";
+  } else if (Array.isArray(details.requestBody.raw) && details.requestBody.raw.length > 0) {
+    let totalLen = 0;
+    for (const part of details.requestBody.raw) {
+      if (part && part.bytes) totalLen += part.bytes.byteLength || 0;
+    }
+    if (totalLen > 0 && totalLen <= POST_BODY_MAX_BYTES) {
+      const merged = new Uint8Array(totalLen);
+      let offset = 0;
+      for (const part of details.requestBody.raw) {
+        if (part && part.bytes) {
+          const view = new Uint8Array(part.bytes);
+          merged.set(view, offset);
+          offset += view.byteLength;
+        }
+      }
+      if (typeof TextDecoder === "function") {
+        post = new TextDecoder("utf-8", { fatal: false }).decode(merged);
+        postType = "application/octet-stream";
+      }
+    }
+  }
+  if (!post || post.length > POST_BODY_MAX_BYTES) return;
+  G.postBodies = G.postBodies || new Map();
+  const now = Date.now();
+  for (const [k, v] of G.postBodies.entries()) {
+    if (now - v.ts > POST_BODY_TTL_MS) G.postBodies.delete(k);
+  }
+  while (G.postBodies.size >= POST_BODY_MAX_ENTRIES) {
+    const oldestKey = G.postBodies.keys().next().value;
+    if (oldestKey === undefined) break;
+    G.postBodies.delete(oldestKey);
+  }
+  G.postBodies.set(normalizeCorrelationUrl(details.url), {
+    post,
+    postType,
+    requestId: details.requestId || "",
+    ts: now
+  });
+}
+
+function consumeCapturedPostBody(url) {
+  if (!url || !G.postBodies) return null;
+  const key = normalizeCorrelationUrl(url);
+  const entry = G.postBodies.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > POST_BODY_TTL_MS) {
+    G.postBodies.delete(key);
+    return null;
+  }
+  G.postBodies.delete(key);
+  return { post: entry.post, postType: entry.postType };
+}
+
+function registerRadiumContextMenus() {
+  if (typeof chrome === "undefined" || !chrome.contextMenus || typeof chrome.contextMenus.create !== "function") {
+    return;
+  }
+  try {
+    chrome.contextMenus.removeAll(() => {
+      try {
+        chrome.contextMenus.create({
+          id: "radium-download-link",
+          title: "Download with Radium",
+          contexts: ["link", "video", "audio"]
+        });
+      } catch (_) {}
+    });
+  } catch (_) {}
+}
+
 // 6. Register extension runtime listeners
 if (typeof chrome !== "undefined") {
   // WebRequest Listeners
   if (chrome.webRequest) {
     if (chrome.webRequest.onBeforeRequest) {
-      chrome.webRequest.onBeforeRequest.addListener(
-        (details) => {
-          if (details && details.type === "main_frame" && details.tabId > 0 && details.url) {
-            updateTabDocument(details.tabId, details.url);
-          }
-        },
-        { urls: ["*://*/*"] }
-      );
+      const onBeforeReqListener = (details) => {
+        if (details && details.type === "main_frame" && details.tabId > 0 && details.url) {
+          updateTabDocument(details.tabId, details.url);
+        }
+        capturePostBodyFromRequest(details);
+      };
+      try {
+        chrome.webRequest.onBeforeRequest.addListener(
+          onBeforeReqListener,
+          { urls: ["*://*/*"] },
+          ["requestBody"]
+        );
+      } catch (_) {
+        chrome.webRequest.onBeforeRequest.addListener(
+          onBeforeReqListener,
+          { urls: ["*://*/*"] }
+        );
+      }
     }
 
     if (chrome.webRequest.onBeforeRedirect) {
@@ -3064,6 +3285,49 @@ if (typeof chrome !== "undefined") {
   // Runtime Message Listener
   if (chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener(handleRuntimeMessage);
+  }
+  if (chrome.runtime && chrome.runtime.onInstalled) {
+    chrome.runtime.onInstalled.addListener(() => {
+      registerRadiumContextMenus();
+    });
+  }
+  registerRadiumContextMenus();
+
+  if (chrome.contextMenus && chrome.contextMenus.onClicked) {
+    chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+      if (!info || info.menuItemId !== "radium-download-link") return;
+      const targetUrl = info.linkUrl || info.srcUrl || info.pageUrl || "";
+      if (!targetUrl || !/^https?:/i.test(targetUrl)) return;
+      const tabUrl = (tab && tab.url) || info.pageUrl || "";
+      const headers = {};
+      if (tabUrl) headers.Referer = tabUrl;
+      try {
+        const cookieHeader = await collectCookiesForDownload(targetUrl, tabUrl);
+        if (cookieHeader) headers.Cookie = cookieHeader;
+      } catch (_) {}
+      if (typeof navigator !== "undefined" && navigator.userAgent) {
+        headers["User-Agent"] = navigator.userAgent;
+      }
+      const postInfo = consumeCapturedPostBody(targetUrl);
+      const payload = {
+        url: targetUrl,
+        originalUrl: targetUrl,
+        filename: "",
+        fileSize: 0,
+        mime: "",
+        tabUrl,
+        bypassModifier: false,
+        explicit: true,
+        correlationId: "ctx-" + Date.now().toString(36),
+        clientClickTime: Date.now(),
+        headers
+      };
+      if (postInfo && postInfo.post) {
+        payload.post = postInfo.post;
+        payload.postType = postInfo.postType;
+      }
+      sendNativeRpc("download.offer", payload).catch(() => {});
+    });
   }
 
   // Downloads API Listeners (Defect C fix: hold suggest() until download.offer completes, avoid race between onCreated and onDeterminingFilename)
@@ -3142,6 +3406,9 @@ if (typeof module !== "undefined" && module.exports) {
     resolveCandidateForDownloadRequest,
     handleRuntimeMessage,
     downloadStateMachine,
-    transferBlobToFlux
+    transferBlobToFlux,
+    capturePostBodyFromRequest,
+    consumeCapturedPostBody,
+    registerRadiumContextMenus
   };
 }

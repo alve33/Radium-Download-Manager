@@ -9,6 +9,7 @@
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 #include "common/startup_diagnostic.hpp"
+#include "platform/windows_integrations.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -112,6 +113,29 @@ std::optional<std::filesystem::path> ResolveTaskOutputPath(
     const auto first_component = relative_target.begin();
     if (first_component == relative_target.end() || *first_component == "..") return std::nullopt;
     return target;
+}
+
+bool IsTransientRetryableError(const std::string& error_code) {
+    return error_code == "ERR_NETWORK_TIMEOUT" ||
+           error_code == "ERR_NET_TIMEOUT" ||
+           error_code == "ERR_TIMEOUT" ||
+           error_code == "ERR_CONNECTION_RESET" ||
+           error_code == "ERR_CONNECTION_CLOSED_PREMATURELY" ||
+           error_code == "ERR_NET_CONNECTION_RESET" ||
+           error_code == "ERR_NET_CONNECT" ||
+           error_code == "ERR_NET_SEND" ||
+           error_code == "ERR_NET_DNS" ||
+           error_code == "ERR_HTTP_TIMEOUT" ||
+           error_code == "ERR_HTTP_5XX_TRANSIENT" ||
+           error_code == "ERR_HTTP_429_RATE_LIMITED" ||
+           error_code == "ERR_HTTP_503" ||
+           error_code == "ERR_HTTP_502" ||
+           error_code == "ERR_HTTP_504" ||
+           error_code == "ERR_HTTP_429" ||
+           error_code == "ERR_FTP_TIMEOUT" ||
+           error_code == "ERR_FTP_DISCONNECTED" ||
+           error_code == "ERR_FTP_CONNECT" ||
+           error_code == "ERR_STREAM_WORKER_CRASH";
 }
 
 bool IsValidTimeFormat(const std::string& t) {
@@ -245,6 +269,9 @@ Result<void> DownloadController::Initialize() {
                         t.schedule_stop_time_local.clear();
                         m_store.UpsertTask(t);
                     }
+                }
+                if (t.state == TaskState::kFailed && t.failure_notification_sent) {
+                    m_notified_task_ids.insert(t.task_id);
                 }
                 m_tasks[t.task_id] = std::move(t);
             }
@@ -469,10 +496,18 @@ std::string DownloadController::DetermineCategory(const std::string& filename, c
 
 std::filesystem::path DownloadController::ResolveCategorySaveDirImpl(
     const AppSettings& settings, const std::filesystem::path& default_dir, const std::string& category, const std::string& url) {
-    (void)settings;
-    (void)category;
     (void)url;
-    return default_dir;
+    if (!settings.enable_category_subfolders) {
+        return default_dir;
+    }
+    if (category.empty() || category == "General" || category == "All") {
+        return default_dir;
+    }
+    std::string safe_cat = PathSanitizer::SanitizeFileName(category);
+    if (safe_cat.empty() || safe_cat == "." || safe_cat == "..") {
+        return default_dir;
+    }
+    return default_dir / safe_cat;
 }
 
 std::filesystem::path DownloadController::ResolveCategorySaveDir(const std::string& category, const std::string& url) const {
@@ -545,6 +580,12 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
         }
     }
 
+    if (!force_duplicate && task.task_type == TaskType::kHttpFile) {
+        if (auto matched = TryMatchFreshLink(task)) {
+            return Result<TaskModel>::Ok(*matched);
+        }
+    }
+
     std::unique_lock<std::mutex> lock(m_mutex);
     if (!force_duplicate) {
         auto dup = core::DuplicateDetector::FindDuplicate(m_tasks, task.url, task.file_name, task.total_bytes, task.etag);
@@ -592,26 +633,71 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
     if (task.max_connections == 0) {
         task.max_connections = m_settings.default_connections_per_task;
     }
-    task.conflict_policy = m_settings.conflict_policy;
+    if (!task.conflict_policy_explicit) {
+        task.conflict_policy = m_settings.conflict_policy;
+    }
     if (task.created_at_ms <= 0) {
         task.created_at_ms = NowEpochMs();
     }
     task.updated_at_ms = task.created_at_ms;
-    bool destination_conflict = false;
-    if (!force_duplicate && task.state != TaskState::kCompleted && task.state != TaskState::kFailed &&
-        task.conflict_policy == ConflictPolicy::kPrompt && !task.file_name.empty() && !task.save_dir.empty()) {
-        auto dest_res = PathSanitizer::ResolveSafeOutputPath(task.save_dir, task.file_name, ConflictPolicy::kPrompt);
-        if (!dest_res.ok() && dest_res.error->code == "ERR_FILE_EXISTS") {
-            destination_conflict = true;
-            task.state = TaskState::kPaused;
-            task.pause_reason = PauseReason::kNone;
-            task.error_code = "ERR_FILE_EXISTS";
-            task.error_message = "Destination file already exists: " + PathSanitizer::PathToUtf8(std::filesystem::path(task.save_dir) / task.file_name);
-            task.status_detail = "Waiting for a file conflict choice";
+    if (!task.file_name.empty() && !task.save_dir.empty() &&
+        task.state != TaskState::kCompleted && task.state != TaskState::kFailed) {
+        auto reserved = core::DuplicateDetector::FindDestinationConflict(
+            m_tasks, task.save_dir, task.file_name, task.task_id, true);
+        if (reserved.kind != core::DuplicateKind::kNone) {
+            if (task.conflict_policy == ConflictPolicy::kOverwrite) {
+                return Result<TaskModel>::Err(
+                    "ERR_DESTINATION_IN_USE",
+                    "Destination is currently owned by another active or paused download: " +
+                        PathSanitizer::PathToUtf8(std::filesystem::path(task.save_dir) / task.file_name));
+            }
+            if (!force_duplicate && (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists)) {
+                return Result<TaskModel>::Err(
+                    "ERR_FILE_EXISTS",
+                    "Destination is reserved by another download: " +
+                        PathSanitizer::PathToUtf8(std::filesystem::path(task.save_dir) / task.file_name));
+            }
+        }
+
+        if (task.conflict_policy == ConflictPolicy::kAutoRename) {
+            std::string base_name = PathSanitizer::SanitizeFileName(task.file_name);
+            auto dest_res = PathSanitizer::ResolveSafeOutputPath(task.save_dir, base_name, ConflictPolicy::kAutoRename);
+            if (!dest_res.ok()) {
+                return Result<TaskModel>::Err(dest_res.error->code, dest_res.error->message);
+            }
+            std::string cand_name = PathSanitizer::PathToUtf8(dest_res.value->filename());
+            if (core::DuplicateDetector::FindDestinationConflict(m_tasks, task.save_dir, cand_name, task.task_id, true).kind != core::DuplicateKind::kNone) {
+                std::filesystem::path p = PathSanitizer::Utf8ToPath(base_name);
+                std::string stem = PathSanitizer::PathToUtf8(p.stem());
+                std::string ext = PathSanitizer::PathToUtf8(p.extension());
+                std::error_code ec;
+                for (int i = 1; i <= 9999; ++i) {
+                    std::string try_name = stem + " (" + std::to_string(i) + ")" + ext;
+                    std::filesystem::path try_path = PathSanitizer::Utf8ToPath(task.save_dir) / PathSanitizer::Utf8ToPath(try_name);
+                    std::filesystem::path try_part = try_path;
+                    try_part += ".part";
+                    if (!std::filesystem::exists(try_path, ec) &&
+                        !std::filesystem::exists(try_part, ec) &&
+                        core::DuplicateDetector::FindDestinationConflict(m_tasks, task.save_dir, try_name, task.task_id, true).kind == core::DuplicateKind::kNone) {
+                        cand_name = try_name;
+                        break;
+                    }
+                }
+            }
+            task.file_name = cand_name;
+        } else if (!force_duplicate &&
+                   (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists)) {
+            auto dest_res = PathSanitizer::ResolveSafeOutputPath(task.save_dir, task.file_name, task.conflict_policy);
+            if (!dest_res.ok() && dest_res.error->code == "ERR_FILE_EXISTS") {
+                return Result<TaskModel>::Err(
+                    "ERR_FILE_EXISTS",
+                    "Destination file already exists: " +
+                        PathSanitizer::PathToUtf8(std::filesystem::path(task.save_dir) / task.file_name));
+            }
         }
     }
 
-    if (!destination_conflict && task.state != TaskState::kCompleted && task.state != TaskState::kFailed && task.state != TaskState::kDownloading) {
+    if (task.state != TaskState::kCompleted && task.state != TaskState::kFailed && task.state != TaskState::kDownloading) {
         task.state = (start_immediately && !task.scheduled) ? TaskState::kQueued : TaskState::kPaused;
         if (task.state == TaskState::kPaused) {
             task.pause_reason = task.scheduled ? PauseReason::kNone : PauseReason::kUser;
@@ -632,14 +718,6 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
     // Wake the scheduler before optional diagnostic persistence. Startup
     // diagnostics can touch disk; they must not sit on the task dispatch path.
     m_cv.notify_all();
-
-    if (destination_conflict) {
-#ifdef _WIN32
-        HWND hwnd_main = FindWindowW(L"Radium_MainWindowClass", nullptr);
-        if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_OPENIDM_SHOW_CONFLICT */, 0, 0);
-#endif
-        return Result<TaskModel>::Ok(task);
-    }
 
     // Record task initialization event in startup diagnostics
     {
@@ -683,6 +761,235 @@ core::DuplicateMatch DownloadController::CheckDestinationConflict(
     const std::string& exclude_task_id) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return core::DuplicateDetector::FindDestinationConflict(m_tasks, save_dir, file_name, exclude_task_id);
+}
+
+std::string DownloadController::ResolveAvailableFileName(
+    const std::string& save_dir,
+    const std::string& file_name,
+    const std::string& exclude_task_id) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::string base_name = PathSanitizer::SanitizeFileName(file_name);
+    if (base_name.empty()) base_name = "download.bin";
+    std::string dir = save_dir.empty()
+        ? (m_settings.last_download_dir.empty() ? m_settings.default_download_dir : m_settings.last_download_dir)
+        : save_dir;
+    if (dir.empty()) dir = m_cfg.default_download_dir.string();
+
+    std::error_code ec;
+    auto is_free = [&](const std::string& cand) {
+        std::filesystem::path p = PathSanitizer::Utf8ToPath(dir) / PathSanitizer::Utf8ToPath(cand);
+        std::filesystem::path part_p = p;
+        part_p += ".part";
+        if (std::filesystem::exists(p, ec) || std::filesystem::exists(part_p, ec)) {
+            return false;
+        }
+        return core::DuplicateDetector::FindDestinationConflict(m_tasks, dir, cand, exclude_task_id, true).kind ==
+               core::DuplicateKind::kNone;
+    };
+
+    if (is_free(base_name)) return base_name;
+
+    std::filesystem::path bp = PathSanitizer::Utf8ToPath(base_name);
+    std::string stem = PathSanitizer::PathToUtf8(bp.stem());
+    std::string ext = PathSanitizer::PathToUtf8(bp.extension());
+    for (int i = 1; i <= 9999; ++i) {
+        std::string cand = stem + " (" + std::to_string(i) + ")" + ext;
+        if (is_free(cand)) return cand;
+    }
+    return base_name;
+}
+
+DownloadController::IncomingConflictReport DownloadController::InspectIncomingDownload(
+    const TaskModel& candidate,
+    const std::string& exclude_task_id) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    IncomingConflictReport report;
+
+    std::string fn = candidate.file_name;
+    if (fn.empty()) {
+        if (candidate.url.find("youtube.com") != std::string::npos || candidate.url.find("youtu.be") != std::string::npos) {
+            fn = "youtube_video.mp4";
+        } else {
+            std::string fallback_ext = (candidate.task_type == TaskType::kHttpFile) ? "" : candidate.stream_options.output_format;
+            fn = PathSanitizer::ExtractFromUrl(candidate.url, fallback_ext);
+        }
+    } else {
+        fn = PathSanitizer::SanitizeFileName(fn);
+    }
+
+    std::string cat = candidate.category;
+    if (cat.empty() || cat == "General") {
+        cat = DetermineCategoryImpl(m_settings, fn, candidate.url);
+    }
+
+    std::string sd = candidate.save_dir;
+    if (sd.empty()) {
+        if (!m_settings.last_download_dir.empty()) {
+            sd = m_settings.last_download_dir;
+        } else {
+            sd = ResolveCategorySaveDirImpl(m_settings, m_cfg.default_download_dir, cat, candidate.url).string();
+        }
+    }
+
+    report.resolved_save_dir = sd;
+    report.resolved_file_name = fn;
+    if (!sd.empty() && !fn.empty()) {
+        report.target_path = PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(sd) / PathSanitizer::Utf8ToPath(fn));
+    }
+
+    // 1. Check URL / Name+Size / ETag duplicate across existing tasks
+    auto dup = core::DuplicateDetector::FindDuplicate(
+        m_tasks, candidate.url, fn, candidate.total_bytes, candidate.etag, exclude_task_id);
+
+    // 2. Check destination reservation by active/queued/paused tasks
+    auto reserved = (!sd.empty() && !fn.empty())
+        ? core::DuplicateDetector::FindDestinationConflict(m_tasks, sd, fn, exclude_task_id, true)
+        : core::DuplicateMatch{core::DuplicateKind::kNone, {}};
+    if (reserved.kind != core::DuplicateKind::kNone) {
+        report.destination_reserved_by_task = true;
+        report.overwrite_allowed = false;
+    }
+
+    // 3. Check physical file on disk
+    std::error_code ec;
+    if (!sd.empty() && !fn.empty()) {
+        std::filesystem::path target_p = PathSanitizer::Utf8ToPath(sd) / PathSanitizer::Utf8ToPath(fn);
+        if (std::filesystem::exists(target_p, ec)) {
+            report.destination_exists_on_disk = true;
+        }
+    }
+
+    // Classify in strict priority order:
+    // (a) Same download already active/queued
+    if (dup.kind != core::DuplicateKind::kNone &&
+        (dup.matched_task.state == TaskState::kQueued ||
+         dup.matched_task.state == TaskState::kProbing ||
+         dup.matched_task.state == TaskState::kDownloading ||
+         dup.matched_task.state == TaskState::kMuxing ||
+         dup.matched_task.state == TaskState::kVerifying ||
+         dup.matched_task.state == TaskState::kFinalizing)) {
+        report.kind = IncomingConflictKind::kActiveOrQueuedSameDownload;
+        report.matched_task = dup.matched_task;
+        report.overwrite_allowed = false;
+        return report;
+    }
+
+    // (b) Previous partial download exists (paused/failed task with progress/part_path, or .part on disk)
+    if (dup.kind != core::DuplicateKind::kNone &&
+        (dup.matched_task.state == TaskState::kPaused || dup.matched_task.state == TaskState::kFailed)) {
+        bool has_part = !dup.matched_task.part_path.empty() &&
+                        std::filesystem::exists(PathSanitizer::Utf8ToPath(dup.matched_task.part_path), ec);
+        if (has_part || dup.matched_task.downloaded_bytes > 0 || dup.matched_task.state == TaskState::kPaused) {
+            report.kind = IncomingConflictKind::kResumablePartialExists;
+            report.matched_task = dup.matched_task;
+            if (dup.matched_task.state == TaskState::kPaused) {
+                report.overwrite_allowed = false;
+            }
+            return report;
+        }
+    }
+
+    // (c) Another active/paused task has reserved the exact same destination
+    if (reserved.kind != core::DuplicateKind::kNone) {
+        report.kind = IncomingConflictKind::kReservedByAnotherTask;
+        report.matched_task = reserved.matched_task;
+        report.overwrite_allowed = false;
+        return report;
+    }
+
+    // (d) File already exists on disk (also record completed history match if any)
+    if (report.destination_exists_on_disk) {
+        report.kind = IncomingConflictKind::kExistsOnDisk;
+        if (dup.kind != core::DuplicateKind::kNone) {
+            report.matched_task = dup.matched_task;
+        }
+        return report;
+    }
+
+    // (e) Completed download exists in history (even if file was moved/deleted from disk)
+    if (dup.kind != core::DuplicateKind::kNone && dup.matched_task.state == TaskState::kCompleted) {
+        report.kind = IncomingConflictKind::kCompletedInHistory;
+        report.matched_task = dup.matched_task;
+        return report;
+    }
+
+    return report;
+}
+
+DownloadController::IncomingConflictReport DownloadController::InspectIncomingTorrent(
+    const torrent::TorrentInfo& info,
+    const std::string& save_dir,
+    const std::string& exclude_task_id) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    IncomingConflictReport report;
+
+    std::string sd = save_dir;
+    if (sd.empty()) {
+        sd = !m_settings.last_download_dir.empty()
+            ? m_settings.last_download_dir
+            : m_cfg.default_download_dir.string();
+    }
+    report.resolved_save_dir = sd;
+    report.resolved_file_name = info.name;
+    if (!sd.empty() && !info.name.empty()) {
+        report.target_path = PathSanitizer::PathToUtf8(PathSanitizer::Utf8ToPath(sd) / PathSanitizer::Utf8ToPath(info.name));
+    }
+
+    // Check magnet/infohash duplicate across existing tasks
+    if (!info.info_hash_hex.empty()) {
+        std::string mag = "magnet:?xt=urn:btih:" + info.info_hash_hex;
+        auto dup = core::DuplicateDetector::FindDuplicate(m_tasks, mag, info.name, info.total_length, "", exclude_task_id);
+        if (dup.kind != core::DuplicateKind::kNone) {
+            report.matched_task = dup.matched_task;
+            if (dup.matched_task.state == TaskState::kQueued ||
+                dup.matched_task.state == TaskState::kDownloading ||
+                dup.matched_task.state == TaskState::kProbing) {
+                report.kind = IncomingConflictKind::kActiveOrQueuedSameDownload;
+                report.overwrite_allowed = false;
+                return report;
+            }
+            if (dup.matched_task.state == TaskState::kPaused) {
+                report.kind = IncomingConflictKind::kResumablePartialExists;
+                report.overwrite_allowed = false;
+                return report;
+            }
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::path base_dir = PathSanitizer::Utf8ToPath(sd);
+    for (const auto& f : info.files) {
+        if (!f.selected) continue;
+        std::filesystem::path target_p = base_dir / f.relative_path;
+        if (std::filesystem::exists(target_p, ec)) {
+            report.destination_exists_on_disk = true;
+            report.conflicting_torrent_files.push_back(f.relative_path.generic_string());
+        }
+        // Check if another active/paused task owns this exact path or torrent root
+        for (const auto& [tid, existing] : m_tasks) {
+            if (!exclude_task_id.empty() && tid == exclude_task_id) continue;
+            if (!core::DuplicateDetector::IsTaskReservingDestination(existing.state)) continue;
+            std::filesystem::path existing_root = PathSanitizer::Utf8ToPath(existing.save_dir) / PathSanitizer::Utf8ToPath(existing.file_name);
+            if (PathSanitizer::PathsEquivalent(target_p, existing_root)) {
+                report.destination_reserved_by_task = true;
+                report.overwrite_allowed = false;
+                if (!report.matched_task.has_value()) report.matched_task = existing;
+            }
+        }
+    }
+
+    if (report.destination_reserved_by_task) {
+        report.kind = IncomingConflictKind::kReservedByAnotherTask;
+        return report;
+    }
+    if (report.destination_exists_on_disk) {
+        report.kind = IncomingConflictKind::kExistsOnDisk;
+        if (report.conflicting_torrent_files.size() == 1) {
+            report.target_path = PathSanitizer::PathToUtf8(base_dir / report.conflicting_torrent_files.front());
+        }
+        return report;
+    }
+    return report;
 }
 
 Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const std::filesystem::path& staged_file_path) {
@@ -799,14 +1106,22 @@ Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_deleted_tasks.erase(task.task_id);
+        const bool is_failure = (task.state == TaskState::kFailed);
+        const bool should_notify = m_settings.show_completion_notification &&
+            (is_failure ? !task.failure_notification_sent
+                        : m_notified_task_ids.insert(task.task_id).second);
+        if (should_notify) {
+            if (is_failure) {
+                task.failure_notification_sent = true;
+                m_notified_task_ids.insert(task.task_id);
+            }
+            notification_callback = m_task_notification_callback;
+        }
         auto db_res = m_store.UpsertTask(task);
         if (!db_res.ok()) {
             return Result<TaskModel>::Err(db_res.error->code, db_res.error->message);
         }
         m_tasks[task.task_id] = task;
-        if (m_settings.show_completion_notification && m_notified_task_ids.insert(task.task_id).second) {
-            notification_callback = m_task_notification_callback;
-        }
         m_cv.notify_all();
     }
     if (notification_callback) notification_callback(TaskNotification{
@@ -1025,28 +1340,51 @@ void DownloadController::ScheduleLoop() {
 
         // 3. Exponential backoff auto-retry for transient network errors
         auto now_steady = std::chrono::steady_clock::now();
+
+        // 3a. System sleep inhibition & sliding-window quota enforcement
+        platform::WindowsIntegrations::SetDownloadKeepAlive(!m_active.empty() && m_settings.prevent_sleep);
+        if (m_settings.quota_max_mb > 0) {
+            static SlidingWindowQuota s_quota;
+            std::vector<std::pair<std::string, uint64_t>> progress;
+            progress.reserve(m_tasks.size());
+            for (const auto& [tid, task_ref] : m_tasks) {
+                progress.emplace_back(tid, task_ref.downloaded_bytes);
+            }
+            s_quota.Record(now_steady, progress);
+            const uint64_t limit_bytes = m_settings.quota_max_mb * 1024ULL * 1024ULL;
+            const auto window = std::chrono::hours(std::max<uint32_t>(1u, m_settings.quota_window_hours));
+            if (auto state_chg = s_quota.Check(now_steady, limit_bytes, window)) {
+                if (*state_chg) {
+                    for (auto& [tid, t] : m_tasks) {
+                        if (t.state == TaskState::kDownloading || t.state == TaskState::kProbing || t.state == TaskState::kQueued) {
+                            if (auto act = m_active.find(tid); act != m_active.end()) {
+                                act->second->pause_requested.store(true);
+                                act->second->cancel_requested.store(true);
+                            }
+                            t.pause_reason = PauseReason::kQuota;
+                            t.state = TaskState::kPaused;
+                            t.status_detail = "Paused (Quota limit reached)";
+                            m_store.UpsertTask(t);
+                            s_quota.held_task_ids.push_back(tid);
+                        }
+                    }
+                } else {
+                    for (const auto& tid : s_quota.held_task_ids) {
+                        auto it = m_tasks.find(tid);
+                        if (it != m_tasks.end() && it->second.state == TaskState::kPaused && it->second.pause_reason == PauseReason::kQuota) {
+                            it->second.pause_reason = PauseReason::kNone;
+                            it->second.state = TaskState::kQueued;
+                            it->second.status_detail = "Queued (Quota window available)";
+                            m_store.UpsertTask(it->second);
+                        }
+                    }
+                    s_quota.held_task_ids.clear();
+                }
+            }
+        }
         for (auto& [id, t] : m_tasks) {
             if (t.state == TaskState::kFailed && t.retry_count < m_settings.max_auto_retries) {
-                bool is_transient = (t.error_code == "ERR_NETWORK_TIMEOUT" ||
-                                     t.error_code == "ERR_NET_TIMEOUT" ||
-                                     t.error_code == "ERR_TIMEOUT" ||
-                                     t.error_code == "ERR_CONNECTION_RESET" ||
-                                     t.error_code == "ERR_NET_CONNECTION_RESET" ||
-                                     t.error_code == "ERR_NET_CONNECT" ||
-                                     t.error_code == "ERR_NET_SEND" ||
-                                     t.error_code == "ERR_NET_DNS" ||
-                                     t.error_code == "ERR_HTTP_TIMEOUT" ||
-                                     t.error_code == "ERR_HTTP_5XX_TRANSIENT" ||
-                                     t.error_code == "ERR_HTTP_429_RATE_LIMITED" ||
-                                     t.error_code == "ERR_HTTP_503" ||
-                                     t.error_code == "ERR_HTTP_502" ||
-                                     t.error_code == "ERR_HTTP_504" ||
-                                     t.error_code == "ERR_HTTP_429" ||
-                                     t.error_code == "ERR_FTP_TIMEOUT" ||
-                                     t.error_code == "ERR_FTP_DISCONNECTED" ||
-                                     t.error_code == "ERR_FTP_CONNECT" ||
-                                     t.error_code == "ERR_STREAM_WORKER_CRASH");
-                if (is_transient) {
+                if (IsTransientRetryableError(t.error_code)) {
                     auto rit = retry_schedule.find(id);
                     if (rit == retry_schedule.end()) {
                         uint32_t delay_sec = m_settings.retry_interval_sec * (1u << std::min<uint32_t>(t.retry_count, 6u));
@@ -1479,7 +1817,13 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
             p_pass_enc = m_settings.proxy_password_encrypted;
             s_user = m_settings.server_auth_username;
             s_pass_enc = m_settings.server_auth_password_encrypted;
+            ecfg.net_opts.identity_presets = m_settings.identity_presets;
+            ecfg.net_opts.enable_bot_check_fallback = m_settings.enable_bot_check_fallback;
         }
+
+        ecfg.net_opts.http_method = local_task.http_method;
+        ecfg.net_opts.post_body = local_task.post_body;
+        ecfg.net_opts.post_content_type = local_task.post_content_type;
 
         ecfg.net_opts.proxy_mode = p_mode;
         ecfg.net_opts.proxy_server = p_serv;
@@ -1760,6 +2104,8 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
     // BUG-007 Fix: Granular merge under m_mutex without resurrecting deleted tasks
     bool should_persist = false;
     TaskModel to_save;
+    TaskNotificationCallback callback;
+    bool notify = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_deleted_tasks.count(task_id)) {
@@ -1801,48 +2147,68 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 t.segments = local_task.segments;
                 t.error_code = local_task.error_code;
                 t.error_message = local_task.error_message;
+                if (t.state == TaskState::kFailed &&
+                    (t.error_code == "ERR_HTTP_403_EXPIRED_OR_AUTH" ||
+                     t.error_code == "ERR_HTTP_AUTH_CHALLENGE" ||
+                     t.error_code == "ERR_LINK_EXPIRED" ||
+                     (t.error_code == "ERR_HTTP_404_NOT_FOUND" && IsExpiringSiteUrl(t.url)))) {
+                    t.waits_for_address = true;
+                }
                 t.updated_at_ms = local_task.updated_at_ms;
                 t.completed_at_ms = local_task.completed_at_ms;
                 if (t.state == TaskState::kCompleted || t.state == TaskState::kCanceled) {
                     t.auth_headers.clear();
                 }
+
+                const bool retry_pending = t.state == TaskState::kFailed &&
+                    t.retry_count < m_settings.max_auto_retries &&
+                    IsTransientRetryableError(t.error_code);
+                if (t.state == TaskState::kFailed && !retry_pending &&
+                    m_settings.show_completion_notification && !t.failure_notification_sent) {
+                    // Persist failure_notification_sent before submitting the notification
+                    // to guarantee at-most-once delivery across crashes and restarts.
+                    t.failure_notification_sent = true;
+                    m_notified_task_ids.insert(task_id);
+                    callback = m_task_notification_callback;
+                    notify = static_cast<bool>(callback);
+                } else if (t.state == TaskState::kCompleted &&
+                           m_settings.show_completion_notification &&
+                           m_notified_task_ids.insert(task_id).second) {
+                    callback = m_task_notification_callback;
+                    notify = static_cast<bool>(callback);
+                }
+
                 to_save = t;
                 should_persist = true;
             }
         }
     }
     if (should_persist) {
-        m_store.UpsertTask(to_save);
-        TaskNotificationCallback callback;
-        bool notify = false;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            const bool terminal_notice = to_save.state == TaskState::kCompleted || to_save.state == TaskState::kFailed;
-            const bool retry_pending = to_save.state == TaskState::kFailed && to_save.retry_count < m_settings.max_auto_retries &&
-                (to_save.error_code == "ERR_NETWORK_TIMEOUT" || to_save.error_code == "ERR_NET_TIMEOUT" ||
-                 to_save.error_code == "ERR_TIMEOUT" || to_save.error_code == "ERR_CONNECTION_RESET" ||
-                 to_save.error_code == "ERR_NET_CONNECTION_RESET" || to_save.error_code == "ERR_NET_CONNECT" ||
-                 to_save.error_code == "ERR_NET_SEND" || to_save.error_code == "ERR_NET_DNS" ||
-                 to_save.error_code == "ERR_HTTP_TIMEOUT" || to_save.error_code == "ERR_HTTP_5XX_TRANSIENT" ||
-                 to_save.error_code == "ERR_HTTP_429_RATE_LIMITED" || to_save.error_code == "ERR_HTTP_503" ||
-                 to_save.error_code == "ERR_HTTP_502" || to_save.error_code == "ERR_HTTP_504" ||
-                 to_save.error_code == "ERR_FTP_TIMEOUT" || to_save.error_code == "ERR_FTP_DISCONNECTED" ||
-                 to_save.error_code == "ERR_FTP_CONNECT" || to_save.error_code == "ERR_STREAM_WORKER_CRASH");
-            if (terminal_notice && !retry_pending && m_settings.show_completion_notification &&
-                m_notified_task_ids.insert(task_id).second) {
-                callback = m_task_notification_callback;
-                notify = static_cast<bool>(callback);
-            }
+        auto persist_res = m_store.UpsertTask(to_save);
+        if (notify && persist_res.ok()) {
+            callback(TaskNotification{task_id, to_save.file_name,
+                to_save.state == TaskState::kCompleted,
+                to_save.state == TaskState::kCompleted ? "Download completed" : to_save.error_message});
         }
-        if (notify) callback(TaskNotification{task_id, to_save.file_name,
-            to_save.state == TaskState::kCompleted,
-            to_save.state == TaskState::kCompleted ? "Download completed" : to_save.error_message});
 
         // Record terminal status in startup diagnostic recorder
         diagnostics::StartupDiagnosticRecorder::Instance().CompleteSession(
             task_id,
             to_save.state == TaskState::kCompleted,
             to_save.error_message);
+
+        if (to_save.state == TaskState::kCompleted) {
+            std::filesystem::path final_p = std::filesystem::path(to_save.save_dir) / to_save.file_name;
+            bool motw_enabled = true;
+            {
+                std::lock_guard<std::mutex> lk(m_mutex);
+                motw_enabled = m_settings.mark_of_the_web;
+            }
+            platform::WindowsIntegrations::WriteZoneIdentifier(final_p, to_save.url, to_save.page_url, motw_enabled);
+            if (to_save.post_action != PostCompletionAction::kNone) {
+                platform::WindowsIntegrations::ExecutePostCompletionAction(to_save.post_action, final_p);
+            }
+        }
     }
 
     ctrl->finished.store(true);
@@ -2307,6 +2673,7 @@ Result<void> DownloadController::RefreshTaskUrl(
     for (const auto& [k, v] : new_headers) it->second.headers[k] = v;
 
     it->second.retry_count = 0;
+    it->second.waits_for_address = false;
     m_notified_task_ids.erase(task_id);
     it->second.state = TaskState::kQueued;
     it->second.status_detail = "Queued (Refreshed URL)";
@@ -2315,6 +2682,144 @@ Result<void> DownloadController::RefreshTaskUrl(
     m_store.UpsertTask(it->second);
     m_cv.notify_all();
     return Result<void>::Ok();
+}
+
+std::string DownloadController::ExtractRegistrableDomain(const std::string& url) {
+    auto pu = brisk::HttpClient::ParseUrl(url);
+    if (!pu.ok() || pu.value->host.empty()) return {};
+    std::string host = pu.value->host;
+    while (!host.empty() && host.back() == '.') host.pop_back();
+    for (char& c : host) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (host.find(':') != std::string::npos) return host; // IPv6 literal
+
+    bool all_digits_or_dots = !host.empty();
+    for (char c : host) {
+        if (!std::isdigit(static_cast<unsigned char>(c)) && c != '.') {
+            all_digits_or_dots = false;
+            break;
+        }
+    }
+    if (all_digits_or_dots) return host; // IPv4 literal
+
+    std::vector<std::string> labels;
+    size_t start = 0;
+    while (start <= host.size()) {
+        size_t dot = host.find('.', start);
+        if (dot == std::string::npos) {
+            if (start < host.size()) labels.push_back(host.substr(start));
+            break;
+        }
+        labels.push_back(host.substr(start, dot - start));
+        start = dot + 1;
+    }
+    const size_t n = labels.size();
+    if (n <= 2) return host;
+
+    static constexpr const char* kCountrySecondLevel[] = {
+        "co", "com", "net", "org", "gov", "edu", "ac", "or", "ne", "go", "gob", "nic", "mil"
+    };
+    bool country = (labels[n - 1].size() == 2);
+    if (country) {
+        bool found = false;
+        for (const char* sld : kCountrySecondLevel) {
+            if (labels[n - 2] == sld) {
+                found = true;
+                break;
+            }
+        }
+        country = found;
+    }
+    const size_t keep = country ? 3 : 2;
+    const size_t begin_idx = (n > keep) ? (n - keep) : 0;
+    std::string result;
+    for (size_t i = begin_idx; i < n; ++i) {
+        if (!result.empty()) result += '.';
+        result += labels[i];
+    }
+    return result;
+}
+
+bool DownloadController::IsExpiringSiteUrl(const std::string& url) {
+    const std::string site = ExtractRegistrableDomain(url);
+    return site == "rapidgator.net" || site == "rg.to";
+}
+
+std::optional<TaskModel> DownloadController::TryMatchFreshLink(const TaskModel& offer) {
+    if (offer.url.empty() || offer.file_name.empty()) return std::nullopt;
+    const std::string offer_site = ExtractRegistrableDomain(offer.url);
+    const std::string offer_page_site = offer.page_url.empty() ? std::string{} : ExtractRegistrableDomain(offer.page_url);
+
+    auto eq_ignore_case = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                std::tolower(static_cast<unsigned char>(b[i]))) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    std::string best_id;
+    int best_score = 0;
+    int64_t best_created_at = -1;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& [tid, item] : m_tasks) {
+            if (item.task_type != TaskType::kHttpFile) continue;
+            if (item.state == TaskState::kCompleted || item.state == TaskState::kCanceled) continue;
+            if (item.url == offer.url) continue;
+
+            const bool eligible_state =
+                item.waits_for_address ||
+                ((item.state == TaskState::kFailed || item.state == TaskState::kPaused) &&
+                 (item.error_code == "ERR_HTTP_403_EXPIRED_OR_AUTH" ||
+                  item.error_code == "ERR_HTTP_AUTH_CHALLENGE" ||
+                  item.error_code == "ERR_LINK_EXPIRED"));
+            if (!eligible_state) continue;
+
+            const std::string item_site = ExtractRegistrableDomain(item.url);
+            const std::string item_page_site = item.page_url.empty() ? std::string{} : ExtractRegistrableDomain(item.page_url);
+            const bool same_site =
+                (!item_site.empty() && item_site == offer_site) ||
+                (!item_page_site.empty() && item_page_site == offer_page_site);
+            if (!same_site) continue;
+
+            if (!eq_ignore_case(item.file_name, offer.file_name)) continue;
+
+            if (item.total_bytes > 0 && offer.total_bytes > 0 && item.total_bytes != offer.total_bytes) {
+                continue;
+            }
+
+            const int score = (item.total_bytes > 0 && offer.total_bytes > 0 && item.total_bytes == offer.total_bytes) ? 2 : 1;
+            if (score > best_score || (score == best_score && item.created_at_ms > best_created_at)) {
+                best_score = score;
+                best_created_at = item.created_at_ms;
+                best_id = tid;
+            }
+        }
+    }
+
+    if (best_id.empty()) return std::nullopt;
+
+    if (!offer.post_body.empty() || offer.http_method == "POST") {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_tasks.find(best_id);
+        if (it != m_tasks.end()) {
+            it->second.http_method = offer.http_method;
+            it->second.post_body = offer.post_body;
+            it->second.post_content_type = offer.post_content_type;
+        }
+    }
+
+    auto ref_res = RefreshTaskUrl(best_id, offer.url, offer.headers, offer.auth_headers);
+    if (!ref_res.ok()) return std::nullopt;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_tasks.find(best_id);
+    if (it == m_tasks.end()) return std::nullopt;
+    OPENIDM_LOG_INFO("Controller", "Freshlink matched offer for '" + offer.file_name + "' -> resumed task " + best_id);
+    return it->second;
 }
 
 void DownloadController::SetMaxConcurrentTasks(uint32_t max_tasks) {
@@ -2742,6 +3247,140 @@ Result<torrent::TorrentSwarmDetails> DownloadController::GetTorrentSwarmDetails(
 
 Result<void> DownloadController::SetTorrentSequentialMode(const std::string& task_id, bool enable) {
     return torrent::TorrentEngine::SetSequentialMode(task_id, enable);
+}
+
+void SlidingWindowQuota::Record(
+    std::chrono::steady_clock::time_point now,
+    const std::vector<std::pair<std::string, uint64_t>>& progress) {
+    uint64_t delta = 0;
+    for (const auto& [id, bytes] : progress) {
+        auto it = m_last_bytes.find(id);
+        uint64_t prev = (it == m_last_bytes.end()) ? bytes : it->second;
+        m_last_bytes[id] = bytes;
+        if (bytes > prev) delta += (bytes - prev);
+    }
+    if (delta == 0) return;
+    if (!m_samples.empty() && (now - m_samples.back().first) < std::chrono::seconds(1)) {
+        m_samples.back().second += delta;
+    } else {
+        m_samples.emplace_back(now, delta);
+    }
+}
+
+uint64_t SlidingWindowQuota::Used(
+    std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::duration window) {
+    while (!m_samples.empty() && (now - m_samples.front().first) >= window) {
+        m_samples.pop_front();
+    }
+    uint64_t total = 0;
+    for (const auto& [_, n] : m_samples) total += n;
+    return total;
+}
+
+std::optional<bool> SlidingWindowQuota::Check(
+    std::chrono::steady_clock::time_point now,
+    uint64_t limit_bytes,
+    std::chrono::steady_clock::duration window) {
+    uint64_t used = Used(now, window);
+    if (!blocked && used >= limit_bytes) {
+        blocked = true;
+        return true;
+    }
+    if (blocked && used < limit_bytes) {
+        blocked = false;
+        return false;
+    }
+    return std::nullopt;
+}
+
+std::chrono::steady_clock::duration SlidingWindowQuota::RoomIn(
+    std::chrono::steady_clock::time_point now,
+    uint64_t limit_bytes,
+    std::chrono::steady_clock::duration window) {
+    uint64_t used = Used(now, window);
+    for (const auto& [at, n] : m_samples) {
+        if (used < limit_bytes) break;
+        used = (used > n) ? (used - n) : 0;
+        if (used < limit_bytes) {
+            auto expires = at + window;
+            return (expires > now) ? (expires - now) : std::chrono::steady_clock::duration::zero();
+        }
+    }
+    return std::chrono::steady_clock::duration::zero();
+}
+
+DownloadController::ExtensionOnboardingState DownloadController::GetExtensionOnboardingState() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    ExtensionOnboardingState state;
+    auto res = m_store.GetSetting("extension_onboarding", "{}");
+    if (!res.ok() || res.value->empty()) return state;
+    try {
+        auto val = json::Parse(*res.value);
+        if (!val.is_object()) return state;
+        state.completed = val["completed"].as_bool(false);
+        state.action = val["action"].as_string("");
+        state.installed_version = val["installedVersion"].as_string("");
+        state.installed_commit = val["installedCommit"].as_string("");
+        state.install_dir = val["installDir"].as_string("");
+    } catch (...) {}
+    return state;
+}
+
+bool DownloadController::ShouldShowExtensionOnboarding() const {
+    return !GetExtensionOnboardingState().completed;
+}
+
+Result<void> DownloadController::MarkExtensionOnboardingDisplayed(const std::string& action) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    ExtensionOnboardingState state;
+    if (auto res = m_store.GetSetting("extension_onboarding", "{}"); res.ok() && !res.value->empty()) {
+        try {
+            auto val = json::Parse(*res.value);
+            if (val.is_object()) {
+                state.completed = val["completed"].as_bool(false);
+                state.action = val["action"].as_string("");
+                state.installed_version = val["installedVersion"].as_string("");
+                state.installed_commit = val["installedCommit"].as_string("");
+                state.install_dir = val["installDir"].as_string("");
+            }
+        } catch (...) {}
+    }
+
+    json::Value obj = json::Object{};
+    obj["completed"] = true;
+    obj["action"] = action.empty() ? state.action : action;
+    obj["installedVersion"] = state.installed_version;
+    obj["installedCommit"] = state.installed_commit;
+    obj["installDir"] = state.install_dir;
+    return m_store.SetSetting("extension_onboarding", obj.dump());
+}
+
+Result<void> DownloadController::RecordInstalledExtension(
+    const std::string& version,
+    const std::string& commit_sha,
+    const std::string& install_dir) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    bool was_completed = true;
+    std::string prev_action = "downloaded";
+    if (auto res = m_store.GetSetting("extension_onboarding", "{}"); res.ok() && !res.value->empty()) {
+        try {
+            auto val = json::Parse(*res.value);
+            if (val.is_object()) {
+                was_completed = val["completed"].as_bool(true);
+                std::string existing_action = val["action"].as_string("");
+                if (!existing_action.empty()) prev_action = existing_action;
+            }
+        } catch (...) {}
+    }
+
+    json::Value obj = json::Object{};
+    obj["completed"] = was_completed;
+    obj["action"] = prev_action;
+    obj["installedVersion"] = version;
+    obj["installedCommit"] = commit_sha;
+    obj["installDir"] = install_dir;
+    return m_store.SetSetting("extension_onboarding", obj.dump());
 }
 
 } // namespace openidm

@@ -6,12 +6,15 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -34,6 +37,22 @@
 #include "common/central_config.hpp"
 
 namespace openidm {
+
+// Sliding-window download quota (ported from MDM quota.rs: "Download no more than N MBytes every H hours")
+class SlidingWindowQuota {
+public:
+    void Record(std::chrono::steady_clock::time_point now, const std::vector<std::pair<std::string, uint64_t>>& progress);
+    uint64_t Used(std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration window);
+    std::optional<bool> Check(std::chrono::steady_clock::time_point now, uint64_t limit_bytes, std::chrono::steady_clock::duration window);
+    std::chrono::steady_clock::duration RoomIn(std::chrono::steady_clock::time_point now, uint64_t limit_bytes, std::chrono::steady_clock::duration window);
+
+    bool blocked{false};
+    std::vector<std::string> held_task_ids;
+
+private:
+    std::deque<std::pair<std::chrono::steady_clock::time_point, uint64_t>> m_samples;
+    std::map<std::string, uint64_t> m_last_bytes;
+};
 
 struct ControllerConfig {
     std::filesystem::path state_db_path;
@@ -76,6 +95,46 @@ public:
 
     // Checks for destination path conflict across existing tasks
     core::DuplicateMatch CheckDestinationConflict(
+        const std::string& save_dir,
+        const std::string& file_name,
+        const std::string& exclude_task_id = "") const;
+
+    enum class IncomingConflictKind {
+        kNone = 0,
+        kActiveOrQueuedSameDownload = 1,
+        kCompletedInHistory = 2,
+        kExistsOnDisk = 3,
+        kReservedByAnotherTask = 4,
+        kResumablePartialExists = 5
+    };
+
+    struct IncomingConflictReport {
+        IncomingConflictKind kind{IncomingConflictKind::kNone};
+        bool destination_exists_on_disk{false};
+        bool destination_reserved_by_task{false};
+        bool overwrite_allowed{true};
+        std::string resolved_save_dir;
+        std::string resolved_file_name;
+        std::string target_path;
+        std::optional<TaskModel> matched_task;
+        std::vector<std::string> conflicting_torrent_files;
+
+        bool has_conflict() const { return kind != IncomingConflictKind::kNone; }
+    };
+
+    // Pure, non-mutating preflight check for incoming downloads (distinguishes all 5 duplicate/conflict cases).
+    IncomingConflictReport InspectIncomingDownload(
+        const TaskModel& candidate,
+        const std::string& exclude_task_id = "") const;
+
+    // Pure, non-mutating preflight check for multi-file or single-file torrents.
+    IncomingConflictReport InspectIncomingTorrent(
+        const torrent::TorrentInfo& info,
+        const std::string& save_dir,
+        const std::string& exclude_task_id = "") const;
+
+    // Finds a unique filename in save_dir that neither exists on disk nor is reserved by any active/paused task.
+    std::string ResolveAvailableFileName(
         const std::string& save_dir,
         const std::string& file_name,
         const std::string& exclude_task_id = "") const;
@@ -126,6 +185,11 @@ public:
         const std::map<std::string, std::string>& new_headers = {},
         const std::map<std::string, std::string>& new_auth_headers = {});
 
+    // Automatic expired-URL freshlink matching (MDM freshlink.rs port)
+    static std::string ExtractRegistrableDomain(const std::string& url);
+    static bool IsExpiringSiteUrl(const std::string& url);
+    std::optional<TaskModel> TryMatchFreshLink(const TaskModel& offer);
+
     // Queue & bandwidth controls (FR-024, FR-025)
     void SetMaxConcurrentTasks(uint32_t max_tasks);
     uint32_t GetMaxConcurrentTasks() const;
@@ -153,6 +217,22 @@ public:
     Result<AppSettings> RestoreDefaultSettings();
     Result<void> RememberDownloadDirectory(const std::string& directory);
     void SetTaskNotificationCallback(TaskNotificationCallback callback);
+
+    // Persistent Browser Extension Onboarding & Installation State (stored independently of AppSettings)
+    struct ExtensionOnboardingState {
+        bool completed{false};
+        std::string action;
+        std::string installed_version;
+        std::string installed_commit;
+        std::string install_dir;
+    };
+    ExtensionOnboardingState GetExtensionOnboardingState() const;
+    bool ShouldShowExtensionOnboarding() const;
+    Result<void> MarkExtensionOnboardingDisplayed(const std::string& action);
+    Result<void> RecordInstalledExtension(
+        const std::string& version,
+        const std::string& commit_sha,
+        const std::string& install_dir);
 
     const ControllerConfig& GetConfig() const { return m_cfg; }
     // Installs the UI-side selector used when a magnet link obtains multi-file metadata.

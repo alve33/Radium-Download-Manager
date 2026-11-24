@@ -47,6 +47,17 @@ public:
     void SetHeadlessDaemonMode(bool headless) { m_is_headless.store(headless); }
     bool IsHeadlessDaemonMode() const { return m_is_headless.load(); }
 
+    void ResolvePendingOffer(const std::string& task_id) {
+        std::lock_guard<std::mutex> lock(m_offer_mutex);
+        auto it = m_gui_pending_offers.find(task_id);
+        if (it != m_gui_pending_offers.end()) {
+            if (!it->second.correlation_id.empty()) {
+                m_recent_offer_correlations.erase(it->second.correlation_id);
+            }
+            m_gui_pending_offers.erase(it);
+        }
+    }
+
     using OfferNotificationCallback = std::function<void(const TaskModel& task)>;
     void SetOfferNotificationCallback(OfferNotificationCallback cb) {
         std::vector<TaskModel> pending;
@@ -82,6 +93,13 @@ private:
     std::mutex m_offer_mutex;
     OfferNotificationCallback m_offer_cb;
     std::vector<TaskModel> m_pending_offers;
+    struct RecentOfferRecord {
+        std::string task_id;
+        std::string file_name;
+        int64_t created_at_ms{0};
+    };
+    std::map<std::string, RecentOfferRecord> m_recent_offer_correlations;
+    std::map<std::string, TaskModel> m_gui_pending_offers;
     std::thread m_accept_thread;
 
     struct ClientWorkerEntry {

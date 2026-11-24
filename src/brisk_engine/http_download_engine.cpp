@@ -11,6 +11,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <iomanip>
+#include <random>
 #include <sstream>
 #include <thread>
 
@@ -20,6 +23,7 @@
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #endif
 
@@ -70,18 +74,56 @@ public:
     }
 
     bool PWrite(const uint8_t* data, size_t len, uint64_t offset) {
+        constexpr size_t kWriteMax = 4ULL << 20; // WRITE_MAX = 4 MiB chunked writes
+        size_t pos = 0;
+        while (pos < len) {
+            size_t chunk = std::min(kWriteMax, len - pos);
+#ifdef _WIN32
+            if (m_handle == INVALID_HANDLE_VALUE) return false;
+            OVERLAPPED ov{};
+            uint64_t cur_off = offset + pos;
+            ov.Offset = static_cast<DWORD>(cur_off & 0xFFFFFFFFULL);
+            ov.OffsetHigh = static_cast<DWORD>((cur_off >> 32) & 0xFFFFFFFFULL);
+            DWORD written = 0;
+            if (!WriteFile(m_handle, data + pos, static_cast<DWORD>(chunk), &written, &ov) ||
+                written != static_cast<DWORD>(chunk)) {
+                return false;
+            }
+#else
+            if (m_fd < 0) return false;
+            ssize_t w = ::pwrite(m_fd, data + pos, chunk, static_cast<off_t>(offset + pos));
+            if (w != static_cast<ssize_t>(chunk)) return false;
+#endif
+            pos += chunk;
+        }
+        return true;
+    }
+
+    bool PRead(uint8_t* data, size_t len, uint64_t offset) const {
 #ifdef _WIN32
         if (m_handle == INVALID_HANDLE_VALUE) return false;
         OVERLAPPED ov{};
         ov.Offset = static_cast<DWORD>(offset & 0xFFFFFFFFULL);
         ov.OffsetHigh = static_cast<DWORD>((offset >> 32) & 0xFFFFFFFFULL);
-        DWORD written = 0;
-        return WriteFile(m_handle, data, static_cast<DWORD>(len), &written, &ov) && written == static_cast<DWORD>(len);
+        DWORD read_bytes = 0;
+        return ReadFile(m_handle, data, static_cast<DWORD>(len), &read_bytes, &ov) &&
+               read_bytes == static_cast<DWORD>(len);
 #else
         if (m_fd < 0) return false;
-        ssize_t w = ::pwrite(m_fd, data, len, static_cast<off_t>(offset));
-        return w == static_cast<ssize_t>(len);
+        ssize_t r = ::pread(m_fd, data, len, static_cast<off_t>(offset));
+        return r == static_cast<ssize_t>(len);
 #endif
+    }
+
+    bool IsFat32Volume() const {
+#ifdef _WIN32
+        if (m_handle == INVALID_HANDLE_VALUE) return false;
+        wchar_t fs_name[64]{};
+        if (GetVolumeInformationByHandleW(m_handle, nullptr, 0, nullptr, nullptr, nullptr, fs_name, 64)) {
+            return _wcsicmp(fs_name, L"FAT32") == 0;
+        }
+#endif
+        return false;
     }
 
     void SyncAndClose() {
@@ -126,7 +168,39 @@ private:
 
 namespace {
 bool HttpRangeTraceEnabled() {
-    return std::getenv("RADIUM_HTTP_RANGE_TRACE") != nullptr;
+    static const bool enabled = (std::getenv("RADIUM_HTTP_RANGE_TRACE") != nullptr);
+    return enabled;
+}
+
+bool ApplyLastModifiedTimestamp(const std::filesystem::path& file_path, std::string_view http_date) {
+    if (http_date.empty()) return false;
+    std::tm tm{};
+    std::istringstream iss{std::string(http_date)};
+    // RFC 7231 IMF-fixdate: "Wed, 21 Oct 2015 07:28:00 GMT"
+    iss >> std::get_time(&tm, "%a, %d %b %Y %H:%M:%S");
+    if (iss.fail()) return false;
+#ifdef _WIN32
+    time_t epoch_sec = _mkgmtime(&tm);
+    if (epoch_sec <= 0) return false;
+    uint64_t win_time = (static_cast<uint64_t>(epoch_sec) + 11644473600ULL) * 10000000ULL;
+    FILETIME ft{};
+    ft.dwLowDateTime = static_cast<DWORD>(win_time & 0xFFFFFFFFULL);
+    ft.dwHighDateTime = static_cast<DWORD>(win_time >> 32);
+    HANDLE hFile = CreateFileW(file_path.wstring().c_str(), FILE_WRITE_ATTRIBUTES,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    BOOL ok = SetFileTime(hFile, nullptr, nullptr, &ft);
+    CloseHandle(hFile);
+    return ok != 0;
+#else
+    time_t epoch_sec = timegm(&tm);
+    if (epoch_sec <= 0) return false;
+    struct timeval tv[2]{};
+    tv[0].tv_sec = epoch_sec;
+    tv[1].tv_sec = epoch_sec;
+    return ::utimes(file_path.c_str(), tv) == 0;
+#endif
 }
 
 uint64_t TraceEpochMilliseconds() {
@@ -226,6 +300,52 @@ private:
 };
 } // namespace
 
+HostLimits& HostLimits::Global() {
+    static HostLimits instance;
+    return instance;
+}
+
+std::optional<uint32_t> HostLimits::GetCap(const std::string& host) {
+    if (host.empty()) return std::nullopt;
+    std::lock_guard<std::mutex> lk(m_mu);
+    auto it = m_hosts.find(host);
+    if (it == m_hosts.end()) return std::nullopt;
+    auto now = std::chrono::steady_clock::now();
+    if (now - it->second.at >= std::chrono::minutes(10)) {
+        m_hosts.erase(it);
+        return std::nullopt;
+    }
+    if (it->second.seen >= 2) {
+        return it->second.cap;
+    }
+    return std::nullopt;
+}
+
+std::optional<uint32_t> HostLimits::RecordRefusal(const std::string& host, uint32_t working) {
+    if (host.empty()) return std::nullopt;
+    uint32_t w = std::max<uint32_t>(1, working);
+    std::lock_guard<std::mutex> lk(m_mu);
+    auto now = std::chrono::steady_clock::now();
+    auto& l = m_hosts[host];
+    if (l.seen == 0 || (now - l.at >= std::chrono::minutes(10))) {
+        l = Learned{w, 0, now};
+    }
+    l.cap = std::max(l.cap, w);
+    l.seen += 1;
+    l.at = now;
+    if (l.seen >= 2) return l.cap;
+    return std::nullopt;
+}
+
+void HostLimits::RecordWorking(const std::string& host, uint32_t working) {
+    if (host.empty()) return;
+    std::lock_guard<std::mutex> lk(m_mu);
+    auto it = m_hosts.find(host);
+    if (it != m_hosts.end() && working > it->second.cap) {
+        it->second.cap = working;
+    }
+}
+
 HttpDownloadEngine::HttpDownloadEngine(EngineConfig cfg) : m_cfg(cfg) {}
 HttpDownloadEngine::~HttpDownloadEngine() = default;
 
@@ -316,6 +436,16 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     uint64_t seg_last_progress_bytes = 0;
     bool seg_first_progress_emitted = false;
     uint32_t max_conns = std::clamp(task.max_connections > 0 ? task.max_connections : 8u, 1u, 32u);
+    std::string target_host;
+    if (auto pu = HttpClient::ParseUrl(task.url); pu.ok()) {
+        target_host = pu.value->host;
+        if (auto learned_cap = HostLimits::Global().GetCap(target_host)) {
+            max_conns = std::min(max_conns, *learned_cap);
+        }
+    }
+    std::atomic<uint64_t> link_peak_single_bps{0};
+    constexpr uint64_t kHoldMaxBytes = 256ULL << 20; // 256 MiB disk backpressure cap
+    std::atomic<uint64_t> held_write_bytes{0};
 
     auto emit_segmented_progress_if_due = [&](bool force_first) {
         if (!on_progress || !scheduler) return;
@@ -383,8 +513,14 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     break;
                 }
                 bool acquired = false;
-                for (int idle_retry = 0; idle_retry < 600; ++idle_retry) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                auto wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                while (!fatal_abort.load() && !pause_requested.load() && !cancel_requested.load() &&
+                       !scheduler->AllCompleted() && std::chrono::steady_clock::now() < wait_deadline) {
+                    scheduler->WaitForWork(50, [&]() {
+                        return fatal_abort.load() || pause_requested.load() || cancel_requested.load() ||
+                               scheduler->AllCompleted() || scheduler->CanSplitAnySegment() ||
+                               scheduler->HasIncompleteUnassignedSegment();
+                    });
                     if (fatal_abort.load() || pause_requested.load() || cancel_requested.load() || scheduler->AllCompleted()) {
                         break;
                     }
@@ -415,7 +551,12 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
             int retries = 0;
             uint64_t last_progress_offset = seg->current_offset.load();
+            const uint64_t my_owner_gen = seg->owner_generation.load(std::memory_order_acquire);
             while (!fatal_abort.load() && !pause_requested.load() && !cancel_requested.load()) {
+                if (seg->owner_generation.load(std::memory_order_acquire) != my_owner_gen) {
+                    // Preempted by another worker due to slow TTFB
+                    break;
+                }
                 uint64_t curr = seg->current_offset.load();
                 uint64_t end = seg->end_offset.load();
                 if (curr > end) {
@@ -533,12 +674,20 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     },
                     [&](const uint8_t* data, size_t len) -> bool {
                         RuntimeDurationAccumulator callback_timer(callback_processing_us, http_trace_enabled);
+                        seg->receiving.store(true, std::memory_order_relaxed);
                         client_bytes_received += static_cast<uint64_t>(len);
-                        if (fatal_abort.load() || pause_requested.load() || cancel_requested.load()) {
+                        if (fatal_abort.load() || pause_requested.load() || cancel_requested.load() ||
+                            seg->owner_generation.load(std::memory_order_acquire) != my_owner_gen) {
                             cancel_reason = pause_requested.load() ? "user_pause" :
                                 (cancel_requested.load() ? "user_cancel" : "fatal_abort");
                             req_cancel.store(true);
                             return false;
+                        }
+
+                        // Bounded memory-to-disk backpressure (MDM HOLD_MAX = 256 MiB)
+                        while (held_write_bytes.load(std::memory_order_relaxed) >= kHoldMaxBytes &&
+                               !fatal_abort.load() && !pause_requested.load() && !cancel_requested.load()) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(10));
                         }
 
                         const auto limiter_started = std::chrono::steady_clock::now();
@@ -567,7 +716,9 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         size_t to_write = static_cast<size_t>(std::min<uint64_t>(static_cast<uint64_t>(len), max_writable));
 
                         const auto file_write_start = http_trace_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+                        held_write_bytes.fetch_add(to_write, std::memory_order_relaxed);
                         const bool file_write_ok = part_file.PWrite(data, to_write, write_pos);
+                        held_write_bytes.fetch_sub(to_write, std::memory_order_relaxed);
                         if (file_write_ok && !first_write_recorded.exchange(true)) {
                             diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                                 task.task_id, "First bytes written to disk",
@@ -608,13 +759,26 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         if (!should_terminate_chunk && client_bytes_received > 0) {
                             const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::steady_clock::now() - request_start_tp).count();
-                            // Recycle trickle-throttled connections (< 48 KiB/s after 5s) when segment still has > 2 MiB left
-                            if (elapsed_ms >= 5000 &&
-                                (client_bytes_received * 1000ULL / static_cast<uint64_t>(elapsed_ms)) < 49152ULL &&
-                                seg->end_offset.load() > seg->current_offset.load() + (2ULL << 20)) {
-                                cancel_reason = "trickle_recycle";
-                                req_cancel.store(true);
-                                return false;
+                            if (elapsed_ms >= 100 && client_bytes_received >= 262144ULL) {
+                                uint64_t cur_bps = client_bytes_received * 1000ULL / static_cast<uint64_t>(elapsed_ms);
+                                uint64_t prev_peak = link_peak_single_bps.load(std::memory_order_relaxed);
+                                while (cur_bps > prev_peak &&
+                                       !link_peak_single_bps.compare_exchange_weak(prev_peak, cur_bps, std::memory_order_relaxed)) {}
+                            }
+                            // MDM SHED_GRACE=2s, SHED_RATIO=4, SHED_LEFT=2s: shed connections under 25% of expected share
+                            if (elapsed_ms >= 2000 && scheduler && scheduler->ActiveWorkerCount() > 1 &&
+                                scheduler->GetConsecutiveFailures() == 0) {
+                                uint64_t cur_bps = client_bytes_received * 1000ULL / static_cast<uint64_t>(elapsed_ms);
+                                uint64_t active_w = std::max<uint64_t>(1, scheduler->ActiveWorkerCount());
+                                uint64_t peak = link_peak_single_bps.load(std::memory_order_relaxed);
+                                uint64_t shed_bar = std::max<uint64_t>(8192ULL, (peak / active_w) / 4ULL);
+                                uint64_t rem_bytes = (seg->end_offset.load() > seg->current_offset.load())
+                                    ? (seg->end_offset.load() - seg->current_offset.load() + 1) : 0;
+                                if (cur_bps < shed_bar && cur_bps > 0 && (rem_bytes / cur_bps) >= 2ULL) {
+                                    cancel_reason = "trickle_recycle";
+                                    req_cancel.store(true);
+                                    return false;
+                                }
                             }
                         }
                         return !should_terminate_chunk;
@@ -650,6 +814,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 if (seg->current_offset.load() > seg->end_offset.load()) {
                     seg->completed.store(true);
                     seg->active_worker.store(false);
+                    scheduler->NotifyAll();
                     break;
                 }
 
@@ -693,6 +858,12 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
                     if (is_server_overloaded) {
                         disable_splitting.store(true);
+                        if (!target_host.empty()) {
+                            uint32_t working_now = static_cast<uint32_t>(std::max<size_t>(1, scheduler->ActiveWorkerCount()));
+                            if (auto cap = HostLimits::Global().RecordRefusal(target_host, working_now)) {
+                                scheduler->SetMaxConnections(std::min(scheduler->GetMaxConnections(), *cap));
+                            }
+                        }
                         scheduler->ReduceConnectionsStepped();
                         if (captured_retry_after_sec_w > 15) {
                             seg->active_worker.store(false);
@@ -746,7 +917,9 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         break;
                     }
                     ++retries;
-                    int exp_backoff = (100 * (1 << std::min(retries, 6))) + (std::rand() % 150);
+                    thread_local std::mt19937 rng{std::random_device{}()};
+                    std::uniform_int_distribution<int> jitter_dist(0, 149);
+                    int exp_backoff = (100 * (1 << std::min(retries, 6))) + jitter_dist(rng);
                     int backoff_ms = (retry_after_ms > 0) ? retry_after_ms : std::min(exp_backoff, 15000);
                     const auto backoff_started = std::chrono::steady_clock::now();
 
@@ -778,16 +951,27 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
             "Worker 0 requesting " + (is_resume ? ("resume bytes " + std::to_string(resume_start) + "-") : "bytes 0-") + " to " + task.url);
     }
 
-    constexpr int kMaxInitialAttempts = 3;
+    constexpr int kMaxInitialAttempts = 5;
     Result<HttpResponseMeta> initial_res = Result<HttpResponseMeta>::Ok({});
     int captured_retry_after_sec = 0;
+    bool single_stream_resuming = false;
+    bool restart_from_zero = false;
 
     for (int initial_attempt = 1; initial_attempt <= kMaxInitialAttempts; ++initial_attempt) {
         captured_retry_after_sec = 0;
+        restart_from_zero = false;
         std::atomic<bool> req_cancel{false};
 
-        std::optional<uint64_t> req_start = is_resume ? std::optional<uint64_t>(resume_start) : std::optional<uint64_t>(0);
-        std::optional<uint64_t> req_end = is_resume ? resume_end : std::nullopt;
+        const bool has_strong_etag = (!task.etag.empty() && task.etag.rfind("W/", 0) != 0);
+        const uint64_t overlap_bytes = (is_resume && !has_strong_etag && resume_start >= 4096ULL) ? 4096ULL : 0ULL;
+        uint64_t overlap_remaining = overlap_bytes;
+        std::vector<uint8_t> overlap_rx_buf;
+
+        // Plain GET on fresh downloads (MDM download.rs / GD3 pattern); Range only on resume.
+        std::optional<uint64_t> req_start = single_stream_resuming
+            ? std::optional<uint64_t>(single_stream_written)
+            : (is_resume ? std::optional<uint64_t>(resume_start - overlap_bytes) : std::nullopt);
+        std::optional<uint64_t> req_end = (!single_stream_resuming && is_resume) ? resume_end : std::nullopt;
 
         initial_res = HttpClient::PerformGet(
             task.url,
@@ -817,6 +1001,30 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
 
                 if (meta.status_code >= 400) {
                     return HeaderAction::kAbort;
+                }
+
+                // Detect HTML error/login pages returned instead of an expected non-HTML binary/media/archive file
+                {
+                    std::string ct_low = meta.content_type;
+                    for (char& ch : ct_low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    if (ct_low.rfind("text/html", 0) == 0 || ct_low.rfind("application/xhtml+xml", 0) == 0) {
+                        std::string fn_low = task.file_name;
+                        for (char& ch : fn_low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                        auto dot = fn_low.rfind('.');
+                        std::string fext = (dot != std::string::npos) ? fn_low.substr(dot) : "";
+                        bool expects_html = (fext == ".html" || fext == ".htm" || fext == ".xhtml");
+                        if (!expects_html && !fext.empty()) {
+                            std::lock_guard<std::mutex> lk(err_mu);
+                            fatal_error = Error{
+                                "ERR_HTTP_HTML_ERROR_PAGE",
+                                "Server returned an HTML page instead of '" + task.file_name + "' (link or session may have expired)",
+                                false,
+                                true
+                            };
+                            fatal_abort.store(true);
+                            return HeaderAction::kAbort;
+                        }
+                    }
                 }
 
                 if (!meta.final_url.empty() && meta.final_url != task.url) {
@@ -854,6 +1062,10 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     range_supported = true;
                 }
 
+                const uint64_t prev_total_bytes = task.total_bytes;
+                const std::string prev_etag = task.etag;
+                const std::string prev_last_modified = task.last_modified;
+
                 task.range_supported = range_supported;
                 task.total_bytes = total_bytes;
                 if (!meta.etag.empty()) task.etag = meta.etag;
@@ -866,11 +1078,11 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     "HTTP " + std::to_string(meta.status_code) + " Content-Length=" + std::to_string(total_bytes) +
                     (range_supported ? " (Range supported)" : " (No Range)"));
 
-                if (!meta.content_disposition.empty()) {
+                if (!task.user_edited_filename && !meta.content_disposition.empty()) {
                     std::string cd_name = PathSanitizer::ExtractFromContentDisposition(meta.content_disposition);
                     if (!cd_name.empty()) task.file_name = cd_name;
                 }
-                if (task.file_name.empty() || task.file_name == "download" || task.file_name == "index.html" || task.file_name == "file") {
+                if (task.file_name.empty() || (!task.user_edited_filename && (task.file_name == "download" || task.file_name == "index.html" || task.file_name == "file"))) {
                     std::string url_name = PathSanitizer::ExtractFromUrl(task.url);
                     if (!url_name.empty() && url_name != "download") task.file_name = url_name;
                 }
@@ -920,32 +1132,34 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 if (is_resume) {
                     bool validator_mismatch = false;
                     std::string mismatch_reason;
-                    if (!task.etag.empty() && !meta.etag.empty() &&
-                        meta.etag.rfind("W/", 0) != 0 && task.etag != meta.etag) {
+                    if (!prev_etag.empty() && !meta.etag.empty() &&
+                        meta.etag.rfind("W/", 0) != 0 && prev_etag != meta.etag) {
                         validator_mismatch = true;
-                        mismatch_reason = "Remote ETag changed from " + task.etag + " to " + meta.etag;
-                    } else if (!task.last_modified.empty() && !meta.last_modified.empty() &&
-                               task.last_modified != meta.last_modified) {
+                        mismatch_reason = "Remote ETag changed from " + prev_etag + " to " + meta.etag;
+                    } else if (!prev_last_modified.empty() && !meta.last_modified.empty() &&
+                               prev_last_modified != meta.last_modified) {
                         validator_mismatch = true;
-                        mismatch_reason = "Remote Last-Modified changed from " + task.last_modified + " to " + meta.last_modified;
-                    } else if (task.total_bytes > 0 && total_bytes > 0 && task.total_bytes != total_bytes) {
+                        mismatch_reason = "Remote Last-Modified changed from " + prev_last_modified + " to " + meta.last_modified;
+                    } else if (prev_total_bytes > 0 && total_bytes > 0 && prev_total_bytes != total_bytes) {
                         validator_mismatch = true;
                         mismatch_reason = "Remote file size changed on resume (expected " +
-                                          std::to_string(task.total_bytes) + ", got " + std::to_string(total_bytes) + ")";
+                                          std::to_string(prev_total_bytes) + ", got " + std::to_string(total_bytes) + ")";
                     } else if (meta.status_code == 200) {
                         validator_mismatch = true;
                         mismatch_reason = "Server returned 200 OK instead of 206 Partial Content on resume";
                     }
 
                     if (validator_mismatch) {
-                        OPENIDM_LOG_WARN("HttpEngine", "Validator mismatch detected (" + mismatch_reason + "); discarding stale partial segments and restarting from byte 0");
+                        OPENIDM_LOG_WARN("HttpEngine", "Validator mismatch detected (" + mismatch_reason + "); aborting stale resume stream and restarting from byte 0");
                         task.segments.clear();
                         task.downloaded_bytes = 0;
                         is_resume = false;
+                        restart_from_zero = true;
                         if (!part_path.empty()) {
                             std::error_code ec_remove;
                             std::filesystem::remove(part_path, ec_remove);
                         }
+                        return HeaderAction::kAbort;
                     }
                 }
 
@@ -956,7 +1170,23 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     return HeaderAction::kAbort;
                 }
 
-                if (total_bytes > 0) {
+                if (total_bytes > 4294967295ULL && part_file.IsFat32Volume()) {
+                    part_file.Close();
+                    std::lock_guard<std::mutex> lk(err_mu);
+                    fatal_error = Error{"ERR_DISK_FAT32_LIMIT", "File exceeds FAT32 4 GiB - 1 maximum file size", false, false};
+                    fatal_abort.store(true);
+                    return HeaderAction::kAbort;
+                }
+
+                if (single_stream_resuming) {
+                    if (meta.status_code != 206 || meta.range_start != single_stream_written) {
+                        single_stream_written = 0;
+                        single_stream_resuming = false;
+                        last_progress_bytes = 0;
+                    }
+                }
+
+                if (total_bytes > 0 && !single_stream_resuming) {
                     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                         task.task_id, "Storage allocation begins", "Allocating " + std::to_string(total_bytes) + " bytes using sparse file optimization");
                     auto alloc_t0 = std::chrono::steady_clock::now();
@@ -986,6 +1216,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 if (range_supported && total_bytes > m_cfg.min_split_bytes && max_conns > 1) {
                     is_segmented = true;
                     scheduler = std::make_unique<SegmentScheduler>(total_bytes, max_conns, m_cfg.min_split_bytes);
+                    scheduler->SetPreemptAfterMs(std::max<int64_t>(20, 2 * t_connect_ms.load(std::memory_order_relaxed)));
                     if (is_resume && !task.segments.empty()) {
                         scheduler->Initialize(task.segments);
                     } else {
@@ -1044,6 +1275,27 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 if (fatal_abort.load() || pause_requested.load() || cancel_requested.load()) {
                     req_cancel.store(true);
                     return false;
+                }
+                if (overlap_remaining > 0) {
+                    size_t take = static_cast<size_t>(std::min<uint64_t>(len, overlap_remaining));
+                    overlap_rx_buf.insert(overlap_rx_buf.end(), data, data + take);
+                    overlap_remaining -= take;
+                    data += take;
+                    len -= take;
+                    if (overlap_remaining == 0) {
+                        std::vector<uint8_t> disk_buf(overlap_bytes);
+                        if (!part_file.PRead(disk_buf.data(), overlap_bytes, resume_start - overlap_bytes) ||
+                            disk_buf != overlap_rx_buf) {
+                            OPENIDM_LOG_WARN("HttpEngine", "Resume overlap verification failed; restarting from byte 0");
+                            task.segments.clear();
+                            task.downloaded_bytes = 0;
+                            is_resume = false;
+                            restart_from_zero = true;
+                            req_cancel.store(true);
+                            return false;
+                        }
+                    }
+                    if (len == 0) return true;
                 }
                 if (!first_byte_recorded.exchange(true)) {
                     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
@@ -1161,9 +1413,24 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
             },
             m_cfg.net_opts);
 
+        if (restart_from_zero && initial_attempt < kMaxInitialAttempts) {
+            part_file.Close();
+            req_headers.erase("If-Range");
+            is_resume = false;
+            single_stream_resuming = false;
+            single_stream_written = 0;
+            last_progress_bytes = 0;
+            if (!part_path.empty()) {
+                std::error_code ec_rm;
+                std::filesystem::remove(part_path, ec_rm);
+            }
+            continue;
+        }
+
         if (captured_retry_after_sec > 0 ||
             (!initial_res.ok() && initial_res.error &&
              (initial_res.error->code == "ERR_HTTP_429_RATE_LIMITED" || initial_res.error->code == "ERR_HTTP_5XX_TRANSIENT"))) {
+            part_file.Close();
             if (captured_retry_after_sec > 30) {
                 OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Initial request received HTTP " +
                     (initial_res.error ? initial_res.error->code : "429") + " with Retry-After: " + std::to_string(captured_retry_after_sec) + "s > 30s");
@@ -1183,6 +1450,37 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
             if (pause_requested.load() || cancel_requested.load()) break;
             continue;
         }
+
+        // Single-stream automatic retry & resume on transient connection resets / timeouts / premature EOF
+        bool single_stream_incomplete = (!is_segmented && task.total_bytes > 0 && single_stream_written < task.total_bytes);
+        bool retryable_net_err = (!initial_res.ok() && initial_res.error && initial_res.error->retryable);
+        if (!is_segmented && !fatal_abort.load() && !pause_requested.load() && !cancel_requested.load() &&
+            initial_attempt < kMaxInitialAttempts && (single_stream_incomplete || retryable_net_err)) {
+            part_file.Close();
+            if (single_stream_written > 0 && task.range_supported) {
+                single_stream_resuming = true;
+                if (!task.etag.empty() && task.etag.rfind("W/", 0) != 0) {
+                    req_headers["If-Range"] = task.etag;
+                } else if (!task.last_modified.empty()) {
+                    req_headers["If-Range"] = task.last_modified;
+                }
+            } else {
+                single_stream_written = 0;
+                single_stream_resuming = false;
+                last_progress_bytes = 0;
+            }
+            int backoff_ms = std::min(8000, 500 * (1 << (initial_attempt - 1)));
+            OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Single-stream interrupted at " +
+                std::to_string(single_stream_written) + "/" + std::to_string(task.total_bytes) +
+                " bytes; retrying in " + std::to_string(backoff_ms) + " ms (attempt " +
+                std::to_string(initial_attempt + 1) + "/" + std::to_string(kMaxInitialAttempts) + ")");
+            for (int slept = 0; slept < backoff_ms; slept += 50) {
+                if (pause_requested.load() || cancel_requested.load()) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(std::min(50, backoff_ms - slept)));
+            }
+            if (pause_requested.load() || cancel_requested.load()) break;
+            continue;
+        }
         break;
     }
 
@@ -1192,6 +1490,11 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 seg0->completed.store(true);
             }
             seg0->active_worker.store(false);
+            scheduler->NotifyAll();
+        }
+        // Worker 0 transitions into the stealing pool if any segments remain (MDM download.rs pattern)
+        if (!scheduler->AllCompleted() && !fatal_abort.load() && !pause_requested.load() && !cancel_requested.load()) {
+            secondary_workers.emplace_back(worker_fn, 0);
         }
         uint64_t initial_bytes = scheduler->TotalDownloadedBytes();
         auto last_sp_tp = std::chrono::steady_clock::now();
@@ -1248,15 +1551,19 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
         task.segments = scheduler->GetSnapshots();
     } else {
         part_file.SyncAndClose();
-        if (task.total_bytes > 0 && single_stream_written < task.total_bytes && !pause_requested.load() && !cancel_requested.load()) {
+        if (pause_requested.load() && single_stream_written > 0 && task.total_bytes > 0 && task.range_supported) {
+            task.segments = { Segment{0, 0, single_stream_written, task.total_bytes - 1, false} };
+            task.downloaded_bytes = single_stream_written;
+        } else if (task.total_bytes > 0 && single_stream_written < task.total_bytes && !pause_requested.load() && !cancel_requested.load()) {
             task.state = TaskState::kFailed;
             task.error_code = "ERR_CONNECTION_CLOSED_PREMATURELY";
             task.error_message = "Single-stream transfer closed before receiving advertised content length";
             task.status_detail = task.error_message;
             return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
+        } else {
+            task.total_bytes = single_stream_written;
+            task.downloaded_bytes = single_stream_written;
         }
-        task.total_bytes = single_stream_written;
-        task.downloaded_bytes = single_stream_written;
     }
 
     if (cancel_requested.load()) {
@@ -1345,6 +1652,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     }
 
     std::filesystem::path final_path = *commit_res.value;
+    ApplyLastModifiedTimestamp(final_path, task.last_modified);
     task.file_name = PathSanitizer::PathToUtf8(final_path.filename());
     task.part_path.clear();
     task.state = TaskState::kCompleted;

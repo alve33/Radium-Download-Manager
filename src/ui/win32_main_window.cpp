@@ -2,6 +2,7 @@
 #include "ui/win32_main_window.hpp"
 #include "ui/localization.hpp"
 #include "ui/startup_log_dialog.hpp"
+#include "ui/extension_setup_dialog.hpp"
 #include "security/admin_check.hpp"
 #include "common/startup_diagnostic.hpp"
 
@@ -13,7 +14,10 @@
 #include "common/path_sanitizer.hpp"
 #include "common/semver.hpp"
 #include "common/version.hpp"
+#include "core/extension_installer.hpp"
 #include "core/update_manager.hpp"
+#include "platform/windows_integrations.hpp"
+#include "storage/import_export.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -39,6 +43,8 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <winreg.h>
+#include <uiautomation.h>
+#pragma comment(lib, "uiautomationcore.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -425,7 +431,12 @@ WindowLayoutGeometry DesktopView::ComputeLayoutGeometry(size_t scroll_offset) co
     g.theme_button_rect = {w - theme_button_w - DesignSystem::ScaleForDpi(compact_toolbar ? 10 : 16, m.dpi), by,
         w - DesignSystem::ScaleForDpi(compact_toolbar ? 10 : 16, m.dpi), by + btn_h};
 
-    int settings_btn_x = g.theme_button_rect.left;
+    int tools_button_w = DesignSystem::ScaleForDpi(compact_toolbar ? 34 : 68, m.dpi);
+    int tools_gap = DesignSystem::ScaleForDpi(compact_toolbar ? 6 : 8, m.dpi);
+    g.tools_button_rect = {g.theme_button_rect.left - tools_gap - tools_button_w, by,
+        g.theme_button_rect.left - tools_gap, by + btn_h};
+
+    int settings_btn_x = g.tools_button_rect.left;
     g.settings_button_rect = {0, 0, 0, 0};
     g.search_sliders_rect = {0, 0, 0, 0};
 
@@ -708,9 +719,11 @@ HitTestResult DesktopView::HitTestPoint(int x, int y, size_t scroll_offset) cons
                 return {HitTargetType::kSettingsCategoryTab, static_cast<int>(i), "", sv.categories[i].label};
             }
         }
-        for (size_t i = 0; i < sv.visible_items.size(); ++i) {
-            if (sv.visible_items[i].control_rect.Contains(x, y) || sv.visible_items[i].row_rect.Contains(x, y)) {
-                return {HitTargetType::kSettingsItemControl, static_cast<int>(i), sv.visible_items[i].key, sv.visible_items[i].description};
+        if (sv.content_rect.Contains(x, y)) {
+            for (size_t i = 0; i < sv.visible_items.size(); ++i) {
+                if (sv.visible_items[i].control_rect.Contains(x, y) || sv.visible_items[i].row_rect.Contains(x, y)) {
+                    return {HitTargetType::kSettingsItemControl, static_cast<int>(i), sv.visible_items[i].key, sv.visible_items[i].description};
+                }
             }
         }
         if (sv.modal_rect.Contains(x, y)) {
@@ -721,6 +734,7 @@ HitTestResult DesktopView::HitTestPoint(int x, int y, size_t scroll_offset) cons
 
     auto geom = ComputeLayoutGeometry(scroll_offset);
     if (geom.theme_button_rect.Contains(x, y)) return {HitTargetType::kThemeToggleButton, 0, "", "Toggle light and dark appearance"};
+    if (geom.tools_button_rect.Contains(x, y)) return {HitTargetType::kToolsMenuButton, 0, "", "Tools & Global Actions"};
     if (geom.sidebar_language_rect.Contains(x, y)) {
         return {HitTargetType::kSidebarLanguageButton, 0, "", "Language"};
     }
@@ -766,7 +780,11 @@ HitTestResult DesktopView::HitTestPoint(int x, int y, size_t scroll_offset) cons
         return {HitTargetType::kNone, 0, "", ""};
     }
     if (geom.table_header_rect.Contains(x, y)) {
-        // Table header row is static and non-interactive
+        for (size_t i = 0; i < geom.table_columns.size(); ++i) {
+            if (geom.table_columns[i].rect.width() > 0 && geom.table_columns[i].rect.Contains(x, y)) {
+                return {HitTargetType::kTableHeaderColumn, static_cast<int>(i), "", geom.table_columns[i].title};
+            }
+        }
         return {HitTargetType::kNone, 0, "", ""};
     }
     if (geom.status_bar_rect.Contains(x, y)) {
@@ -2151,6 +2169,7 @@ void DesktopView::OpenSettingsCenter(SettingsCategory initial_category) {
     m_settings_center_open = true;
     m_anim.settings_open_start_ms = GetTickCount64();
     m_settings_category = initial_category;
+    m_settings_scroll_offset = 0;
     m_draft_settings = m_controller.GetSettings();
     m_settings_validation_key.clear();
     m_settings_validation_error.clear();
@@ -2162,12 +2181,19 @@ void DesktopView::CloseSettingsCenter(bool revert_unsaved) {
         RevertSettingsChanges();
     }
     m_settings_center_open = false;
+    m_settings_scroll_offset = 0;
     m_settings_search_query.clear();
 }
 
 void DesktopView::SelectSettingsCategory(SettingsCategory category) {
     m_settings_category = category;
+    m_settings_scroll_offset = 0;
     m_last_feedback_message = "Settings category: " + SettingsCategoryToLabel(category);
+}
+
+void DesktopView::ScrollSettingsBy(int delta_px) {
+    auto sv = BuildSettingsCenterView();
+    m_settings_scroll_offset = std::clamp(m_settings_scroll_offset + delta_px, 0, sv.max_scroll);
 }
 
 std::string DesktopView::SettingsCategoryToLabel(SettingsCategory category) {
@@ -2186,6 +2212,7 @@ std::string DesktopView::SettingsCategoryToLabel(SettingsCategory category) {
 
 void DesktopView::SetSettingsSearchQuery(std::string query) {
     m_settings_search_query = std::move(query);
+    m_settings_scroll_offset = 0;
 }
 
 void DesktopView::SetDraftSettings(const AppSettings& draft) {
@@ -2728,6 +2755,22 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
         FormatBytes(s.min_capture_size_bytes), "1.0 MiB",
         false, s.min_capture_size_bytes != saved.min_capture_size_bytes);
     auto bstat = GetBrowserIntegrationStatus();
+    const auto ext_onboarding = m_controller.GetExtensionOnboardingState();
+    const auto ext_dir = radium::core::ExtensionInstaller::DefaultInstallDir(
+        m_controller.GetConfig().state_db_path.parent_path());
+    const auto ext_info = radium::core::ExtensionInstaller::InspectInstalledExtension(
+        ext_dir, ext_onboarding.installed_commit);
+    std::string ext_desc = ext_info.installed
+        ? ("Installed v" + ext_info.version + " at: " + ext_info.install_dir.string())
+        : ("Download the latest Radium browser extension from GitHub (" +
+           std::string(radium::config::UpdateAndReleaseConfig::kGithubRepoUrl) + ").");
+    add_item(
+        "download_browser_extension", SettingsCategory::kBrowserIntegration, "Browser Extension Package",
+        "Download or Update Browser Extension",
+        ext_desc,
+        SettingControlType::kActionButton,
+        ext_info.installed ? ("Update (v" + ext_info.version + ")") : "Download", "",
+        ext_info.installed, false);
     add_item(
         "ipc_endpoint_status", SettingsCategory::kBrowserIntegration, "Native Messaging & IPC Status",
         "Local IPC Endpoint (" + std::string(bstat.ipc_server_running ? "Listening" : "Offline") + ")",
@@ -2804,6 +2847,24 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
         "Query the latest stable GitHub Release and compare it with this installed version.",
         SettingControlType::kActionButton,
         "Check now", "", false, false);
+    add_item(
+        "diag_developer", SettingsCategory::kAboutAndDiagnostics, "Developer",
+        "Developer",
+        ab.developer_name + " and Radium Contributors",
+        SettingControlType::kDiagnosticReadOnly,
+        ab.developer_name, ab.developer_name, true, false);
+    add_item(
+        "open_developer_github", SettingsCategory::kAboutAndDiagnostics, "Developer",
+        "Developer GitHub Profile",
+        ab.developer_github_url,
+        SettingControlType::kActionButton,
+        "Open Profile", "", false, false);
+    add_item(
+        "open_github_repo", SettingsCategory::kAboutAndDiagnostics, "Developer",
+        "Radium Download Manager Repository",
+        ab.repository_url,
+        SettingControlType::kActionButton,
+        "Open GitHub", "", false, false);
 
     return items;
 }
@@ -2902,11 +2963,14 @@ SettingsCenterViewModel DesktopView::BuildSettingsCenterView() const {
 
     std::string q = ToLower(m_settings_search_query);
     int card_pad = DesignSystem::ScaleForDpi(14, m.dpi);
-    int row_y = vm.content_rect.top + card_pad + DesignSystem::ScaleForDpi(4, m.dpi);
+    int top_pad = card_pad + DesignSystem::ScaleForDpi(4, m.dpi);
+    int bottom_pad = card_pad + DesignSystem::ScaleForDpi(4, m.dpi);
     int row_h = DesignSystem::ScaleForDpi(58, m.dpi);
     int ctrl_w = DesignSystem::ScaleForDpi(160, m.dpi);
     int ctrl_h = DesignSystem::ScaleForDpi(28, m.dpi);
 
+    std::vector<SettingItemView> matched_items;
+    matched_items.reserve(all_items.size());
     for (auto& it : all_items) {
         bool matches = false;
         if (!q.empty()) {
@@ -2917,8 +2981,20 @@ SettingsCenterViewModel DesktopView::BuildSettingsCenterView() const {
         } else {
             matches = (it.category == m_settings_category);
         }
-        if (!matches) continue;
+        if (matches) {
+            matched_items.push_back(std::move(it));
+        }
+    }
 
+    int viewport_h = std::max(1, vm.content_rect.height());
+    vm.content_total_height = matched_items.empty()
+        ? 0
+        : (top_pad + static_cast<int>(matched_items.size()) * row_h + bottom_pad);
+    vm.max_scroll = std::max(0, vm.content_total_height - viewport_h);
+    vm.scroll_offset = std::clamp(m_settings_scroll_offset, 0, vm.max_scroll);
+
+    int row_y = vm.content_rect.top + top_pad - vm.scroll_offset;
+    for (auto& it : matched_items) {
         it.row_rect = {vm.content_rect.left + card_pad, row_y, vm.content_rect.right - card_pad, row_y + row_h};
         it.control_rect = {
             it.row_rect.right - ctrl_w - DesignSystem::ScaleForDpi(16, m.dpi),
@@ -2926,7 +3002,7 @@ SettingsCenterViewModel DesktopView::BuildSettingsCenterView() const {
             it.row_rect.right - DesignSystem::ScaleForDpi(16, m.dpi),
             row_y + (row_h + ctrl_h) / 2
         };
-        vm.visible_items.push_back(it);
+        vm.visible_items.push_back(std::move(it));
         row_y += row_h;
     }
 
@@ -3014,6 +3090,9 @@ Result<TaskModel> DesktopView::SubmitAddDownloadDialog(const AddDownloadDialogIn
         t.stream_options.audio_filter = input.audio_filter.empty() ? "best" : input.audio_filter;
         t.stream_options.subtitle_filter = input.subtitle_filter.empty() ? "all" : input.subtitle_filter;
         t.stream_options.output_format = (input.output_format == "mkv") ? "mkv" : "mp4";
+        t.stream_options.embed_subtitles = input.embed_subtitles;
+        t.stream_options.download_sections = input.download_sections;
+        t.stream_options.force_keyframes_at_cuts = input.force_keyframes_at_cuts;
     } else if (input.url.find(".mpd") != std::string::npos) {
         t.task_type = TaskType::kStreamDash;
         t.category = "Video";
@@ -3021,6 +3100,9 @@ Result<TaskModel> DesktopView::SubmitAddDownloadDialog(const AddDownloadDialogIn
         t.stream_options.audio_filter = input.audio_filter.empty() ? "best" : input.audio_filter;
         t.stream_options.subtitle_filter = input.subtitle_filter.empty() ? "all" : input.subtitle_filter;
         t.stream_options.output_format = (input.output_format == "mkv") ? "mkv" : "mp4";
+        t.stream_options.embed_subtitles = input.embed_subtitles;
+        t.stream_options.download_sections = input.download_sections;
+        t.stream_options.force_keyframes_at_cuts = input.force_keyframes_at_cuts;
     } else {
         t.task_type = TaskType::kHttpFile;
     }
@@ -3698,8 +3780,17 @@ constexpr UINT WM_OPENIDM_TORRENT_FETCH_COMPLETE = WM_APP + 105;
 constexpr UINT WM_OPENIDM_SHOW_CONFLICT = WM_APP + 106;
 constexpr UINT WM_OPENIDM_TASK_NOTIFICATION = WM_APP + 107;
 constexpr UINT WM_OPENIDM_UPDATE_CHECK_COMPLETE = WM_APP + 108;
+constexpr UINT WM_OPENIDM_CHECK_FIRST_LAUNCH_ONBOARDING = WM_APP + 109;
+constexpr UINT WM_OPENIDM_CONFLICT_COMMIT_COMPLETE = WM_APP + 110;
 
-struct TaskNotificationPayload { std::wstring title; std::wstring message; bool success{false}; };
+struct ConflictCommitPayload {
+    bool success{false};
+    std::string task_id;
+    std::string error_message;
+    std::string settings_warning;
+};
+
+struct TaskNotificationPayload { std::string task_id; std::wstring title; std::wstring message; bool success{false}; };
 struct UpdateCheckPayload { std::wstring title; std::wstring message; std::wstring release_url; bool available{false}; bool matching_installer{false}; };
 
 void StartGitHubUpdateCheck(HWND hwnd) {
@@ -3756,6 +3847,7 @@ constexpr UINT IDT_UI_REFRESH      = 1001;
 constexpr int  IDC_SEARCH_EDIT     = 1101;
 
 struct OfferNotificationData {
+    TaskModel draft_task;
     std::string task_id;
     std::string url;
     std::string file_name;
@@ -3763,6 +3855,17 @@ struct OfferNotificationData {
     uint64_t file_size{0};
     std::map<std::string, std::string> headers;
     std::map<std::string, std::string> auth_headers;
+
+    OfferNotificationData() = default;
+    explicit OfferNotificationData(TaskModel t)
+        : draft_task(std::move(t)),
+          task_id(draft_task.task_id),
+          url(draft_task.url),
+          file_name(draft_task.file_name),
+          save_dir(draft_task.save_dir),
+          file_size(draft_task.total_bytes),
+          headers(draft_task.headers),
+          auth_headers(draft_task.auth_headers) {}
 };
 
 struct TorrentFetchPayload {
@@ -3888,6 +3991,18 @@ constexpr int IDM_CTX_ADD_MIRROR    = 3021;
 constexpr int IDM_CTX_SCHEDULE      = 3022;
 constexpr int IDM_CTX_SPEED_LIMIT   = 3024;
 constexpr int IDM_CTX_FILE_INTEGRITY = 3023;
+constexpr int IDM_CTX_TORRENT_SWARM  = 3027;
+constexpr int IDM_CTX_TORRENT_ADD_TRACKER = 3028;
+constexpr int IDM_CTX_TORRENT_SEQUENTIAL  = 3029;
+constexpr int IDM_CTX_CREATE_TORRENT      = 3030;
+constexpr int IDM_CTX_SITE_GRABBER        = 3031;
+constexpr int IDM_CTX_QUEUE_MANAGER       = 3032;
+constexpr int IDM_CTX_DROP_TARGET         = 3033;
+constexpr int IDM_CTX_BATCH_URL           = 3034;
+constexpr int IDM_CTX_TRAY_PROGRESS       = 3035;
+constexpr int IDM_CTX_EXPORT_EF2          = 3036;
+constexpr int IDM_CTX_IMPORT_EF2          = 3037;
+constexpr int IDHOT_SHOW_RADIUM           = 9001;
 
 struct Win32WindowContext {
     DesktopView* view{nullptr};
@@ -3897,6 +4012,12 @@ struct Win32WindowContext {
     HWND hThemeTooltip{nullptr};
     NOTIFYICONDATAW nid{};
     bool tray_added{false};
+    std::set<std::string> notified_failure_task_ids;
+    HWND hDropTargetWnd{nullptr};
+    bool clipboard_listener_added{false};
+    bool hotkey_registered{false};
+    bool ole_initialized{false};
+    std::string last_clipboard_url;
     bool is_dragging_vscroll{false};
     int vscroll_drag_start_y{0};
     size_t vscroll_drag_start_offset{0};
@@ -3911,24 +4032,102 @@ struct Win32WindowContext {
     std::wstring conflict_dialog_path;
     int conflict_dialog_rename_number{1};
     bool conflict_dialog_remember{false};
+    struct PendingConflictItem {
+        TaskModel draft_task;
+        std::optional<torrent::TorrentInfo> torrent_info;
+        std::string torrent_metainfo_path;
+        DownloadController::IncomingConflictReport report;
+        bool start_immediately{true};
+        bool is_from_new_download_dialog{false};
+        bool is_existing_controller_task{false};
+    };
+    std::deque<PendingConflictItem> pending_conflicts;
+    HWND hConflictRenameEdit{nullptr};
+    std::string conflict_validation_error;
+    bool conflict_dialog_processing{false};
+    ConflictPolicy conflict_dialog_processing_choice{ConflictPolicy::kPrompt};
+    ipc::IpcServer* ipc_server{nullptr};
     WNDPROC orig_search_proc{nullptr};
+    HFONT hEditFont{nullptr};
+    bool was_active_last_tick{false};
+    IRawElementProviderSimple* pUiaProvider{nullptr};
 };
 
-struct ConflictDialogLayout { RECT card, path, checkbox, rename, overwrite, abort, close; };
+class RadiumTaskListUiaProvider final : public IRawElementProviderSimple {
+public:
+    explicit RadiumTaskListUiaProvider(HWND hwnd, DesktopView* view)
+        : m_ref(1), m_hwnd(hwnd), m_view(view) {}
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&m_ref); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        ULONG r = InterlockedDecrement(&m_ref);
+        if (r == 0) delete this;
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IRawElementProviderSimple)) {
+            *ppv = static_cast<IRawElementProviderSimple*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    HRESULT STDMETHODCALLTYPE get_ProviderOptions(ProviderOptions* pRetVal) override {
+        if (!pRetVal) return E_POINTER;
+        *pRetVal = ProviderOptions_ServerSideProvider;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPatternProvider(PATTERNID, IUnknown** pRetVal) override {
+        if (!pRetVal) return E_POINTER;
+        *pRetVal = nullptr;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPropertyValue(PROPERTYID propertyId, VARIANT* pRetVal) override {
+        if (!pRetVal) return E_POINTER;
+        VariantInit(pRetVal);
+        if (propertyId == UIA_ControlTypePropertyId) {
+            pRetVal->vt = VT_I4;
+            pRetVal->lVal = UIA_ListControlTypeId;
+        } else if (propertyId == UIA_NamePropertyId) {
+            pRetVal->vt = VT_BSTR;
+            pRetVal->bstrVal = SysAllocString(L"Radium Downloads");
+        } else if (propertyId == UIA_IsControlElementPropertyId || propertyId == UIA_IsContentElementPropertyId) {
+            pRetVal->vt = VT_BOOL;
+            pRetVal->boolVal = VARIANT_TRUE;
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE get_HostRawElementProvider(IRawElementProviderSimple** pRetVal) override {
+        return UiaHostProviderFromHwnd(m_hwnd, pRetVal);
+    }
+
+private:
+    LONG m_ref;
+    HWND m_hwnd;
+    DesktopView* m_view;
+};
+
+constexpr int IDC_CONFLICT_RENAME_EDIT = 1199;
+
+struct ConflictDialogLayout { RECT card, path, rename_edit, checkbox, rename, overwrite, abort, close; };
 
 ConflictDialogLayout ComputeConflictDialogLayout(int client_w, int client_h, int dpi) {
     const auto scale = [dpi](int v) { return MulDiv(v, dpi, 96); };
-    const int width = std::min(scale(620), std::max(scale(340), client_w - scale(32)));
-    const int height = std::min(scale(300), std::max(scale(260), client_h - scale(24)));
+    const int width = std::min(scale(444), std::max(scale(280), client_w - scale(32)));
+    const int height = std::min(scale(244), std::max(scale(210), client_h - scale(24)));
     const int left = (client_w - width) / 2;
     const int top = (client_h - height) / 2;
+    const int pad_x = scale(18);
     ConflictDialogLayout l{};
     l.card = RECT{left, top, left + width, top + height};
-    l.close = RECT{left + width - scale(36), top + scale(8), left + width - scale(8), top + scale(36)};
-    l.path = RECT{left + scale(24), top + scale(64), left + width - scale(24), top + height - scale(112)};
-    l.checkbox = RECT{left + scale(24), top + height - scale(101), left + width - scale(24), top + height - scale(70)};
-    const int button_h = scale(38), gap = scale(8), right = left + width - scale(18), bottom = top + height - scale(14);
-    const int abort_w = scale(78), overwrite_w = scale(112), rename_w = scale(138);
+    l.close = RECT{left + width - scale(32), top + scale(8), left + width - scale(8), top + scale(32)};
+    l.path = RECT{left + pad_x, top + scale(40), left + width - pad_x, top + height - scale(122)};
+    l.rename_edit = RECT{left + pad_x, top + height - scale(116), left + width - pad_x, top + height - scale(88)};
+    l.checkbox = RECT{left + pad_x, top + height - scale(78), left + width - pad_x, top + height - scale(54)};
+    const int button_h = scale(32), gap = scale(8), right = left + width - pad_x, bottom = top + height - scale(14);
+    const int abort_w = scale(72), overwrite_w = scale(92), rename_w = scale(96);
     l.abort = RECT{right - abort_w, bottom - button_h, right, bottom};
     l.overwrite = RECT{l.abort.left - gap - overwrite_w, bottom - button_h, l.abort.left - gap, bottom};
     l.rename = RECT{l.overwrite.left - gap - rename_w, bottom - button_h, l.overwrite.left - gap, bottom};
@@ -4018,63 +4217,324 @@ bool TryShowExistingConflictInsteadOfNewDownload(
     return true;
 }
 
+void InstallModernEditControl(HWND hEdit, uint32_t dpi, const ThemePalette& palette);
+void UpdateModernEditPalette(HWND hEdit, uint32_t dpi, const ThemePalette& palette);
+
+void SyncConflictRenameEdit(Win32WindowContext& ctx, const std::string& suggested_name) {
+    if (!ctx.hwnd || !IsWindow(ctx.hwnd)) return;
+    const UINT dpi = GetDpiForWindow(ctx.hwnd);
+    const ThemePalette pal = ctx.view ? ctx.view->GetPalette() : DesignSystem::GetRedesignPalette();
+    const bool is_dark = (pal.mode == ThemeMode::kDark);
+    RECT cr{};
+    GetClientRect(ctx.hwnd, &cr);
+    auto l = ComputeConflictDialogLayout(cr.right, cr.bottom, dpi);
+    if (!ctx.hConflictRenameEdit) {
+        ctx.hConflictRenameEdit = CreateWindowExW(
+            0, L"EDIT", Utf8ToW(suggested_name).c_str(),
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_TABSTOP,
+            l.rename_edit.left, l.rename_edit.top,
+            l.rename_edit.right - l.rename_edit.left, l.rename_edit.bottom - l.rename_edit.top,
+            ctx.hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_CONFLICT_RENAME_EDIT)),
+            GetModuleHandleW(nullptr), nullptr);
+        if (ctx.hConflictRenameEdit) {
+            if (ctx.hEditFont) {
+                SendMessageW(ctx.hConflictRenameEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx.hEditFont), TRUE);
+            }
+            InstallModernEditControl(ctx.hConflictRenameEdit, dpi, pal);
+            ApplyNativeEditTheme(ctx.hConflictRenameEdit, is_dark);
+        }
+    } else {
+        MoveWindow(ctx.hConflictRenameEdit, l.rename_edit.left, l.rename_edit.top,
+                   l.rename_edit.right - l.rename_edit.left, l.rename_edit.bottom - l.rename_edit.top, TRUE);
+        UpdateModernEditPalette(ctx.hConflictRenameEdit, dpi, pal);
+        ApplyNativeEditTheme(ctx.hConflictRenameEdit, is_dark);
+        SetWindowTextW(ctx.hConflictRenameEdit, Utf8ToW(suggested_name).c_str());
+        ShowWindow(ctx.hConflictRenameEdit, SW_SHOW);
+        InvalidateRect(ctx.hConflictRenameEdit, nullptr, TRUE);
+    }
+}
+
+void HideConflictRenameEdit(Win32WindowContext& ctx) {
+    if (ctx.hConflictRenameEdit && IsWindow(ctx.hConflictRenameEdit)) {
+        ShowWindow(ctx.hConflictRenameEdit, SW_HIDE);
+    }
+}
+
+void ActivatePendingConflict(Win32WindowContext& ctx, const Win32WindowContext::PendingConflictItem& item) {
+    ctx.conflict_dialog_task_id = item.draft_task.task_id;
+    std::string display_path = item.report.target_path;
+    if (display_path.empty()) {
+        display_path = PathSanitizer::PathToUtf8(
+            PathSanitizer::Utf8ToPath(item.draft_task.save_dir) / PathSanitizer::Utf8ToPath(item.draft_task.file_name));
+    }
+    if (!item.report.overwrite_allowed) {
+        display_path += "\n(Destination is currently used by an active or paused download — overwrite is disabled)";
+    } else if (item.report.kind == DownloadController::IncomingConflictKind::kResumablePartialExists) {
+        display_path += "\n(A partial or paused download for this item already exists)";
+    } else if (item.report.kind == DownloadController::IncomingConflictKind::kCompletedInHistory) {
+        display_path += "\n(This download was previously completed)";
+    }
+    ctx.conflict_dialog_path = Utf8ToW(display_path);
+    ctx.conflict_dialog_remember = false;
+    ctx.conflict_validation_error.clear();
+    std::string suggested = ctx.controller->ResolveAvailableFileName(
+        item.draft_task.save_dir, item.draft_task.file_name,
+        item.is_existing_controller_task ? item.draft_task.task_id : "");
+    ctx.conflict_dialog_rename_number = 1;
+    auto stem = PathSanitizer::Utf8ToPath(suggested).stem().wstring();
+    auto open = stem.rfind(L" (");
+    if (open != std::wstring::npos && !stem.empty() && stem.back() == L')') {
+        try { ctx.conflict_dialog_rename_number = std::stoi(stem.substr(open + 2, stem.size() - open - 3)); }
+        catch (...) { ctx.conflict_dialog_rename_number = 1; }
+    }
+    SyncConflictRenameEdit(ctx, suggested);
+}
+
+void EnqueueConflictPrompt(Win32WindowContext& ctx, Win32WindowContext::PendingConflictItem item) {
+    if (item.draft_task.task_id.empty()) {
+        item.draft_task.task_id = GenerateUuidV4();
+    }
+    for (const auto& existing : ctx.pending_conflicts) {
+        if ((!item.draft_task.task_id.empty() && existing.draft_task.task_id == item.draft_task.task_id) ||
+            (!item.draft_task.correlation_id.empty() && existing.draft_task.correlation_id == item.draft_task.correlation_id)) {
+            return;
+        }
+    }
+    ctx.pending_conflicts.push_back(std::move(item));
+    if (ctx.conflict_dialog_task_id.empty() && !ctx.pending_conflicts.empty()) {
+        ActivatePendingConflict(ctx, ctx.pending_conflicts.front());
+    }
+}
+
 void RefreshConflictDialog(Win32WindowContext& ctx) {
     if (!ctx.conflict_dialog_task_id.empty()) return;
-    for (const auto& task : ctx.controller->ListTasks()) {
-        if (task.state != TaskState::kFailed || task.error_code != "ERR_FILE_EXISTS" ||
-            task.conflict_policy != ConflictPolicy::kPrompt) continue;
-        auto dest = PathSanitizer::Utf8ToPath(task.save_dir) / PathSanitizer::Utf8ToPath(task.file_name);
-        ctx.conflict_dialog_task_id = task.task_id;
-        ctx.conflict_dialog_path = dest.wstring();
-        ctx.conflict_dialog_remember = false;
-        ctx.conflict_dialog_rename_number = 1;
-        auto next = PathSanitizer::ResolveSafeOutputPath(task.save_dir, task.file_name, ConflictPolicy::kAutoRename);
-        if (next.ok()) {
-            auto stem = next.value->stem().wstring();
-            auto open = stem.rfind(L" (");
-            if (open != std::wstring::npos && !stem.empty() && stem.back() == L')') {
-                try { ctx.conflict_dialog_rename_number = std::stoi(stem.substr(open + 2, stem.size() - open - 3)); }
-                catch (...) { ctx.conflict_dialog_rename_number = 1; }
-            }
-        }
-        return;
+    if (!ctx.pending_conflicts.empty()) {
+        ActivatePendingConflict(ctx, ctx.pending_conflicts.front());
     }
 }
 
 bool ResolveConflictDialog(Win32WindowContext& ctx, ConflictPolicy choice) {
-    auto tasks = ctx.controller->ListTasks();
-    auto it = std::find_if(tasks.begin(), tasks.end(), [&](const TaskModel& t) { return t.task_id == ctx.conflict_dialog_task_id; });
-    if (it == tasks.end()) { ctx.conflict_dialog_task_id.clear(); return false; }
-    if (ctx.conflict_dialog_remember) {
-        auto settings = ctx.controller->GetSettings();
-        settings.conflict_policy = choice == ConflictPolicy::kPrompt ? ConflictPolicy::kFailIfExists : choice;
-        auto saved = ctx.controller->UpdateSettings(settings);
-        if (!saved.ok()) {
-            std::wstring message = L"This download choice will be applied, but Radium could not remember it: " + Utf8ToW(saved.error->message);
-            MessageBoxW(ctx.hwnd, message.c_str(), L"Could not save preference", MB_OK | MB_ICONWARNING);
-        }
+    if (ctx.conflict_dialog_processing) {
+        return false;
     }
-    bool success = false;
-    if (choice == ConflictPolicy::kFailIfExists) {
-        success = ctx.controller->CancelTask(it->task_id).ok();
-    } else {
-        TaskModel updated = *it;
-        if (choice == ConflictPolicy::kAutoRename) {
-            auto next = PathSanitizer::ResolveSafeOutputPath(updated.save_dir, updated.file_name, ConflictPolicy::kAutoRename);
-            if (next.ok()) {
-                updated.file_name = PathSanitizer::PathToUtf8(next.value->filename());
-            }
-        }
-        updated.conflict_policy = choice;
-        auto changed = ctx.controller->UpdateTask(updated);
-        success = changed.ok() && ctx.controller->RetryTask(it->task_id).ok();
+    if (ctx.pending_conflicts.empty()) {
+        ctx.conflict_dialog_task_id.clear();
+        HideConflictRenameEdit(ctx);
+        return false;
     }
-    if (success) {
+
+    auto item = ctx.pending_conflicts.front();
+    auto finish_item = [&]() {
+        if (ctx.ipc_server && !item.draft_task.task_id.empty()) {
+            ctx.ipc_server->ResolvePendingOffer(item.draft_task.task_id);
+        }
+        ctx.pending_conflicts.pop_front();
         ctx.conflict_dialog_task_id.clear();
         ctx.conflict_dialog_path.clear();
         ctx.conflict_dialog_remember = false;
+        ctx.conflict_validation_error.clear();
+        HideConflictRenameEdit(ctx);
+        if (!ctx.pending_conflicts.empty()) {
+            ActivatePendingConflict(ctx, ctx.pending_conflicts.front());
+        }
+    };
+
+    if (choice == ConflictPolicy::kFailIfExists) {
+        if (item.is_existing_controller_task) {
+            ctx.controller->CancelTask(item.draft_task.task_id);
+        }
+        if (item.draft_task.url.rfind("blob:", 0) == 0 && !item.draft_task.part_path.empty()) {
+            std::error_code rm_ec;
+            std::filesystem::remove(PathSanitizer::Utf8ToPath(item.draft_task.part_path), rm_ec);
+        }
+        if (!item.torrent_metainfo_path.empty()) {
+            std::error_code rm_ec;
+            std::filesystem::remove_all(std::filesystem::path(item.torrent_metainfo_path).parent_path(), rm_ec);
+        }
+        finish_item();
+        return true;
     }
-    return success;
+
+    if (choice == ConflictPolicy::kOverwrite && !item.report.overwrite_allowed) {
+        ctx.conflict_validation_error = "Cannot overwrite: destination is owned by an active or paused download.";
+        return false;
+    }
+
+    if (choice == ConflictPolicy::kOverwrite) {
+        auto reserved = ctx.controller->CheckDestinationConflict(
+            item.draft_task.save_dir, item.draft_task.file_name,
+            item.is_existing_controller_task ? item.draft_task.task_id : "");
+        if (reserved.kind != core::DuplicateKind::kNone &&
+            core::DuplicateDetector::IsTaskReservingDestination(reserved.matched_task.state)) {
+            ctx.conflict_validation_error = "Cannot overwrite: destination is owned by an active or paused download.";
+            return false;
+        }
+    }
+
+    TaskModel resolved = item.draft_task;
+    if (choice == ConflictPolicy::kAutoRename) {
+        std::string chosen_name;
+        if (ctx.hConflictRenameEdit && IsWindow(ctx.hConflictRenameEdit)) {
+            wchar_t buf[512]{};
+            GetWindowTextW(ctx.hConflictRenameEdit, buf, 511);
+            chosen_name = WToUtf8(buf);
+        }
+        chosen_name = PathSanitizer::SanitizeFileName(chosen_name);
+        if (chosen_name.empty()) {
+            chosen_name = ctx.controller->ResolveAvailableFileName(
+                resolved.save_dir, resolved.file_name,
+                item.is_existing_controller_task ? resolved.task_id : "");
+        } else {
+            // Preserve original file extension if user omitted it
+            std::filesystem::path orig_p = PathSanitizer::Utf8ToPath(resolved.file_name);
+            std::filesystem::path new_p = PathSanitizer::Utf8ToPath(chosen_name);
+            if (!orig_p.extension().empty() && new_p.extension().empty()) {
+                chosen_name += PathSanitizer::PathToUtf8(orig_p.extension());
+            }
+        }
+        // Verify new destination does not already exist on disk and is not reserved
+        std::filesystem::path new_target = PathSanitizer::Utf8ToPath(resolved.save_dir) / PathSanitizer::Utf8ToPath(chosen_name);
+        std::error_code ec;
+        bool exists_disk = std::filesystem::exists(new_target, ec);
+        auto reserved = ctx.controller->CheckDestinationConflict(
+            resolved.save_dir, chosen_name,
+            item.is_existing_controller_task ? resolved.task_id : "");
+        bool is_reserved = (reserved.kind != core::DuplicateKind::kNone &&
+                            core::DuplicateDetector::IsTaskReservingDestination(reserved.matched_task.state));
+        if (exists_disk || is_reserved) {
+            ctx.conflict_validation_error = "That destination already exists or is in use. Choose a different name.";
+            return false;
+        }
+        resolved.file_name = chosen_name;
+        resolved.user_edited_filename = true;
+    } else if (choice == ConflictPolicy::kOverwrite) {
+        resolved.user_edited_filename = true;
+    }
+
+    const bool remember_choice = ctx.conflict_dialog_remember;
+    resolved.conflict_policy = choice;
+    resolved.conflict_policy_explicit = true;
+
+    bool success = false;
+    if (item.torrent_info.has_value()) {
+        if (remember_choice) {
+            auto settings = ctx.controller->GetSettings();
+            settings.conflict_policy = choice;
+            auto saved = ctx.controller->UpdateSettings(settings);
+            if (!saved.ok()) {
+                std::wstring message = L"This download choice will be applied, but Radium could not remember it: " + Utf8ToW(saved.error->message);
+                MessageBoxW(ctx.hwnd, message.c_str(), L"Could not save preference", MB_OK | MB_ICONWARNING);
+            }
+        }
+        torrent::TorrentInfo tinfo = *item.torrent_info;
+        if (choice == ConflictPolicy::kAutoRename) {
+            tinfo.name = resolved.file_name;
+            if (tinfo.files.size() == 1) {
+                tinfo.files[0].relative_path = PathSanitizer::Utf8ToPath(resolved.file_name);
+            }
+        }
+        std::string target_dir = resolved.save_dir;
+        bool start_torrent = item.start_immediately;
+        std::string selected_category = resolved.category;
+        finish_item();
+        if (ShowAddTorrentDialogWin32(ctx.hwnd, *ctx.view, *ctx.controller, tinfo,
+                                      resolved.url, target_dir, start_torrent,
+                                      &target_dir, &start_torrent, &selected_category)) {
+            resolved.save_dir = target_dir;
+            resolved.category = selected_category.empty() ? "Torrents" : selected_category;
+            resolved.total_bytes = tinfo.selected_bytes();
+            resolved.torrent_file_paths.clear();
+            resolved.torrent_file_selection.clear();
+            for (const auto& f : tinfo.files) {
+                resolved.torrent_file_paths.push_back(f.relative_path.generic_string());
+                resolved.torrent_file_selection.push_back(f.selected ? 1 : 0);
+            }
+            auto add_res = ctx.controller->AddTask(std::move(resolved), start_torrent, true);
+            if (add_res.ok()) {
+                ctx.view->SelectTask(add_res.value->task_id);
+                ctx.view->ScrollTaskIntoView(add_res.value->task_id, true);
+                success = true;
+            }
+        } else if (!item.torrent_metainfo_path.empty()) {
+            std::error_code rm_ec;
+            std::filesystem::remove_all(std::filesystem::path(item.torrent_metainfo_path).parent_path(), rm_ec);
+        }
+        return success;
+    }
+
+    ctx.conflict_dialog_processing = true;
+    ctx.conflict_dialog_processing_choice = choice;
+    ctx.conflict_validation_error.clear();
+    if (ctx.hwnd && IsWindow(ctx.hwnd)) {
+        InvalidateRect(ctx.hwnd, nullptr, FALSE);
+    }
+
+    HWND target_hwnd = ctx.hwnd;
+    DownloadController* ctrl = ctx.controller;
+    const bool is_existing_task = item.is_existing_controller_task;
+    const bool start_immediately = item.start_immediately;
+
+    try {
+        std::thread([target_hwnd, ctrl, resolved = std::move(resolved), choice, remember_choice, is_existing_task, start_immediately]() mutable {
+            auto* payload = new ConflictCommitPayload;
+            try {
+                if (remember_choice) {
+                    auto settings = ctrl->GetSettings();
+                    settings.conflict_policy = choice;
+                    auto saved = ctrl->UpdateSettings(settings);
+                    if (!saved.ok()) {
+                        payload->settings_warning = saved.error->message;
+                    }
+                }
+
+                if (is_existing_task) {
+                    auto changed = ctrl->UpdateTask(resolved);
+                    if (changed.ok() && ctrl->RetryTask(resolved.task_id).ok()) {
+                        payload->success = true;
+                        payload->task_id = resolved.task_id;
+                    } else {
+                        payload->error_message = changed.ok()
+                            ? "Could not restart task for the selected destination."
+                            : changed.error->message;
+                    }
+                } else if (resolved.url.rfind("blob:", 0) == 0 && !resolved.part_path.empty()) {
+                    std::filesystem::path staged = PathSanitizer::Utf8ToPath(resolved.part_path);
+                    resolved.part_path.clear();
+                    auto ingest_res = ctrl->IngestCompletedTask(std::move(resolved), staged);
+                    if (ingest_res.ok()) {
+                        payload->success = true;
+                        payload->task_id = ingest_res.value->task_id;
+                    } else {
+                        payload->error_message = ingest_res.error->message;
+                    }
+                } else {
+                    auto add_res = ctrl->AddTask(std::move(resolved), start_immediately, true);
+                    if (add_res.ok()) {
+                        payload->success = true;
+                        payload->task_id = add_res.value->task_id;
+                    } else {
+                        payload->error_message = add_res.error->message;
+                    }
+                }
+            } catch (const std::exception& ex) {
+                payload->success = false;
+                payload->error_message = ex.what();
+            } catch (...) {
+                payload->success = false;
+                payload->error_message = "Unexpected error while applying conflict resolution.";
+            }
+
+            if (!IsWindow(target_hwnd) ||
+                !PostMessageW(target_hwnd, WM_OPENIDM_CONFLICT_COMMIT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload))) {
+                delete payload;
+            }
+        }).detach();
+        return true;
+    } catch (...) {
+        ctx.conflict_dialog_processing = false;
+        ctx.conflict_validation_error = "Could not start background worker for conflict resolution.";
+        return false;
+    }
 }
 
 // Modern Edit Control Subclass: custom padding, Segoe UI typography, subtle borders, and Coral Red focus glow
@@ -4189,6 +4649,19 @@ void InstallModernEditControl(HWND hEdit, uint32_t dpi, const ThemePalette& pale
 
     auto* data = new ModernEditData{false, false, pad_x, pad_y, r, palette};
     SetWindowSubclass(hEdit, ModernEditSubclassProc, SUBCLASS_MODERN_EDIT_ID, reinterpret_cast<DWORD_PTR>(data));
+}
+
+void UpdateModernEditPalette(HWND hEdit, uint32_t dpi, const ThemePalette& palette) {
+    if (!hEdit) return;
+    DWORD_PTR raw = 0;
+    if (GetWindowSubclass(hEdit, ModernEditSubclassProc, SUBCLASS_MODERN_EDIT_ID, &raw) && raw != 0) {
+        auto* data = reinterpret_cast<ModernEditData*>(raw);
+        data->pad_x = DesignSystem::ScaleForDpi(8, dpi);
+        data->pad_y = DesignSystem::ScaleForDpi(4, dpi);
+        data->radius = DesignSystem::ScaleForDpi(6, dpi);
+        data->palette = palette;
+        SendMessageW(hEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(data->pad_x, data->pad_x));
+    }
 }
 
 // Modern ComboBox Subclass: custom dark rounded box + crisp Gdiplus chevron (replaces classic Windows dropdown arrow)
@@ -4775,6 +5248,7 @@ struct NewDownloadDialogContext {
     HBRUSH hBgBrush{nullptr};
     HBRUSH hEditBrush{nullptr};
     std::string existing_task_id;
+    std::optional<TaskModel> draft_task;
     std::string initial_filename;
     std::string initial_save_dir;
     int64_t initial_file_size{-1};
@@ -4833,9 +5307,26 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     GetWindowTextW(ctx->hUrlEdit, url_buf, 2047);
                     GetWindowTextW(ctx->hFilenameEdit, fn_buf, 511);
                     GetWindowTextW(ctx->hSaveDirEdit, dir_buf, MAX_PATH - 1);
+                    TaskModel check_t = ctx->draft_task.value_or(TaskModel{});
+                    check_t.url = WToUtf8(url_buf);
+                    check_t.file_name = WToUtf8(fn_buf);
+                    check_t.save_dir = WToUtf8(dir_buf);
+                    auto report = ctx->controller->InspectIncomingDownload(check_t);
                     HWND owner = GetWindow(hwnd, GW_OWNER);
-                    if (TryShowExistingConflictInsteadOfNewDownload(
-                            owner, *ctx->controller, WToUtf8(url_buf), WToUtf8(fn_buf), WToUtf8(dir_buf))) {
+                    if (report.has_conflict() && owner && IsWindow(owner)) {
+                        if (report.kind == DownloadController::IncomingConflictKind::kActiveOrQueuedSameDownload &&
+                            report.matched_task.has_value()) {
+                            ctx->view->SelectTask(report.matched_task->task_id);
+                            ctx->view->ScrollTaskIntoView(report.matched_task->task_id, true);
+                        } else {
+                            auto* item = new Win32WindowContext::PendingConflictItem;
+                            item->draft_task = std::move(check_t);
+                            item->report = std::move(report);
+                            item->start_immediately = true;
+                            if (!PostMessageW(owner, WM_OPENIDM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item))) {
+                                delete item;
+                            }
+                        }
                         ctx->submitted = true;
                         DestroyWindow(hwnd);
                         return 0;
@@ -5652,14 +6143,100 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 }
 
                 auto conflict_pol = ctx->controller->GetSettings().conflict_policy;
+
+                TaskModel candidate = ctx->draft_task.value_or(TaskModel{});
+                if (!ctx->existing_task_id.empty()) {
+                    if (auto existing_opt = ctx->controller->GetTask(ctx->existing_task_id)) {
+                        candidate = *existing_opt;
+                    }
+                }
+                candidate.url = u;
+                candidate.file_name = final_fn;
+                candidate.save_dir = sd;
+                candidate.user_edited_filename = true;
+                candidate.max_connections = ctx->controller->GetSettings().default_connections_per_task;
+                candidate.scheduled = sched;
+                if (sched) {
+                    wchar_t tbuf[64]{};
+                    GetWindowTextW(ctx->hScheduleTimeEdit, tbuf, 63);
+                    candidate.schedule_time_local = WToUtf8(tbuf);
+                }
+                if (in.is_stream) {
+                    if (candidate.task_type == TaskType::kHttpFile) {
+                        candidate.task_type = (u.find(".mpd") != std::string::npos) ? TaskType::kStreamDash : TaskType::kStreamHls;
+                    }
+                    candidate.category = "Video";
+                    candidate.stream_options.video_filter = vfilter;
+                    candidate.stream_options.audio_filter = afilter;
+                }
+                if (chosen_sz > 0) candidate.total_bytes = static_cast<uint64_t>(chosen_sz);
+                else if (ctx->initial_file_size > 0 && candidate.total_bytes == 0) candidate.total_bytes = static_cast<uint64_t>(ctx->initial_file_size);
+                if (ctx->probed_has_range_info) candidate.range_supported = ctx->probed_range_supported;
+
+                auto report = ctx->controller->InspectIncomingDownload(candidate, ctx->existing_task_id);
+                if (report.kind == DownloadController::IncomingConflictKind::kActiveOrQueuedSameDownload && report.matched_task.has_value()) {
+                    ctx->view->SelectTask(report.matched_task->task_id);
+                    ctx->view->ScrollTaskIntoView(report.matched_task->task_id, true);
+                    ctx->submitted = true;
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                if (report.has_conflict() && conflict_pol == ConflictPolicy::kPrompt) {
+                    HWND owner = GetWindow(hwnd, GW_OWNER);
+                    if (owner && IsWindow(owner)) {
+                        auto* item = new Win32WindowContext::PendingConflictItem;
+                        item->draft_task = std::move(candidate);
+                        item->report = std::move(report);
+                        item->start_immediately = start_now;
+                        item->is_from_new_download_dialog = true;
+                        item->is_existing_controller_task = !ctx->existing_task_id.empty();
+                        if (!PostMessageW(owner, WM_OPENIDM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item))) {
+                            delete item;
+                        }
+                    }
+                    ctx->submitted = true;
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+
+                OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_SUBMIT_ATTEMPT: url=" + u + " filename=" + fn + " quality=" + vfilter);
+
+                if (ctx->draft_task.has_value() && ctx->existing_task_id.empty()) {
+                    if (candidate.url.rfind("blob:", 0) == 0 && !candidate.part_path.empty()) {
+                        std::filesystem::path staged = PathSanitizer::Utf8ToPath(candidate.part_path);
+                        candidate.part_path.clear();
+                        auto ingest_res = ctx->controller->IngestCompletedTask(std::move(candidate), staged);
+                        if (!ingest_res.ok()) {
+                            ctx->is_submitting = false;
+                            MessageBoxW(hwnd, Utf8ToW("Could not save download:\n" + ingest_res.error->message).c_str(),
+                                        L"Error Adding Download", MB_OK | MB_ICONERROR);
+                            return 0;
+                        }
+                        ctx->view->SelectTask(ingest_res.value->task_id);
+                        ctx->view->ScrollTaskIntoView(ingest_res.value->task_id, true);
+                    } else {
+                        auto add_res = ctx->controller->AddTask(std::move(candidate), start_now, false);
+                        if (!add_res.ok()) {
+                            ctx->is_submitting = false;
+                            MessageBoxW(hwnd, Utf8ToW("Could not add download:\n" + add_res.error->message).c_str(),
+                                        L"Error Adding Download", MB_OK | MB_ICONERROR);
+                            return 0;
+                        }
+                        ctx->controller->RememberDownloadDirectory(sd);
+                        ctx->view->SelectTask(add_res.value->task_id);
+                        ctx->view->ScrollTaskIntoView(add_res.value->task_id, true);
+                    }
+                    ctx->submitted = true;
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+
                 bool destination_conflict = false;
                 if (conflict_pol == ConflictPolicy::kPrompt || conflict_pol == ConflictPolicy::kFailIfExists) {
                     auto destination = PathSanitizer::ResolveSafeOutputPath(sd, final_fn, ConflictPolicy::kPrompt);
                     destination_conflict = !destination.ok() && destination.error->code == "ERR_FILE_EXISTS";
                     if (destination_conflict) in.start_immediately = false;
                 }
-
-                OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_SUBMIT_ATTEMPT: url=" + u + " filename=" + fn + " quality=" + vfilter);
 
                 if (!ctx->existing_task_id.empty()) {
                     auto t_opt = ctx->controller->GetTask(ctx->existing_task_id);
@@ -5806,9 +6383,18 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
 
             if ((id == 5009 || id == IDCANCEL) && (code == BN_CLICKED || code == 0 || code == 1)) { // Cancel
+                if (ctx->draft_task.has_value() && ctx->draft_task->url.rfind("blob:", 0) == 0 && !ctx->draft_task->part_path.empty()) {
+                    std::error_code rm_ec;
+                    std::filesystem::remove(PathSanitizer::Utf8ToPath(ctx->draft_task->part_path), rm_ec);
+                }
                 if (!ctx->existing_task_id.empty()) {
+                    auto t_opt = ctx->controller->GetTask(ctx->existing_task_id);
                     ctx->controller->CancelTask(ctx->existing_task_id);
                     ctx->controller->RemoveTask(ctx->existing_task_id, false);
+                    if (t_opt.has_value() && t_opt->url.rfind("blob:", 0) == 0 && !t_opt->part_path.empty()) {
+                        std::error_code rm_ec;
+                        std::filesystem::remove(PathSanitizer::Utf8ToPath(t_opt->part_path), rm_ec);
+                    }
                 }
                 DestroyWindow(hwnd);
                 return 0;
@@ -5820,9 +6406,19 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (ctx && ctx->dlg_alive) {
                 *(ctx->dlg_alive) = false;
             }
+            if (!ctx->submitted && ctx->draft_task.has_value() &&
+                ctx->draft_task->url.rfind("blob:", 0) == 0 && !ctx->draft_task->part_path.empty()) {
+                std::error_code rm_ec;
+                std::filesystem::remove(PathSanitizer::Utf8ToPath(ctx->draft_task->part_path), rm_ec);
+            }
             if (!ctx->submitted && !ctx->existing_task_id.empty()) {
+                auto t_opt = ctx->controller->GetTask(ctx->existing_task_id);
                 ctx->controller->CancelTask(ctx->existing_task_id);
                 ctx->controller->RemoveTask(ctx->existing_task_id, false);
+                if (t_opt.has_value() && t_opt->url.rfind("blob:", 0) == 0 && !t_opt->part_path.empty()) {
+                    std::error_code rm_ec;
+                    std::filesystem::remove(PathSanitizer::Utf8ToPath(t_opt->part_path), rm_ec);
+                }
             }
             if (ctx->hFontBody) DeleteObject(ctx->hFontBody);
             if (ctx->hFontBold) DeleteObject(ctx->hFontBold);
@@ -5836,6 +6432,93 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+std::string PromptTextModalWin32(
+    HWND parent,
+    const std::wstring& title,
+    const std::wstring& prompt,
+    const std::string& initial_value,
+    const ThemePalette& /*palette*/) {
+    struct PromptDlgState {
+        bool done{false};
+        bool ok{false};
+        std::string value;
+        HWND hEdit{nullptr};
+    } st;
+    st.value = initial_value;
+
+    const wchar_t* cls_name = L"RadiumPromptModalClass";
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = [](HWND hwnd, UINT m, WPARAM wp, LPARAM lp) -> LRESULT {
+        auto* s = reinterpret_cast<PromptDlgState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (m == WM_NCCREATE) {
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+            return TRUE;
+        }
+        if (m == WM_COMMAND && s) {
+            if (LOWORD(wp) == IDOK) {
+                if (s->hEdit) {
+                    int len = GetWindowTextLengthW(s->hEdit);
+                    std::wstring w(static_cast<size_t>(len) + 1, L'\0');
+                    GetWindowTextW(s->hEdit, w.data(), len + 1);
+                    w.resize(static_cast<size_t>(len));
+                    int u8 = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+                    s->value.resize(static_cast<size_t>(u8));
+                    if (u8 > 0) WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s->value.data(), u8, nullptr, nullptr);
+                }
+                s->ok = true;
+                s->done = true;
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            if (LOWORD(wp) == IDCANCEL) {
+                s->ok = false;
+                s->done = true;
+                DestroyWindow(hwnd);
+                return 0;
+            }
+        }
+        if (m == WM_CLOSE && s) {
+            s->ok = false;
+            s->done = true;
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, m, wp, lp);
+    };
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.lpszClassName = cls_name;
+    RegisterClassExW(&wc);
+
+    HWND hDlg = CreateWindowExW(
+        WS_EX_DLGMODALFRAME, cls_name, title.c_str(),
+        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        CW_USEDEFAULT, CW_USEDEFAULT, 460, 210, parent, nullptr, wc.hInstance, &st);
+    if (!hDlg) return {};
+
+    CreateWindowExW(0, L"STATIC", prompt.c_str(), WS_CHILD | WS_VISIBLE, 16, 12, 416, 68, hDlg, nullptr, wc.hInstance, nullptr);
+    st.hEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", Utf8ToW(initial_value).c_str(),
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 16, 86, 416, 26, hDlg, nullptr, wc.hInstance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 260, 128, 80, 28, hDlg, reinterpret_cast<HMENU>(IDOK), wc.hInstance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 352, 128, 80, 28, hDlg, reinterpret_cast<HMENU>(IDCANCEL), wc.hInstance, nullptr);
+    if (st.hEdit) SetFocus(st.hEdit);
+
+    EnableWindow(parent, FALSE);
+    MSG msg{};
+    while (!st.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(hDlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    EnableWindow(parent, TRUE);
+    SetForegroundWindow(parent);
+    return st.ok ? st.value : std::string{};
+}
+
 void ShowNewDownloadDialogWin32(
     HWND hwnd_parent,
     DesktopView& view,
@@ -5844,11 +6527,35 @@ void ShowNewDownloadDialogWin32(
     const std::string& suggested_filename = "",
     const std::string& save_dir = "",
     int64_t file_size = -1,
-    const std::string& existing_task_id = "") {
+    const std::string& existing_task_id = "",
+    std::optional<TaskModel> draft_task = std::nullopt) {
 
-    // Avoid duplicate windows and duplicate downloads: if a dialog is already open, bring it to front
+    struct PendingOfferItem {
+        std::string url;
+        std::string filename;
+        std::string save_dir;
+        int64_t file_size{-1};
+        std::string task_id;
+    };
+    static std::vector<PendingOfferItem> s_pending_offers;
+
+    // Avoid overlapping modal dialogs while never dropping incoming browser offers:
+    // if a dialog is already open, queue this offer and show it when the current one closes.
     HWND existing_dlg = FindWindowW(L"Radium_NewDownloadDlgClass", nullptr);
     if (existing_dlg && IsWindow(existing_dlg)) {
+        if (!existing_task_id.empty() || !initial_url.empty()) {
+            bool dup = false;
+            for (const auto& p : s_pending_offers) {
+                if ((!existing_task_id.empty() && p.task_id == existing_task_id) ||
+                    (existing_task_id.empty() && p.url == initial_url && p.filename == suggested_filename)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                s_pending_offers.push_back({initial_url, suggested_filename, save_dir, file_size, existing_task_id});
+            }
+        }
         if (!IsWindowVisible(existing_dlg) || IsIconic(existing_dlg)) {
             ShowWindow(existing_dlg, SW_RESTORE);
         }
@@ -5892,6 +6599,7 @@ void ShowNewDownloadDialogWin32(
     ctx.view = &view;
     ctx.controller = &controller;
     ctx.existing_task_id = existing_task_id;
+    ctx.draft_task = std::move(draft_task);
     ctx.initial_filename = suggested_filename;
     ctx.initial_save_dir = save_dir;
     if (ctx.initial_save_dir.empty()) {
@@ -5954,9 +6662,29 @@ void ShowNewDownloadDialogWin32(
         }
     }
 
-    if (TryShowExistingConflictInsteadOfNewDownload(
-            hwnd_parent, controller, candidate_url, suggested_filename, save_dir, existing_task_id)) {
-        return;
+    if (!candidate_url.empty() && existing_task_id.empty() &&
+        controller.GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
+        TaskModel check_t = ctx.draft_task.value_or(TaskModel{});
+        check_t.url = candidate_url;
+        if (check_t.file_name.empty()) check_t.file_name = suggested_filename;
+        if (check_t.save_dir.empty()) check_t.save_dir = ctx.initial_save_dir;
+        auto report = controller.InspectIncomingDownload(check_t);
+        if (report.kind == DownloadController::IncomingConflictKind::kActiveOrQueuedSameDownload &&
+            report.matched_task.has_value()) {
+            view.SelectTask(report.matched_task->task_id);
+            view.ScrollTaskIntoView(report.matched_task->task_id, true);
+            return;
+        }
+        if (report.has_conflict() && hwnd_parent && IsWindow(hwnd_parent)) {
+            check_t.file_name = report.resolved_file_name;
+            check_t.save_dir = report.resolved_save_dir;
+            auto* item = new Win32WindowContext::PendingConflictItem;
+            item->draft_task = std::move(check_t);
+            item->report = std::move(report);
+            item->start_immediately = true;
+            SendMessageW(hwnd_parent, WM_OPENIDM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item));
+            return;
+        }
     }
 
     RECT work_rc{};
@@ -6085,6 +6813,13 @@ void ShowNewDownloadDialogWin32(
         EnableWindow(owner_hwnd, TRUE);
         SetForegroundWindow(owner_hwnd);
         InvalidateRect(owner_hwnd, nullptr, TRUE);
+    }
+
+    if (!s_pending_offers.empty()) {
+        PendingOfferItem next = std::move(s_pending_offers.front());
+        s_pending_offers.erase(s_pending_offers.begin());
+        ShowNewDownloadDialogWin32(
+            hwnd_parent, view, controller, next.url, next.filename, next.save_dir, next.file_size, next.task_id);
     }
 }
 
@@ -6861,13 +7596,19 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
         DrawTextW(hdc, wlbl.c_str(), -1, &trc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
-    // Group related settings inside clean, rounded container
+    // Group related settings inside clean, rounded container (clipped strictly to scroll viewport)
+    RECT scroll_clip_rc = ToWinRect(sv.content_rect);
+    scroll_clip_rc.top += slide_offset_y;
+    scroll_clip_rc.bottom += slide_offset_y - 1;
+    int saved_scroll_dc = SaveDC(hdc);
+    IntersectClipRect(hdc, scroll_clip_rc.left, scroll_clip_rc.top, scroll_clip_rc.right, scroll_clip_rc.bottom);
+
     if (!sv.visible_items.empty()) {
         RECT group_card_rc{
             sv.visible_items.front().row_rect.left,
-            sv.visible_items.front().row_rect.top,
+            sv.visible_items.front().row_rect.top + slide_offset_y,
             sv.visible_items.back().row_rect.right,
-            sv.visible_items.back().row_rect.bottom
+            sv.visible_items.back().row_rect.bottom + slide_offset_y
         };
         DrawRoundedBoxGdi(hdc, group_card_rc, DesignSystem::ScaleForDpi(10, m.dpi), card_bg, card_border, 1);
 
@@ -6875,6 +7616,8 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
         for (size_t i = 0; i < sv.visible_items.size(); ++i) {
             const auto& item = sv.visible_items[i];
             RECT rrc = ToWinRect(item.row_rect);
+            rrc.top += slide_offset_y;
+            rrc.bottom += slide_offset_y;
 
             // Subtle divider line between rows (except last item)
             if (i + 1 < sv.visible_items.size()) {
@@ -6910,6 +7653,8 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
 
             // Control element aligned consistently on the right
             RECT ctrl_rc = ToWinRect(item.control_rect);
+            ctrl_rc.top += slide_offset_y;
+            ctrl_rc.bottom += slide_offset_y;
             if (item.control_type == SettingControlType::kToggleSwitch) {
                 // Redesigned modern switch matching reference screenshot
                 int sw_w = DesignSystem::ScaleForDpi(42, m.dpi);
@@ -6950,8 +7695,36 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
         }
     }
 
-    // Footer bar attached to bottom of settings window (clean, minimal, matching screenshot)
+    // Subtle slim scrollbar indicator when content overflows viewport
+    if (sv.max_scroll > 0 && sv.content_total_height > 0) {
+        int track_top = scroll_clip_rc.top + DesignSystem::ScaleForDpi(8, m.dpi);
+        int track_bottom = scroll_clip_rc.bottom - DesignSystem::ScaleForDpi(8, m.dpi);
+        int track_h = std::max(12, track_bottom - track_top);
+        int vp_h = std::max(1, static_cast<int>(scroll_clip_rc.bottom - scroll_clip_rc.top));
+        int thumb_h = std::max(DesignSystem::ScaleForDpi(24, m.dpi),
+            static_cast<int>(static_cast<long long>(track_h) * vp_h / sv.content_total_height));
+        int thumb_travel = std::max(0, track_h - thumb_h);
+        int thumb_y = track_top + (sv.max_scroll > 0 ? static_cast<int>(static_cast<long long>(thumb_travel) * sv.scroll_offset / sv.max_scroll) : 0);
+        int sb_w = DesignSystem::ScaleForDpi(4, m.dpi);
+        RECT sb_rc{scroll_clip_rc.right - DesignSystem::ScaleForDpi(8, m.dpi), thumb_y,
+                   scroll_clip_rc.right - DesignSystem::ScaleForDpi(8, m.dpi) + sb_w, thumb_y + thumb_h};
+        DrawRoundedBoxGdi(hdc, sb_rc, sb_w / 2, pal.border_subtle, pal.border_subtle, 0);
+    }
+
+    RestoreDC(hdc, saved_scroll_dc);
+
+    // Sticky footer bar attached to bottom of settings window (opaque fill + 1px top separator)
     RECT ftr_rc{modal_rc.left + 1, modal_rc.bottom - footer_h, modal_rc.right - 1, modal_rc.bottom - 1};
+    RECT ftr_fill{ftr_rc.left, ftr_rc.top, ftr_rc.right, modal_rc.bottom - DesignSystem::ScaleForDpi(12, m.dpi)};
+    if (ftr_fill.bottom > ftr_fill.top) {
+        FillRectSolid(hdc, ftr_fill, window_bg);
+    }
+    HPEN hFtrPen = CreatePen(PS_SOLID, 1, divider_col.ToWin32ColorRef());
+    HGDIOBJ oldFtrPen = SelectObject(hdc, hFtrPen);
+    MoveToEx(hdc, ftr_rc.left, ftr_rc.top, nullptr);
+    LineTo(hdc, ftr_rc.right, ftr_rc.top);
+    SelectObject(hdc, oldFtrPen);
+    DeleteObject(hFtrPen);
 
     // Restore Defaults button
     RECT rst_rc = ToWinRect(sv.restore_defaults_rect);
@@ -7233,35 +8006,10 @@ void DrawFileTypeIconGdi(HDC hdc, int x, int y, int w, int h, const FormattedTas
     auto ext_pos = name.rfind('.');
     std::string ext = (ext_pos != std::string::npos) ? name.substr(ext_pos) : "";
 
-    // Monochromatic file badge container matching Radium Design Vision Part 3.E / Part 4
-    Gdiplus::Graphics g(hdc);
-    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-
-    ColorRgba badge_bg = (pal.mode == ThemeMode::kLight) ? ColorRgba{0xF1, 0xF5, 0xF9, 255} : ColorRgba{0x2A, 0x2A, 0x30, 255};
-    ColorRgba badge_border = (pal.mode == ThemeMode::kLight) ? ColorRgba{0xCB, 0xD5, 0xE1, 255} : ColorRgba{0xFF, 0xFF, 0xFF, 20};
     ColorRgba glyphCol = (pal.mode == ThemeMode::kLight) ? ColorRgba{0x33, 0x41, 0x55, 255} : ColorRgba{0xD4, 0xD4, 0xD8, 255};
 
-    float fx = static_cast<float>(x);
-    float fy = static_cast<float>(y);
-    float fw = static_cast<float>(w);
-    float fh = static_cast<float>(h);
-    float rad = 6.0f;
-
-    Gdiplus::GraphicsPath path;
-    path.AddArc(fx, fy, rad * 2, rad * 2, 180, 90);
-    path.AddArc(fx + fw - rad * 2, fy, rad * 2, rad * 2, 270, 90);
-    path.AddArc(fx + fw - rad * 2, fy + fh - rad * 2, rad * 2, rad * 2, 0, 90);
-    path.AddArc(fx, fy + fh - rad * 2, rad * 2, rad * 2, 90, 90);
-    path.CloseFigure();
-
-    Gdiplus::SolidBrush br(Gdiplus::Color(badge_bg.a, badge_bg.r, badge_bg.g, badge_bg.b));
-    g.FillPath(&br, &path);
-
-    Gdiplus::Pen pBorder(Gdiplus::Color(badge_border.a, badge_border.r, badge_border.g, badge_border.b), 1.0f);
-    g.DrawPath(&pBorder, &path);
-
-    // Inner glyph drawn in neutral secondary stroke inside the badge
-    int pad = static_cast<int>(fw * 0.22f);
+    // Draw vector glyph directly without background box, scaled ~1.2x larger
+    int pad = static_cast<int>(static_cast<float>(w) * 0.12f);
     int gx = x + pad;
     int gy = y + pad;
     int gw = w - pad * 2;
@@ -9327,6 +10075,30 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
     DrawThemeGlyphGdi(hdc, theme_rc, theme_icon_col, theme_button_bg,
         pal.mode == ThemeMode::kLight);
 
+    // 1.4 Tools & Global Menu Button
+    RECT tools_rc = ToWinRect(geom.tools_button_rect);
+    if (tools_rc.right > tools_rc.left) {
+        const bool tools_hovered = geom.tools_button_rect.Contains(theme_cursor.x, theme_cursor.y);
+        const bool tools_pressed = view.GetAnimationState().pressed_toolbar_idx == -3;
+        const ColorRgba tools_bg = tools_pressed ? pal.surface_pressed :
+            (tools_hovered ? pal.surface_hover : pal.surface_primary);
+        DrawRoundedBoxGdi(hdc, tools_rc, DesignSystem::ScaleForDpi(8, m.dpi), tools_bg, pal.border_subtle, 1);
+        ColorRgba tools_icon_col = tools_hovered ? pal.accent_primary : pal.text_secondary;
+        const bool tools_compact = (tools_rc.right - tools_rc.left <= DesignSystem::ScaleForDpi(44, m.dpi));
+        int glyph_x = tools_compact
+            ? (tools_rc.left + (tools_rc.right - tools_rc.left - 12) / 2)
+            : (tools_rc.left + DesignSystem::ScaleForDpi(10, m.dpi));
+        DrawHamburgerGlyphGdi(hdc, glyph_x, tools_rc.top + (tools_rc.bottom - tools_rc.top) / 2 - 5, 12, 10, tools_icon_col);
+        if (!tools_compact) {
+            RECT tools_txt_rc{glyph_x + DesignSystem::ScaleForDpi(16, m.dpi), tools_rc.top,
+                              tools_rc.right - DesignSystem::ScaleForDpi(6, m.dpi), tools_rc.bottom};
+            SelectObject(hdc, hFontBody);
+            SetTextColor(hdc, tools_hovered ? pal.text_primary.ToWin32ColorRef() : pal.text_secondary.ToWin32ColorRef());
+            std::wstring tools_label = Utf8ToW(GetLocalizationManager().Translate("Tools"));
+            DrawTextW(hdc, tools_label.c_str(), -1, &tools_txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+    }
+
     // 1.5 Dynamic Context Action Buttons (macOS segmented action cluster)
     int first_icon_idx = -1;
     int last_icon_idx = -1;
@@ -9939,43 +10711,65 @@ void PaintMainWindow(HWND hwnd, DesktopView& view) {
         const ColorRgba modal_bg = pal.surface_primary;
         const ColorRgba modal_border = pal.border_subtle;
         const ColorRgba accent = pal.accent_primary;
-        DrawRoundedBoxGdi(hdc, l.card, DesignSystem::ScaleForDpi(14, m.dpi), modal_bg, modal_border, 1);
+        DrawRoundedBoxGdi(hdc, l.card, DesignSystem::ScaleForDpi(12, m.dpi), modal_bg, modal_border, 1);
         SelectObject(hdc, hFontBold);
         SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
-        RECT title{l.card.left + DesignSystem::ScaleForDpi(28, m.dpi), l.card.top + DesignSystem::ScaleForDpi(20, m.dpi), l.close.left, l.card.top + DesignSystem::ScaleForDpi(58, m.dpi)};
+        RECT title{l.card.left + DesignSystem::ScaleForDpi(18, m.dpi), l.card.top + DesignSystem::ScaleForDpi(12, m.dpi),
+                   l.close.left - DesignSystem::ScaleForDpi(6, m.dpi), l.card.top + DesignSystem::ScaleForDpi(34, m.dpi)};
         DrawTextW(hdc, L"Warning: file exists already", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
         DrawTextW(hdc, L"×", 1, &l.close, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        SelectObject(hdc, hFontBody);
+        SelectObject(hdc, hFontSmall);
         SetTextColor(hdc, pal.text_primary.ToWin32ColorRef());
         DrawTextW(hdc, ctx->conflict_dialog_path.c_str(), static_cast<int>(ctx->conflict_dialog_path.size()), &l.path,
                   DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
-        RECT check_box{l.checkbox.left, l.checkbox.top + DesignSystem::ScaleForDpi(5, m.dpi),
-                       l.checkbox.left + DesignSystem::ScaleForDpi(20, m.dpi), l.checkbox.top + DesignSystem::ScaleForDpi(25, m.dpi)};
+        const int cb_sz = DesignSystem::ScaleForDpi(16, m.dpi);
+        const int cb_top = l.checkbox.top + ((l.checkbox.bottom - l.checkbox.top - cb_sz) / 2);
+        RECT check_box{l.checkbox.left, cb_top, l.checkbox.left + cb_sz, cb_top + cb_sz};
         DrawRoundedBoxGdi(hdc, check_box, DesignSystem::ScaleForDpi(4, m.dpi), modal_bg, modal_border, 1);
         if (ctx->conflict_dialog_remember) {
             HPEN pen = CreatePen(PS_SOLID, DesignSystem::ScaleForDpi(2, m.dpi), accent.ToWin32ColorRef());
             HGDIOBJ old_pen = SelectObject(hdc, pen);
-            MoveToEx(hdc, check_box.left + 4, check_box.top + 10, nullptr);
-            LineTo(hdc, check_box.left + 8, check_box.top + 14);
-            LineTo(hdc, check_box.left + 16, check_box.top + 5);
+            MoveToEx(hdc, check_box.left + DesignSystem::ScaleForDpi(3, m.dpi), check_box.top + DesignSystem::ScaleForDpi(8, m.dpi), nullptr);
+            LineTo(hdc, check_box.left + DesignSystem::ScaleForDpi(6, m.dpi), check_box.top + DesignSystem::ScaleForDpi(11, m.dpi));
+            LineTo(hdc, check_box.left + DesignSystem::ScaleForDpi(13, m.dpi), check_box.top + DesignSystem::ScaleForDpi(4, m.dpi));
             SelectObject(hdc, old_pen); DeleteObject(pen);
         }
-        RECT check_label{check_box.right + DesignSystem::ScaleForDpi(10, m.dpi), l.checkbox.top,
+        RECT check_label{check_box.right + DesignSystem::ScaleForDpi(8, m.dpi), l.checkbox.top,
                          l.checkbox.right, l.checkbox.bottom};
         SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
         DrawTextW(hdc, L"Remember my choice for all downloads", -1, &check_label,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         auto draw_button = [&](const RECT& rc, const wchar_t* label, ColorRgba bg, ColorRgba border, COLORREF text) {
-            DrawRoundedBoxGdi(hdc, rc, DesignSystem::ScaleForDpi(8, m.dpi), bg, border, 1);
+            DrawRoundedBoxGdi(hdc, rc, DesignSystem::ScaleForDpi(6, m.dpi), bg, border, 1);
             SetTextColor(hdc, text);
             DrawTextW(hdc, label, -1, const_cast<RECT*>(&rc), DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         };
         SelectObject(hdc, hFontSmallBold);
-        std::wstring rename = L"RENAME (" + std::to_wstring(ctx->conflict_dialog_rename_number) + L")";
+        std::wstring rename = (ctx->conflict_dialog_processing && ctx->conflict_dialog_processing_choice == ConflictPolicy::kAutoRename)
+            ? L"Applying..." : L"Rename";
         draw_button(l.rename, rename.c_str(), accent, accent, pal.text_primary.ToWin32ColorRef());
-        draw_button(l.overwrite, L"Overwrite", pal.surface_elevated, modal_border, pal.text_primary.ToWin32ColorRef());
+        const bool ovw_allowed = ctx->pending_conflicts.empty() || ctx->pending_conflicts.front().report.overwrite_allowed;
+        std::wstring overwrite_lbl = (ctx->conflict_dialog_processing && ctx->conflict_dialog_processing_choice == ConflictPolicy::kOverwrite)
+            ? L"Applying..." : L"Overwrite";
+        draw_button(l.overwrite, overwrite_lbl.c_str(),
+                    ovw_allowed ? pal.surface_elevated : pal.surface_primary,
+                    modal_border,
+                    ovw_allowed ? pal.text_primary.ToWin32ColorRef() : pal.text_muted.ToWin32ColorRef());
         draw_button(l.abort, L"Abort", pal.surface_elevated, modal_border, pal.text_primary.ToWin32ColorRef());
+        if (!ctx->conflict_validation_error.empty()) {
+            SelectObject(hdc, hFontSmall);
+            SetTextColor(hdc, RGB(239, 68, 68));
+            RECT err_rc{l.card.left + DesignSystem::ScaleForDpi(18, m.dpi), l.rename_edit.top - DesignSystem::ScaleForDpi(16, m.dpi),
+                        l.card.right - DesignSystem::ScaleForDpi(18, m.dpi), l.rename_edit.top - DesignSystem::ScaleForDpi(2, m.dpi)};
+            std::wstring werr = Utf8ToW(ctx->conflict_validation_error);
+            DrawTextW(hdc, werr.c_str(), static_cast<int>(werr.size()), &err_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        }
+        if (ctx->hConflictRenameEdit && IsWindow(ctx->hConflictRenameEdit)) {
+            MoveWindow(ctx->hConflictRenameEdit, l.rename_edit.left, l.rename_edit.top,
+                       l.rename_edit.right - l.rename_edit.left, l.rename_edit.bottom - l.rename_edit.top, FALSE);
+            ShowWindow(ctx->hConflictRenameEdit, SW_SHOW);
+        }
     }
 
     SelectObject(hdc, old_font);
@@ -10062,6 +10856,527 @@ static void SyncSearchEditLayout(Win32WindowContext* ctx) {
     MoveWindow(ctx->hSearchEdit, edit_x, edit_y, edit_w, edit_h, TRUE);
 }
 
+void ExecuteContextCommandWin32(HWND hwnd, Win32WindowContext* ctx, int cmd, std::optional<TaskModel> sel_task) {
+    if (!ctx || !ctx->view || !ctx->controller) return;
+    const bool has_sel = sel_task.has_value();
+    const std::string sel = has_sel ? sel_task->task_id : "";
+            if (cmd == IDM_CTX_START) ctx->view->ActionStartSelected();
+            else if (cmd == IDM_CTX_PAUSE) ctx->view->ActionPauseSelected();
+            else if (cmd == IDM_CTX_RESUME) ctx->view->ActionResumeSelected();
+            else if (cmd == IDM_CTX_RETRY) ctx->view->ActionRetrySelected();
+            else if (cmd == IDM_CTX_CANCEL) ctx->view->ActionCancelSelected();
+            else if (cmd == IDM_CTX_OPEN_FILE) ctx->view->ActionOpenCompletedFile(false);
+            else if (cmd == IDM_CTX_OPEN_FOLDER) ctx->view->ActionOpenDestinationFolder(false);
+            else if (cmd == IDM_CTX_RENAME) {
+                if (has_sel) {
+                    std::wstring new_name;
+                    if (ShowSimpleInputDialogWin32(hwnd, L"Rename Download", L"Enter new file name:", Utf8ToW(sel_task->file_name), new_name)) {
+                        std::string clean_name = PathSanitizer::SanitizeFileName(WToUtf8(new_name));
+                        if (!clean_name.empty()) {
+                            std::filesystem::path old_p = std::filesystem::path(sel_task->save_dir) / sel_task->file_name;
+                            std::filesystem::path new_p = std::filesystem::path(sel_task->save_dir) / clean_name;
+                            std::error_code ec;
+                            if (std::filesystem::exists(old_p, ec)) {
+                                std::filesystem::rename(old_p, new_p, ec);
+                            }
+                            sel_task->file_name = clean_name;
+                            ctx->controller->UpdateTask(*sel_task);
+                            ctx->view->SetFeedbackMessage("Renamed download to " + clean_name);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_MOVE_TO) {
+                if (has_sel) {
+                    std::string chosen_dir = sel_task->save_dir;
+                    if (SelectFolderWithDialogWin32(hwnd, chosen_dir) && chosen_dir != sel_task->save_dir) {
+                        std::filesystem::path old_p = std::filesystem::path(sel_task->save_dir) / sel_task->file_name;
+                        std::filesystem::path new_p = std::filesystem::path(chosen_dir) / sel_task->file_name;
+                        std::error_code ec;
+                        if (std::filesystem::exists(old_p, ec)) {
+                            std::filesystem::rename(old_p, new_p, ec);
+                        }
+                        sel_task->save_dir = chosen_dir;
+                        ctx->controller->UpdateTask(*sel_task);
+                        ctx->view->SetFeedbackMessage("Moved download to " + chosen_dir);
+                    }
+                }
+            } else if (cmd == IDM_CTX_COPY_URL) {
+                if (has_sel) {
+                    CopyTextToClipboardWin32(hwnd, sel_task->url);
+                    ctx->view->SetFeedbackMessage("Copied download URL to clipboard");
+                }
+            } else if (cmd == IDM_CTX_REFRESH_URL) {
+                if (has_sel) {
+                    std::wstring new_url_w;
+                    if (ShowSimpleInputDialogWin32(hwnd, L"Refresh / Change URL", L"Enter updated download URL (e.g. refreshed signed link):", Utf8ToW(sel_task->url), new_url_w)) {
+                        std::string new_u = WToUtf8(new_url_w);
+                        while (!new_u.empty() && (new_u.front() == ' ' || new_u.front() == '\t')) new_u.erase(0, 1);
+                        while (!new_u.empty() && (new_u.back() == ' ' || new_u.back() == '\t')) new_u.pop_back();
+                        if (!new_u.empty()) {
+                            auto r = ctx->controller->RefreshTaskUrl(sel, new_u);
+                            if (r.ok()) {
+                                ctx->view->SetFeedbackMessage("Updated download URL");
+                            } else {
+                                MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Failed to Update URL", MB_OK | MB_ICONERROR);
+                            }
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_ADD_MIRROR) {
+                if (has_sel) {
+                    std::wstring mirror_w;
+                    if (ShowSimpleInputDialogWin32(hwnd, L"Add Mirror URL", L"Enter alternate download mirror URL:", L"", mirror_w)) {
+                        std::string mir = WToUtf8(mirror_w);
+                        while (!mir.empty() && (mir.front() == ' ' || mir.front() == '\t')) mir.erase(0, 1);
+                        while (!mir.empty() && (mir.back() == ' ' || mir.back() == '\t')) mir.pop_back();
+                        if (!mir.empty()) {
+                            auto r = ctx->controller->AddAlternateUrl(sel, mir);
+                            if (r.ok()) {
+                                ctx->view->SetFeedbackMessage("Added alternate mirror URL");
+                            } else {
+                                MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Failed to Add Mirror", MB_OK | MB_ICONERROR);
+                            }
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_SPEED_LIMIT) {
+                if (has_sel) {
+                    uint64_t cur_limit = sel_task->speed_limit_bps;
+                    std::wstring init_val = (cur_limit > 0) ? std::to_wstring(cur_limit / 1024) : L"0";
+                    std::wstring val_w;
+                    if (ShowSimpleInputDialogWin32(hwnd, L"Set Download Speed Limit", L"Enter speed limit in KB/s (0 = Unlimited):", init_val, val_w)) {
+                        std::string val_str = WToUtf8(val_w);
+                        try {
+                            uint64_t kbps = std::stoull(val_str);
+                            uint64_t bps = kbps * 1024ULL;
+                            auto r = ctx->controller->SetTaskSpeedLimit(sel, bps);
+                            if (r.ok()) {
+                                ctx->view->SetFeedbackMessage((bps == 0) ? "Task speed limit set to Unlimited" : ("Task speed limit set to " + DesktopView::FormatSpeed(bps)));
+                            } else {
+                                MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Speed Limit Failed", MB_OK | MB_ICONWARNING);
+                            }
+                        } catch (...) {
+                            MessageBoxW(hwnd, L"Invalid speed limit number entered.", L"Invalid Input", MB_OK | MB_ICONWARNING);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_SCHEDULE) {
+                if (has_sel) {
+                    std::wstring init_t = sel_task->schedule_time_local.empty() ? L"23:00" : Utf8ToW(sel_task->schedule_time_local);
+                    std::wstring time_w;
+                    if (ShowSimpleInputDialogWin32(hwnd, L"Schedule Download", L"Enter scheduled start time (24-hour HH:MM format, e.g. 23:00):", init_t, time_w)) {
+                        std::string t_str = WToUtf8(time_w);
+                        auto r = ctx->controller->SetTaskSchedule(sel, t_str, "");
+                        if (r.ok()) {
+                            ctx->view->SetFeedbackMessage("Scheduled download for " + t_str);
+                        } else {
+                            MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Schedule Failed", MB_OK | MB_ICONWARNING);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_FILE_INTEGRITY) {
+                if (has_sel) {
+                    std::filesystem::path fp = std::filesystem::path(sel_task->save_dir) / sel_task->file_name;
+                    std::error_code ec;
+                    if (!std::filesystem::exists(fp, ec)) {
+                        MessageBoxW(hwnd, L"Completed file does not exist on disk.", L"File Missing", MB_OK | MB_ICONWARNING);
+                    } else {
+                        auto sha_res = CryptoUtils::ComputeFileSha256Hex(fp);
+                        if (sha_res.ok()) {
+                            std::string hash = *sha_res.value;
+                            std::wstring msg_text = L"File: " + Utf8ToW(sel_task->file_name) + L"\n"
+                                                  + L"SHA-256 Checksum:\n" + Utf8ToW(hash) + L"\n\n"
+                                                  + L"Copy checksum to clipboard?";
+                            if (MessageBoxW(hwnd, msg_text.c_str(), L"File Integrity (SHA-256)", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+                                CopyTextToClipboardWin32(hwnd, hash);
+                                ctx->view->SetFeedbackMessage("Copied SHA-256 hash to clipboard");
+                            }
+                        } else {
+                            MessageBoxW(hwnd, Utf8ToW(sha_res.error->message).c_str(), L"Checksum Computation Error", MB_OK | MB_ICONERROR);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_REMOVE_LIST) {
+                ctx->view->ActionRemoveSelectedFromList();
+            } else if (cmd == IDM_CTX_DELETE_DISK) {
+                ShowDeleteConfirmationDialogWin32(hwnd, *ctx->view, *ctx->controller);
+            } else if (cmd == IDM_CTX_ANTIVIRUS) {
+                if (!sel.empty()) {
+                    auto rep = ctx->controller->ScanTaskFile(sel);
+                    if (rep.ok()) {
+                        std::wstring alert_info;
+                        UINT icon = MB_ICONINFORMATION;
+                        if (rep.value->status == security::ScanStatus::kClean) {
+                            alert_info = L"Antivirus scan completed: Verified clean. No threats were found.";
+                            icon = MB_ICONINFORMATION;
+                        } else if (rep.value->status == security::ScanStatus::kThreatDetected) {
+                            alert_info = L"SECURITY WARNING: A threat was detected by " +
+                                std::wstring(rep.value->scanner_name.begin(), rep.value->scanner_name.end()) +
+                                L"!\nAutomatic execution of this file is blocked.";
+                            icon = MB_ICONSTOP;
+                        } else if (rep.value->status == security::ScanStatus::kScannerError) {
+                            alert_info = L"Antivirus scan failed: The scanner encountered an error during execution.";
+                            icon = MB_ICONWARNING;
+                        } else if (rep.value->status == security::ScanStatus::kUnavailable) {
+                            alert_info = L"Antivirus scanner is unavailable on this system.";
+                            icon = MB_ICONWARNING;
+                        } else {
+                            alert_info = L"Antivirus scan was skipped or not performed.";
+                            icon = MB_ICONWARNING;
+                        }
+                        MessageBoxW(hwnd, alert_info.c_str(), L"Antivirus Scan Result", MB_OK | icon);
+                    } else {
+                        std::wstring err_msg = L"Failed to initiate antivirus scan: " +
+                            std::wstring(rep.error->message.begin(), rep.error->message.end());
+                        MessageBoxW(hwnd, err_msg.c_str(), L"Antivirus Scan Error", MB_OK | MB_ICONERROR);
+                    }
+                }
+            } else if (cmd == IDM_CTX_ZIP_PREVIEW) {
+                if (!sel.empty()) {
+                    auto t = ctx->controller->GetTask(sel);
+                    if (t.has_value()) {
+                        std::filesystem::path fp = std::filesystem::path(t->save_dir) / t->file_name;
+                        auto preview_res = ctx->controller->PreviewZipArchive(fp);
+                        if (preview_res.ok()) {
+                            std::wstring preview_info = L"Archive: " + fp.filename().wstring() + L"\n" +
+                                                        L"Files: " + std::to_wstring(preview_res.value->total_files) + L"\n" +
+                                                        L"Folders: " + std::to_wstring(preview_res.value->total_folders) + L"\n" +
+                                                        L"Total Uncompressed: " + std::to_wstring(preview_res.value->total_uncompressed_bytes / 1024) + L" KB\n" +
+                                                        (preview_res.value->is_potential_zip_bomb ? L"[ALERT: High compression ratio (Zip Bomb Risk)]\n" : L"") +
+                                                        (preview_res.value->has_zip_slip_risk ? L"[ALERT: Suspicious paths (Zip Slip Risk)]\n" : L"");
+                            MessageBoxW(hwnd, preview_info.c_str(), L"ZIP Archive Preview", MB_OK | MB_ICONINFORMATION);
+                        } else {
+                            MessageBoxW(hwnd, L"Could not read ZIP Central Directory (file may not be a valid ZIP archive).", L"ZIP Preview Error", MB_OK | MB_ICONEXCLAMATION);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_EXPORT_TASKS) {
+                auto exp_str = ctx->controller->ExportTasksData(storage::ExportFormat::kJson);
+                if (exp_str.ok()) {
+                    std::filesystem::path exp_path = PathSanitizer::GetDefaultDownloadDir() / "radium_tasks_export.json";
+                    std::ofstream ofs(exp_path);
+                    if (ofs) {
+                        ofs << exp_str.value.value();
+                        std::wstring export_info = L"Tasks successfully exported to:\n" + exp_path.wstring();
+                        MessageBoxW(hwnd, export_info.c_str(), L"Export Tasks", MB_OK | MB_ICONINFORMATION);
+                    }
+                }
+            } else if (cmd == IDM_CTX_OPEN_TORRENT) {
+                wchar_t szFile[MAX_PATH] = L"";
+                OPENFILENAMEW ofn{};
+                ofn.lStructSize = sizeof(ofn);
+                ofn.hwndOwner = hwnd;
+                ofn.lpstrFile = szFile;
+                ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
+                ofn.lpstrFilter = L"Torrent Files (*.torrent)\0*.torrent\0All Files (*.*)\0*.*\0\0";
+                ofn.nFilterIndex = 1;
+                ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+                if (GetOpenFileNameW(&ofn)) {
+                    std::string tor_path = WToUtf8(szFile);
+                    auto parsed = torrent::TorrentParser::ParseTorrentFile(tor_path);
+                    if (parsed.ok()) {
+                        auto tinfo = std::move(*parsed.value);
+                        std::string default_dir = ctx->controller->GetSettings().default_download_dir;
+                        bool start_torrent = true;
+                        if (ShowAddTorrentDialogWin32(hwnd, *ctx->view, *ctx->controller, tinfo, tor_path, default_dir,
+                                                      start_torrent, &default_dir, &start_torrent)) {
+                            TaskModel t;
+                            t.task_type = TaskType::kTorrent;
+                            t.url = tor_path;
+                            t.file_name = tinfo.name.empty() ? PathSanitizer::PathToUtf8(std::filesystem::path(tor_path).filename()) : tinfo.name;
+                            t.save_dir = default_dir;
+                            t.total_bytes = tinfo.selected_bytes();
+                            for (const auto& file : tinfo.files) {
+                                t.torrent_file_paths.push_back(file.relative_path.generic_string());
+                                t.torrent_file_selection.push_back(file.selected ? 1 : 0);
+                            }
+                            auto res = ctx->controller->AddTask(std::move(t), start_torrent, false);
+                            if (res.ok()) {
+                                ctx->view->SelectTask(res.value->task_id);
+                                ctx->view->ScrollTaskIntoView(res.value->task_id, true);
+                            }
+                        }
+                    } else {
+                        std::wstring err = L"Failed to parse torrent file:\n" + Utf8ToW(parsed.error->message);
+                        MessageBoxW(hwnd, err.c_str(), L"Invalid Torrent", MB_OK | MB_ICONERROR);
+                    }
+                }
+            } else if (cmd == IDM_CTX_TORRENT_SWARM) {
+                if (has_sel) {
+                    auto swarm = ctx->controller->GetTorrentSwarmDetails(sel);
+                    if (swarm.ok() && swarm.value) {
+                        std::wostringstream wss;
+                        wss << L"Active Peers: " << swarm.value->active_peer_count
+                            << L"\nSeeds: " << swarm.value->total_seeds
+                            << L" | Leechers: " << swarm.value->total_leechers
+                            << L"\nSequential Mode: " << (swarm.value->sequential_mode ? L"ON" : L"OFF")
+                            << L"\nTrackers (" << swarm.value->trackers.size() << L"):";
+                        for (size_t i = 0; i < (std::min<size_t>)(5, swarm.value->trackers.size()); ++i) {
+                            wss << L"\n - " << Utf8ToW(swarm.value->trackers[i].url)
+                                << L" [" << Utf8ToW(swarm.value->trackers[i].status) << L"]";
+                        }
+                        MessageBoxW(hwnd, wss.str().c_str(), L"Torrent Swarm Details", MB_OK | MB_ICONINFORMATION);
+                    } else {
+                        MessageBoxW(hwnd, L"Torrent task is not currently active in the swarm.", L"Torrent Swarm", MB_OK | MB_ICONINFORMATION);
+                    }
+                }
+            } else if (cmd == IDM_CTX_TORRENT_ADD_TRACKER) {
+                if (has_sel) {
+                    std::wstring tr_w;
+                    if (ShowSimpleInputDialogWin32(hwnd, L"Add Torrent Tracker", L"Enter tracker URL (http/udp):", L"", tr_w)) {
+                        std::string tr_url = WToUtf8(tr_w);
+                        if (!tr_url.empty()) {
+                            auto res = ctx->controller->AddTrackersToTask(sel, {tr_url});
+                            if (!res.ok() && res.error) {
+                                MessageBoxW(hwnd, Utf8ToW(res.error->message).c_str(), L"Add Tracker", MB_OK | MB_ICONWARNING);
+                            }
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_TORRENT_SEQUENTIAL) {
+                if (has_sel) {
+                    auto swarm = ctx->controller->GetTorrentSwarmDetails(sel);
+                    bool next_seq = (swarm.ok() && swarm.value) ? !swarm.value->sequential_mode : true;
+                    auto res = ctx->controller->SetTorrentSequentialMode(sel, next_seq);
+                    if (res.ok()) {
+                        MessageBoxW(hwnd, next_seq ? L"Sequential torrent mode enabled." : L"Sequential torrent mode disabled.", L"Sequential Mode", MB_OK | MB_ICONINFORMATION);
+                    } else if (res.error) {
+                        MessageBoxW(hwnd, Utf8ToW(res.error->message).c_str(), L"Sequential Mode", MB_OK | MB_ICONWARNING);
+                    }
+                }
+            } else if (cmd == IDM_CTX_CREATE_TORRENT) {
+                wchar_t srcFile[MAX_PATH] = L"";
+                OPENFILENAMEW ofnSrc{};
+                ofnSrc.lStructSize = sizeof(ofnSrc);
+                ofnSrc.hwndOwner = hwnd;
+                ofnSrc.lpstrFile = srcFile;
+                ofnSrc.nMaxFile = MAX_PATH;
+                ofnSrc.lpstrFilter = L"All Files (*.*)\0*.*\0";
+                ofnSrc.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+                if (GetOpenFileNameW(&ofnSrc)) {
+                    wchar_t outFile[MAX_PATH] = L"output.torrent";
+                    OPENFILENAMEW ofnOut{};
+                    ofnOut.lStructSize = sizeof(ofnOut);
+                    ofnOut.hwndOwner = hwnd;
+                    ofnOut.lpstrFile = outFile;
+                    ofnOut.nMaxFile = MAX_PATH;
+                    ofnOut.lpstrFilter = L"Torrent Files (*.torrent)\0*.torrent\0";
+                    ofnOut.lpstrDefExt = L"torrent";
+                    ofnOut.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+                    if (GetSaveFileNameW(&ofnOut)) {
+                        auto res = ctx->controller->CreateTorrentFile(std::filesystem::path(srcFile), std::filesystem::path(outFile));
+                        if (res.ok()) {
+                            MessageBoxW(hwnd, L"Torrent file created successfully.", L"Create Torrent", MB_OK | MB_ICONINFORMATION);
+                        } else if (res.error) {
+                            MessageBoxW(hwnd, Utf8ToW(res.error->message).c_str(), L"Create Torrent", MB_OK | MB_ICONERROR);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_SITE_GRABBER) {
+                std::string start_url = PromptTextModalWin32(hwnd, L"Site Grabber", L"Start URL (http/https):", "", ctx->view->GetPalette());
+                if (!start_url.empty()) {
+                    crawler::SiteGrabberConfig scfg;
+                    scfg.start_url = start_url;
+                    scfg.max_depth = 2;
+                    scfg.max_pages = 50;
+                    std::atomic<bool> cancel_crawl{false};
+                    auto crawl_res = ctx->view->ActionLaunchSiteGrabber(scfg, cancel_crawl);
+                    if (crawl_res.ok() && crawl_res.value) {
+                        auto groups = crawler::SiteGrabber::GroupGrabbedItems(*crawl_res.value);
+                        std::vector<std::string> batch_urls;
+                        for (const auto& grp : groups) {
+                            for (const auto& item : grp.items) {
+                                batch_urls.push_back(item.url);
+                            }
+                        }
+                        if (!batch_urls.empty()) {
+                            ctx->controller->AddBatchTasks(batch_urls, start_url, {}, {});
+                        }
+                        std::wstring info_msg = L"Site Grabber found " + std::to_wstring(crawl_res.value->size()) +
+                                                L" item(s) across " + std::to_wstring(groups.size()) + L" group(s) (including split-volume packages).";
+                        MessageBoxW(hwnd, info_msg.c_str(), L"Site Grabber", MB_OK | MB_ICONINFORMATION);
+                    } else if (crawl_res.error) {
+                        MessageBoxW(hwnd, Utf8ToW(crawl_res.error->message).c_str(), L"Site Grabber Error", MB_OK | MB_ICONWARNING);
+                    }
+                }
+            } else if (cmd == IDM_CTX_BATCH_URL) {
+                std::string tmpl = PromptTextModalWin32(hwnd, L"Batch URL Template", L"URL Template (e.g. https://host/file_[01-05].zip or /{a,b}/):", "", ctx->view->GetPalette());
+                if (!tmpl.empty()) {
+                    auto urls = crawler::SiteGrabber::ExpandBatchUrlTemplate(tmpl);
+                    if (!urls.empty()) {
+                        ctx->controller->AddBatchTasks(urls, "", {}, {});
+                    }
+                    std::wstring info_msg = L"Queued " + std::to_wstring(urls.size()) + L" URL(s) from template.";
+                    MessageBoxW(hwnd, info_msg.c_str(), L"Batch URL Expander", MB_OK | MB_ICONINFORMATION);
+                }
+            } else if (cmd == IDM_CTX_QUEUE_MANAGER) {
+                auto queues = ctx->controller->ListQueues();
+                std::wostringstream wss;
+                wss << L"Configured Queues (" << queues.size() << L"):\n";
+                for (const auto& q : queues) {
+                    wss << L" - " << Utf8ToW(q.name) << L" [" << Utf8ToW(q.queue_id)
+                        << L"] | Max Concurrent: " << q.max_concurrent_tasks
+                        << L" | Schedule: " << (q.schedule_enabled ? L"ON" : L"OFF");
+                    if (!q.start_time_local.empty() || !q.stop_time_local.empty()) {
+                        wss << L" (" << Utf8ToW(q.start_time_local) << L" - " << Utf8ToW(q.stop_time_local) << L")";
+                    }
+                    wss << L"\n";
+                }
+                wss << L"\nEnter a new Queue ID to create/update (or Cancel):";
+                std::string qname = PromptTextModalWin32(hwnd, L"Multi-Queue Manager", wss.str(), "", ctx->view->GetPalette());
+                if (!qname.empty()) {
+                    QueueConfig qc;
+                    qc.queue_id = PathSanitizer::SanitizeFileName(qname);
+                    qc.name = qname;
+                    qc.max_concurrent_tasks = 2;
+                    ctx->controller->UpsertQueue(qc);
+                    MessageBoxW(hwnd, L"Queue saved.", L"Multi-Queue Manager", MB_OK | MB_ICONINFORMATION);
+                }
+            } else if (cmd == IDM_CTX_DROP_TARGET) {
+                if (ctx->hDropTargetWnd && IsWindow(ctx->hDropTargetWnd)) {
+                    ShowWindow(ctx->hDropTargetWnd, IsWindowVisible(ctx->hDropTargetWnd) ? SW_HIDE : SW_SHOW);
+                } else {
+                    ctx->hDropTargetWnd = CreateWindowExW(
+                        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                        L"STATIC", L"Radium Drop Target\n(Drop URL or .torrent)",
+                        WS_POPUP | WS_BORDER | WS_VISIBLE | SS_CENTER,
+                        120, 120, 180, 56, hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+                    if (ctx->hDropTargetWnd) {
+                        platform::WindowsIntegrations::RegisterWindowDropTarget(ctx->hDropTargetWnd, [hwnd, ctx](const std::string& dropped) {
+                            TaskModel t;
+                            t.url = dropped;
+                            ctx->controller->AddTask(std::move(t), true);
+                            InvalidateRect(hwnd, nullptr, FALSE);
+                        });
+                    }
+                }
+            } else if (cmd == IDM_CTX_TRAY_PROGRESS) {
+                auto tasks = ctx->controller->ListTasks();
+                size_t active_n = 0;
+                uint64_t total_bps = 0;
+                std::wostringstream wss;
+                for (const auto& t : tasks) {
+                    if (t.state == TaskState::kDownloading || t.state == TaskState::kProbing || t.state == TaskState::kMuxing) {
+                        ++active_n;
+                        total_bps += t.speed_bps;
+                        wss << L" - " << Utf8ToW(t.file_name) << L" (" << t.downloaded_bytes << L"/" << t.total_bytes << L" B)\n";
+                    }
+                }
+                std::wstring hdr = L"Active Transfers: " + std::to_wstring(active_n) + L" (" + std::to_wstring(total_bps / 1024) + L" KiB/s)\n";
+                MessageBoxW(hwnd, (hdr + wss.str()).c_str(), L"Radium Transfer Panel", MB_OK | MB_ICONINFORMATION);
+            } else if (cmd == IDM_CTX_EXPORT_EF2) {
+                wchar_t szFile[MAX_PATH] = L"radium_tasks.ef2";
+                OPENFILENAMEW ofn{};
+                ofn.lStructSize = sizeof(ofn);
+                ofn.hwndOwner = hwnd;
+                ofn.lpstrFile = szFile;
+                ofn.nMaxFile = MAX_PATH;
+                ofn.lpstrFilter = L"IDM Export File (*.ef2)\0*.ef2\0All Files (*.*)\0*.*\0";
+                ofn.lpstrDefExt = L"ef2";
+                ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+                if (GetSaveFileNameW(&ofn)) {
+                    auto tasks = ctx->controller->ListTasks();
+                    auto res = storage::TaskImportExport::ExportTasksToFile(tasks, std::filesystem::path(szFile), storage::ExportFormat::kEf2, false);
+                    MessageBoxW(hwnd, res.ok() ? L"Exported .ef2 successfully." : Utf8ToW(res.error->message).c_str(), L"Export .ef2", MB_OK | (res.ok() ? MB_ICONINFORMATION : MB_ICONERROR));
+                }
+            } else if (cmd == IDM_CTX_IMPORT_EF2) {
+                wchar_t szFile[MAX_PATH] = L"";
+                OPENFILENAMEW ofn{};
+                ofn.lStructSize = sizeof(ofn);
+                ofn.hwndOwner = hwnd;
+                ofn.lpstrFile = szFile;
+                ofn.nMaxFile = MAX_PATH;
+                ofn.lpstrFilter = L"IDM Export File (*.ef2)\0*.ef2\0All Files (*.*)\0*.*\0";
+                ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+                if (GetOpenFileNameW(&ofn)) {
+                    std::ifstream ifs(std::filesystem::path(szFile), std::ios::binary);
+                    if (ifs) {
+                        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+                        auto imp = storage::TaskImportExport::ImportFromEf2(content);
+                        if (imp.ok() && imp.value) {
+                            std::vector<std::string> urls;
+                            urls.reserve(imp.value->size());
+                            for (const auto& t : *imp.value) urls.push_back(t.url);
+                            if (!urls.empty()) ctx->controller->AddBatchTasks(urls, "", {}, {});
+                            std::wstring info_msg = L"Imported " + std::to_wstring(imp.value->size()) + L" task(s) from .ef2.";
+                            MessageBoxW(hwnd, info_msg.c_str(), L"Import .ef2", MB_OK | MB_ICONINFORMATION);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_IMPORT_TASKS) {
+                wchar_t szFile[MAX_PATH] = L"";
+                OPENFILENAMEW ofn{};
+                ofn.lStructSize = sizeof(ofn);
+                ofn.hwndOwner = hwnd;
+                ofn.lpstrFile = szFile;
+                ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
+                ofn.lpstrFilter = L"Task Files (*.json;*.csv;*.txt)\0*.json;*.csv;*.txt\0JSON Files (*.json)\0*.json\0CSV / Text Files (*.csv;*.txt)\0*.csv;*.txt\0All Files (*.*)\0*.*\0";
+                ofn.nFilterIndex = 1;
+                ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+                if (GetOpenFileNameW(&ofn)) {
+                    std::filesystem::path imp_path(szFile);
+                    std::ifstream ifs(imp_path, std::ios::binary);
+                    if (ifs) {
+                        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+                        storage::ExportFormat fmt = (imp_path.extension() == ".json") ? storage::ExportFormat::kJson : storage::ExportFormat::kCsv;
+                        auto imp_res = ctx->controller->ImportTasksData(content, fmt);
+                        if (imp_res.ok()) {
+                            std::wstring ok_msg = L"Successfully imported " + std::to_wstring(*imp_res.value) + L" task(s).";
+                            MessageBoxW(hwnd, ok_msg.c_str(), L"Import Tasks", MB_OK | MB_ICONINFORMATION);
+                        } else {
+                            std::wstring err = L"Failed to import tasks: " + Utf8ToW(imp_res.error->message);
+                            MessageBoxW(hwnd, err.c_str(), L"Import Error", MB_OK | MB_ICONERROR);
+                        }
+                    }
+                }
+            } else if (cmd == IDM_CTX_SETTINGS) ctx->view->OpenSettingsCenter(SettingsCategory::kGeneral);
+            else if (cmd == IDM_CTX_BROWSER_STAT) ctx->view->OpenSettingsCenter(SettingsCategory::kBrowserIntegration);
+            else if (cmd == IDM_CTX_STARTUP_LOG) ShowStartupLogDialogWin32(hwnd, *ctx->controller, ctx->view->GetPalette());
+            else if (cmd == IDM_CTX_ABOUT) ctx->view->OpenSettingsCenter(SettingsCategory::kAboutAndDiagnostics);
+            InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void ShowGlobalToolsMenuWin32(HWND hwnd, Win32WindowContext* ctx, POINT screen_pt) {
+    if (!ctx || !ctx->view) return;
+    HMENU hMenu = CreatePopupMenu();
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SITE_GRABBER, L"Site Grabber && Link Crawler...");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_BATCH_URL, L"Add Batch URL Template ([01-10], {a,b})...");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_QUEUE_MANAGER, L"Multi-Queue && Schedule Manager...");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_DROP_TARGET, L"Show Floating Drop Target");
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_TRAY_PROGRESS, L"Show Active Transfer Summary");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+    HMENU hImportExport = CreatePopupMenu();
+    AppendMenuW(hImportExport, MF_STRING, IDM_CTX_IMPORT_TASKS, L"Import Tasks from File...");
+    AppendMenuW(hImportExport, MF_STRING, IDM_CTX_EXPORT_TASKS, L"Export Tasks (JSON / CSV)...");
+    AppendMenuW(hImportExport, MF_STRING, IDM_CTX_EXPORT_EF2, L"Export Tasks to IDM (.ef2)...");
+    AppendMenuW(hImportExport, MF_STRING, IDM_CTX_IMPORT_EF2, L"Import Tasks from IDM (.ef2)...");
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hImportExport), L"Import / Export Tasks");
+
+    HMENU hTorrentTools = CreatePopupMenu();
+    AppendMenuW(hTorrentTools, MF_STRING, IDM_CTX_OPEN_TORRENT, L"Open Torrent File...");
+    AppendMenuW(hTorrentTools, MF_STRING, IDM_CTX_CREATE_TORRENT, L"Create Torrent File...");
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hTorrentTools), L"Torrent Tools");
+
+    HMENU hDiag = CreatePopupMenu();
+    AppendMenuW(hDiag, MF_STRING, IDM_CTX_BROWSER_STAT, L"Browser Integration Diagnostics...");
+    if (security::IsCurrentUserLocalAdmin()) {
+        AppendMenuW(hDiag, MF_STRING, IDM_CTX_STARTUP_LOG, L"Download Startup Log (Admin)...");
+    }
+    AppendMenuW(hDiag, MF_STRING, IDM_CTX_ABOUT, L"About Radium Download Manager...");
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hDiag), L"Diagnostics && Logs");
+
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Settings && Configuration (Ctrl+,)...");
+
+    int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, screen_pt.x, screen_pt.y, 0, hwnd, nullptr);
+    DestroyMenu(hMenu);
+    if (cmd != 0) {
+        ExecuteContextCommandWin32(hwnd, ctx, cmd, std::nullopt);
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+}
+
 LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     auto* ctx = reinterpret_cast<Win32WindowContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (msg == WM_NCCREATE) {
@@ -10090,10 +11405,22 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             ctx->taskbar_info_initialized = false;
             ctx->last_taskbar_info = {};
 
-            // Initialize COM for ITaskbarList3 (apartment-threaded, UI thread)
-            HRESULT hr_com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+            // Initialize OLE/COM for ITaskbarList3 and IDropTarget (apartment-threaded, UI thread)
+            HRESULT hr_ole = OleInitialize(nullptr);
+            ctx->ole_initialized = SUCCEEDED(hr_ole);
+            HRESULT hr_com = ctx->ole_initialized ? S_OK : CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
             ctx->com_initialized = SUCCEEDED(hr_com) || (hr_com == RPC_E_CHANGED_MODE);
             if (ctx->com_initialized) {
+                platform::WindowsIntegrations::RegisterWindowDropTarget(hwnd, [hwnd, ctx](const std::string& dropped) {
+                    if (dropped.rfind("http://", 0) == 0 || dropped.rfind("https://", 0) == 0 ||
+                        dropped.rfind("ftp://", 0) == 0 || dropped.rfind("ftps://", 0) == 0 ||
+                        dropped.rfind("magnet:?", 0) == 0) {
+                        TaskModel t;
+                        t.url = dropped;
+                        ctx->controller->AddTask(std::move(t), true);
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                    }
+                });
                 ITaskbarList3* pTbl = nullptr;
                 HRESULT hr_tbl = CoCreateInstance(
                     CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
@@ -10120,12 +11447,16 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             if (ctx->hSearchEdit) {
                 ApplyNativeEditTheme(ctx->hSearchEdit, false);
             }
+            if (ctx->controller->GetSettings().monitor_clipboard) {
+                ctx->clipboard_listener_added = (AddClipboardFormatListener(hwnd) != FALSE);
+            }
+            ctx->hotkey_registered = (RegisterHotKey(hwnd, IDHOT_SHOW_RADIUM, MOD_CONTROL | MOD_ALT, 'R') != FALSE);
             int edit_font_sz = DesignSystem::ScaleForDpi(15, ctx->view->GetMetrics().dpi);
-            HFONT hEditFont = CreateFontW(
+            ctx->hEditFont = CreateFontW(
                 -edit_font_sz, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-            SendMessageW(ctx->hSearchEdit, WM_SETFONT, reinterpret_cast<WPARAM>(hEditFont), TRUE);
+            SendMessageW(ctx->hSearchEdit, WM_SETFONT, reinterpret_cast<WPARAM>(ctx->hEditFont), TRUE);
             SendMessageW(ctx->hSearchEdit, EM_SETCUEBANNER, FALSE, reinterpret_cast<LPARAM>(L"Search downloads..."));
             if (ctx->hSearchEdit) {
                 SetWindowLongPtrW(ctx->hSearchEdit, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
@@ -10139,7 +11470,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         case WM_CTLCOLORSTATIC: {
             HDC hdcEdit = reinterpret_cast<HDC>(wParam);
             HWND hCtl = reinterpret_cast<HWND>(lParam);
-            if (hCtl == ctx->hSearchEdit) {
+            if (hCtl == ctx->hSearchEdit || hCtl == ctx->hConflictRenameEdit) {
                 const auto& palette = ctx->view->GetPalette();
                 SetTextColor(hdcEdit, palette.text_primary.ToWin32ColorRef());
                 ColorRgba bg_col = palette.surface_elevated;
@@ -10297,7 +11628,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 }
             }
 
-            if (old_tb != new_tb || old_sb != new_sb || geom.theme_button_rect.Contains(x, y)) {
+            if (old_tb != new_tb || old_sb != new_sb || geom.theme_button_rect.Contains(x, y) || geom.tools_button_rect.Contains(x, y)) {
                 RECT tb_rc = ToWinRect(geom.toolbar_rect);
                 InvalidateRect(hwnd, &tb_rc, FALSE);
             }
@@ -10395,6 +11726,12 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         }
         case WM_MOUSEWHEEL: {
             short zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+            if (ctx->view->IsSettingsCenterOpen()) {
+                int delta_px = (zDelta > 0) ? -48 : 48;
+                ctx->view->ScrollSettingsBy(delta_px);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             int rows_to_scroll = (zDelta > 0) ? -3 : 3;
             ctx->view->ScrollBy(rows_to_scroll);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -10408,6 +11745,9 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             int x = GET_X_LPARAM(lParam);
             int y = GET_Y_LPARAM(lParam);
             if (!ctx->conflict_dialog_task_id.empty()) {
+                if (ctx->conflict_dialog_processing) {
+                    return 0;
+                }
                 RECT cr{}; GetClientRect(hwnd, &cr);
                 auto lay = ComputeConflictDialogLayout(cr.right, cr.bottom, GetDpiForWindow(hwnd));
                 auto inside = [x, y](const RECT& r) { return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; };
@@ -10474,6 +11814,14 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 InvalidateRect(hwnd, nullptr, TRUE);
                 return 0;
             }
+            if (hit.type == HitTargetType::kToolsMenuButton && msg == WM_LBUTTONDOWN) {
+                geom = ctx->view->ComputeLayoutGeometry(scroll_offset);
+                POINT pt{geom.tools_button_rect.left, geom.tools_button_rect.bottom + 2};
+                ClientToScreen(hwnd, &pt);
+                ShowGlobalToolsMenuWin32(hwnd, ctx, pt);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
 
             // Track pressed toolbar button for press animation feedback
             if (msg == WM_LBUTTONDOWN) {
@@ -10523,6 +11871,22 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         hit.task_id == "check_for_updates") {
                         StartGitHubUpdateCheck(hwnd);
                         InvalidateRect(hwnd, nullptr, FALSE);
+                        return 0;
+                    }
+                    if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
+                        hit.task_id == "download_browser_extension") {
+                        ShowExtensionSetupDialogWin32(hwnd, *ctx->controller, ctx->view->GetPalette(), false /* is_first_launch */);
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                        return 0;
+                    }
+                    if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
+                        hit.task_id == "open_developer_github") {
+                        ShellExecuteW(hwnd, L"open", L"https://github.com/alve33", nullptr, nullptr, SW_SHOWNORMAL);
+                        return 0;
+                    }
+                    if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
+                        hit.task_id == "open_github_repo") {
+                        ShellExecuteW(hwnd, L"open", L"https://github.com/alve33/Radium-Download-Manager", nullptr, nullptr, SW_SHOWNORMAL);
                         return 0;
                     }
                     if (clicked_itm && clicked_itm->control_type == SettingControlType::kDropdown) {
@@ -10794,340 +12158,105 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         case WM_CONTEXTMENU: {
             if (ctx->view->IsSettingsCenterOpen()) return 0;
             POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            POINT client_pt = pt;
-            ScreenToClient(hwnd, &client_pt);
-            size_t scroll_offset = ctx->view->GetScrollOffset();
-            auto hit = ctx->view->HitTestPoint(client_pt.x, client_pt.y, scroll_offset);
-            if (hit.type == HitTargetType::kTaskRow || hit.type == HitTargetType::kTaskRowActionButton) {
-                ctx->view->SelectTask(hit.task_id);
+            const bool from_keyboard = (pt.x == -1 && pt.y == -1);
+            if (!from_keyboard) {
+                POINT client_pt = pt;
+                ScreenToClient(hwnd, &client_pt);
+                size_t scroll_offset = ctx->view->GetScrollOffset();
+                auto hit = ctx->view->HitTestPoint(client_pt.x, client_pt.y, scroll_offset);
+                if (hit.type == HitTargetType::kTaskRow || hit.type == HitTargetType::kTaskRowActionButton) {
+                    ctx->view->SelectTask(hit.task_id);
+                } else {
+                    ShowGlobalToolsMenuWin32(hwnd, ctx, pt);
+                    return 0;
+                }
             }
-            auto tb = ctx->view->ComputeToolbarState();
+
             std::string sel = ctx->view->GetSelectedTaskId();
             auto sel_task = sel.empty() ? std::nullopt : ctx->controller->GetTask(sel);
-            bool has_sel = sel_task.has_value();
-            bool is_completed = (has_sel && sel_task->state == TaskState::kCompleted);
+            if (!sel_task.has_value()) {
+                if (from_keyboard) {
+                    RECT wr{};
+                    GetWindowRect(hwnd, &wr);
+                    pt = {wr.left + 80, wr.top + 80};
+                }
+                ShowGlobalToolsMenuWin32(hwnd, ctx, pt);
+                return 0;
+            }
+            if (from_keyboard) {
+                RECT wr{};
+                GetWindowRect(hwnd, &wr);
+                pt = {wr.left + 140, wr.top + 140};
+            }
+
+            auto tb = ctx->view->ComputeToolbarState();
+            bool is_completed = (sel_task->state == TaskState::kCompleted);
 
             HMENU hMenu = CreatePopupMenu();
 
-            // Group 1: Open / Navigate
+            // 1. Primary Open Actions
             AppendMenuW(hMenu, tb.can_open_file ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_OPEN_FILE, L"Open File (Enter)");
             AppendMenuW(hMenu, tb.can_open_folder ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_OPEN_FOLDER, L"Show in Folder");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-            // Group 2: Transfer Controls
-            AppendMenuW(hMenu, tb.can_start ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_START, L"Start Download");
-            AppendMenuW(hMenu, tb.can_pause ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_PAUSE, L"Pause Download");
-            AppendMenuW(hMenu, tb.can_resume ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_RESUME, L"Resume Download");
-            AppendMenuW(hMenu, tb.can_retry ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_RETRY, L"Retry Download (F5)");
-            AppendMenuW(hMenu, tb.can_cancel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_CANCEL, L"Cancel Download");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            // 2. State-Relevant Transfer Controls
+            if (tb.can_start || tb.can_resume || tb.can_pause || tb.can_retry || tb.can_cancel) {
+                AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+                if (tb.can_start)  AppendMenuW(hMenu, MF_STRING, IDM_CTX_START, L"Start Download");
+                if (tb.can_resume) AppendMenuW(hMenu, MF_STRING, IDM_CTX_RESUME, L"Resume Download");
+                if (tb.can_pause)  AppendMenuW(hMenu, MF_STRING, IDM_CTX_PAUSE, L"Pause Download");
+                if (tb.can_retry)  AppendMenuW(hMenu, MF_STRING, IDM_CTX_RETRY, L"Retry Download (F5)");
+                if (tb.can_cancel) AppendMenuW(hMenu, MF_STRING, IDM_CTX_CANCEL, L"Cancel Download");
+            }
 
-            // Group 3: Task Management & URLs
-            AppendMenuW(hMenu, has_sel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_RENAME, L"Rename File...");
-            AppendMenuW(hMenu, has_sel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_MOVE_TO, L"Move To Folder...");
-            AppendMenuW(hMenu, has_sel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_COPY_URL, L"Copy URL to Clipboard");
-            AppendMenuW(hMenu, has_sel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_REFRESH_URL, L"Change / Refresh URL...");
-            AppendMenuW(hMenu, has_sel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_ADD_MIRROR, L"Add Mirror URL...");
-            AppendMenuW(hMenu, has_sel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_SCHEDULE, L"Schedule Download...");
-            AppendMenuW(hMenu, has_sel ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_SPEED_LIMIT, L"Set Speed Limit...");
+            // 3. File & URL Actions
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_RENAME, L"Rename File...");
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_MOVE_TO, L"Move To Folder...");
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_COPY_URL, L"Copy URL to Clipboard");
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_REFRESH_URL, L"Change / Refresh URL...");
+            AppendMenuW(hMenu, MF_STRING, IDM_CTX_ADD_MIRROR, L"Add Mirror URL...");
 
-            // Group 4: Integrity & Security
-            AppendMenuW(hMenu, (has_sel && is_completed) ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_FILE_INTEGRITY, L"File Integrity (SHA-256 Checksum)...");
-            AppendMenuW(hMenu, tb.can_open_file ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_ANTIVIRUS, L"Scan with Antivirus (Windows Defender)...");
-            AppendMenuW(hMenu, tb.can_open_file ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_ZIP_PREVIEW, L"Preview Archive Contents (ZIP)...");
+            HMENU hSchedMenu = CreatePopupMenu();
+            AppendMenuW(hSchedMenu, MF_STRING, IDM_CTX_SCHEDULE, L"Schedule Download...");
+            AppendMenuW(hSchedMenu, MF_STRING, IDM_CTX_SPEED_LIMIT, L"Set Speed Limit...");
+            AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSchedMenu), L"Schedule && Speed Limit");
+
+            // 4. More Tools Submenu
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            HMENU hToolsSub = CreatePopupMenu();
+            AppendMenuW(hToolsSub, is_completed ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_FILE_INTEGRITY, L"File Integrity (SHA-256)...");
+            AppendMenuW(hToolsSub, tb.can_open_file ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_ANTIVIRUS, L"Scan with Antivirus...");
+            std::string lower_name = ToLower(sel_task->file_name);
+            bool is_zip = (lower_name.size() >= 4 && lower_name.compare(lower_name.size() - 4, 4, ".zip") == 0);
+            if (is_zip) {
+                AppendMenuW(hToolsSub, tb.can_open_file ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_ZIP_PREVIEW, L"Preview Archive Contents (ZIP)...");
+            }
+            AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hToolsSub), L"More Tools");
 
-            // Group 5: Removal & Deletion
+            // 5. Conditional Torrent Submenu (only for BitTorrent tasks)
+            std::string lower_url = ToLower(sel_task->url);
+            bool is_torrent = (sel_task->task_type == TaskType::kTorrent ||
+                               lower_url.rfind("magnet:?", 0) == 0 ||
+                               lower_url.find(".torrent") != std::string::npos ||
+                               (lower_name.size() >= 8 && lower_name.compare(lower_name.size() - 8, 8, ".torrent") == 0));
+            if (is_torrent) {
+                HMENU hTorrentSub = CreatePopupMenu();
+                AppendMenuW(hTorrentSub, MF_STRING, IDM_CTX_TORRENT_SWARM, L"Torrent Swarm && Trackers...");
+                AppendMenuW(hTorrentSub, MF_STRING, IDM_CTX_TORRENT_ADD_TRACKER, L"Add Torrent Tracker...");
+                AppendMenuW(hTorrentSub, MF_STRING, IDM_CTX_TORRENT_SEQUENTIAL, L"Toggle Sequential Torrent Mode");
+                AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hTorrentSub), L"Torrent");
+            }
+
+            // 6. Removal
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(hMenu, tb.can_remove ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_REMOVE_LIST, L"Remove from List (Delete)");
             AppendMenuW(hMenu, tb.can_delete_file ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_DELETE_DISK, L"Delete File... (Shift+Delete)");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-
-            // Group 6: Tasks Import/Export & Application
-            AppendMenuW(hMenu, MF_STRING, IDM_CTX_EXPORT_TASKS, L"Export Tasks (JSON / CSV)...");
-            AppendMenuW(hMenu, MF_STRING, IDM_CTX_OPEN_TORRENT, L"Open Torrent File...");
-                AppendMenuW(hMenu, MF_STRING, IDM_CTX_IMPORT_TASKS, L"Import Tasks from File...");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, IDM_CTX_SETTINGS, L"Settings & Configuration (Ctrl+,)...");
-            AppendMenuW(hMenu, MF_STRING, IDM_CTX_BROWSER_STAT, L"Browser Integration Diagnostics...");
-            if (security::IsCurrentUserLocalAdmin()) {
-                AppendMenuW(hMenu, MF_STRING, IDM_CTX_STARTUP_LOG, L"Download Startup Log (Admin)...");
-            }
-            AppendMenuW(hMenu, MF_STRING, IDM_CTX_ABOUT, L"About Radium Download Manager...");
 
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, nullptr);
             DestroyMenu(hMenu);
-            if (cmd == IDM_CTX_START) ctx->view->ActionStartSelected();
-            else if (cmd == IDM_CTX_PAUSE) ctx->view->ActionPauseSelected();
-            else if (cmd == IDM_CTX_RESUME) ctx->view->ActionResumeSelected();
-            else if (cmd == IDM_CTX_RETRY) ctx->view->ActionRetrySelected();
-            else if (cmd == IDM_CTX_CANCEL) ctx->view->ActionCancelSelected();
-            else if (cmd == IDM_CTX_OPEN_FILE) ctx->view->ActionOpenCompletedFile(false);
-            else if (cmd == IDM_CTX_OPEN_FOLDER) ctx->view->ActionOpenDestinationFolder(false);
-            else if (cmd == IDM_CTX_RENAME) {
-                if (has_sel) {
-                    std::wstring new_name;
-                    if (ShowSimpleInputDialogWin32(hwnd, L"Rename Download", L"Enter new file name:", Utf8ToW(sel_task->file_name), new_name)) {
-                        std::string clean_name = PathSanitizer::SanitizeFileName(WToUtf8(new_name));
-                        if (!clean_name.empty()) {
-                            std::filesystem::path old_p = std::filesystem::path(sel_task->save_dir) / sel_task->file_name;
-                            std::filesystem::path new_p = std::filesystem::path(sel_task->save_dir) / clean_name;
-                            std::error_code ec;
-                            if (std::filesystem::exists(old_p, ec)) {
-                                std::filesystem::rename(old_p, new_p, ec);
-                            }
-                            sel_task->file_name = clean_name;
-                            ctx->controller->UpdateTask(*sel_task);
-                            ctx->view->SetFeedbackMessage("Renamed download to " + clean_name);
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_MOVE_TO) {
-                if (has_sel) {
-                    std::string chosen_dir = sel_task->save_dir;
-                    if (SelectFolderWithDialogWin32(hwnd, chosen_dir) && chosen_dir != sel_task->save_dir) {
-                        std::filesystem::path old_p = std::filesystem::path(sel_task->save_dir) / sel_task->file_name;
-                        std::filesystem::path new_p = std::filesystem::path(chosen_dir) / sel_task->file_name;
-                        std::error_code ec;
-                        if (std::filesystem::exists(old_p, ec)) {
-                            std::filesystem::rename(old_p, new_p, ec);
-                        }
-                        sel_task->save_dir = chosen_dir;
-                        ctx->controller->UpdateTask(*sel_task);
-                        ctx->view->SetFeedbackMessage("Moved download to " + chosen_dir);
-                    }
-                }
-            } else if (cmd == IDM_CTX_COPY_URL) {
-                if (has_sel) {
-                    CopyTextToClipboardWin32(hwnd, sel_task->url);
-                    ctx->view->SetFeedbackMessage("Copied download URL to clipboard");
-                }
-            } else if (cmd == IDM_CTX_REFRESH_URL) {
-                if (has_sel) {
-                    std::wstring new_url_w;
-                    if (ShowSimpleInputDialogWin32(hwnd, L"Refresh / Change URL", L"Enter updated download URL (e.g. refreshed signed link):", Utf8ToW(sel_task->url), new_url_w)) {
-                        std::string new_u = WToUtf8(new_url_w);
-                        while (!new_u.empty() && (new_u.front() == ' ' || new_u.front() == '\t')) new_u.erase(0, 1);
-                        while (!new_u.empty() && (new_u.back() == ' ' || new_u.back() == '\t')) new_u.pop_back();
-                        if (!new_u.empty()) {
-                            auto r = ctx->controller->RefreshTaskUrl(sel, new_u);
-                            if (r.ok()) {
-                                ctx->view->SetFeedbackMessage("Updated download URL");
-                            } else {
-                                MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Failed to Update URL", MB_OK | MB_ICONERROR);
-                            }
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_ADD_MIRROR) {
-                if (has_sel) {
-                    std::wstring mirror_w;
-                    if (ShowSimpleInputDialogWin32(hwnd, L"Add Mirror URL", L"Enter alternate download mirror URL:", L"", mirror_w)) {
-                        std::string mir = WToUtf8(mirror_w);
-                        while (!mir.empty() && (mir.front() == ' ' || mir.front() == '\t')) mir.erase(0, 1);
-                        while (!mir.empty() && (mir.back() == ' ' || mir.back() == '\t')) mir.pop_back();
-                        if (!mir.empty()) {
-                            auto r = ctx->controller->AddAlternateUrl(sel, mir);
-                            if (r.ok()) {
-                                ctx->view->SetFeedbackMessage("Added alternate mirror URL");
-                            } else {
-                                MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Failed to Add Mirror", MB_OK | MB_ICONERROR);
-                            }
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_SPEED_LIMIT) {
-                if (has_sel) {
-                    uint64_t cur_limit = sel_task->speed_limit_bps;
-                    std::wstring init_val = (cur_limit > 0) ? std::to_wstring(cur_limit / 1024) : L"0";
-                    std::wstring val_w;
-                    if (ShowSimpleInputDialogWin32(hwnd, L"Set Download Speed Limit", L"Enter speed limit in KB/s (0 = Unlimited):", init_val, val_w)) {
-                        std::string val_str = WToUtf8(val_w);
-                        try {
-                            uint64_t kbps = std::stoull(val_str);
-                            uint64_t bps = kbps * 1024ULL;
-                            auto r = ctx->controller->SetTaskSpeedLimit(sel, bps);
-                            if (r.ok()) {
-                                ctx->view->SetFeedbackMessage((bps == 0) ? "Task speed limit set to Unlimited" : ("Task speed limit set to " + DesktopView::FormatSpeed(bps)));
-                            } else {
-                                MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Speed Limit Failed", MB_OK | MB_ICONWARNING);
-                            }
-                        } catch (...) {
-                            MessageBoxW(hwnd, L"Invalid speed limit number entered.", L"Invalid Input", MB_OK | MB_ICONWARNING);
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_SCHEDULE) {
-                if (has_sel) {
-                    std::wstring init_t = sel_task->schedule_time_local.empty() ? L"23:00" : Utf8ToW(sel_task->schedule_time_local);
-                    std::wstring time_w;
-                    if (ShowSimpleInputDialogWin32(hwnd, L"Schedule Download", L"Enter scheduled start time (24-hour HH:MM format, e.g. 23:00):", init_t, time_w)) {
-                        std::string t_str = WToUtf8(time_w);
-                        auto r = ctx->controller->SetTaskSchedule(sel, t_str, "");
-                        if (r.ok()) {
-                            ctx->view->SetFeedbackMessage("Scheduled download for " + t_str);
-                        } else {
-                            MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Schedule Failed", MB_OK | MB_ICONWARNING);
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_FILE_INTEGRITY) {
-                if (has_sel) {
-                    std::filesystem::path fp = std::filesystem::path(sel_task->save_dir) / sel_task->file_name;
-                    std::error_code ec;
-                    if (!std::filesystem::exists(fp, ec)) {
-                        MessageBoxW(hwnd, L"Completed file does not exist on disk.", L"File Missing", MB_OK | MB_ICONWARNING);
-                    } else {
-                        auto sha_res = CryptoUtils::ComputeFileSha256Hex(fp);
-                        if (sha_res.ok()) {
-                            std::string hash = *sha_res.value;
-                            std::wstring msg_text = L"File: " + Utf8ToW(sel_task->file_name) + L"\n"
-                                                  + L"SHA-256 Checksum:\n" + Utf8ToW(hash) + L"\n\n"
-                                                  + L"Copy checksum to clipboard?";
-                            if (MessageBoxW(hwnd, msg_text.c_str(), L"File Integrity (SHA-256)", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
-                                CopyTextToClipboardWin32(hwnd, hash);
-                                ctx->view->SetFeedbackMessage("Copied SHA-256 hash to clipboard");
-                            }
-                        } else {
-                            MessageBoxW(hwnd, Utf8ToW(sha_res.error->message).c_str(), L"Checksum Computation Error", MB_OK | MB_ICONERROR);
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_REMOVE_LIST) {
-                ctx->view->ActionRemoveSelectedFromList();
-            } else if (cmd == IDM_CTX_DELETE_DISK) {
-                ShowDeleteConfirmationDialogWin32(hwnd, *ctx->view, *ctx->controller);
-            } else if (cmd == IDM_CTX_ANTIVIRUS) {
-                if (!sel.empty()) {
-                    auto rep = ctx->controller->ScanTaskFile(sel);
-                    if (rep.ok()) {
-                        std::wstring alert_info;
-                        UINT icon = MB_ICONINFORMATION;
-                        if (rep.value->status == security::ScanStatus::kClean) {
-                            alert_info = L"Antivirus scan completed: Verified clean. No threats were found.";
-                            icon = MB_ICONINFORMATION;
-                        } else if (rep.value->status == security::ScanStatus::kThreatDetected) {
-                            alert_info = L"SECURITY WARNING: A threat was detected by " +
-                                std::wstring(rep.value->scanner_name.begin(), rep.value->scanner_name.end()) +
-                                L"!\nAutomatic execution of this file is blocked.";
-                            icon = MB_ICONSTOP;
-                        } else if (rep.value->status == security::ScanStatus::kScannerError) {
-                            alert_info = L"Antivirus scan failed: The scanner encountered an error during execution.";
-                            icon = MB_ICONWARNING;
-                        } else if (rep.value->status == security::ScanStatus::kUnavailable) {
-                            alert_info = L"Antivirus scanner is unavailable on this system.";
-                            icon = MB_ICONWARNING;
-                        } else {
-                            alert_info = L"Antivirus scan was skipped or not performed.";
-                            icon = MB_ICONWARNING;
-                        }
-                        MessageBoxW(hwnd, alert_info.c_str(), L"Antivirus Scan Result", MB_OK | icon);
-                    } else {
-                        std::wstring err_msg = L"Failed to initiate antivirus scan: " +
-                            std::wstring(rep.error->message.begin(), rep.error->message.end());
-                        MessageBoxW(hwnd, err_msg.c_str(), L"Antivirus Scan Error", MB_OK | MB_ICONERROR);
-                    }
-                }
-            } else if (cmd == IDM_CTX_ZIP_PREVIEW) {
-                if (!sel.empty()) {
-                    auto t = ctx->controller->GetTask(sel);
-                    if (t.has_value()) {
-                        std::filesystem::path fp = std::filesystem::path(t->save_dir) / t->file_name;
-                        auto preview_res = ctx->controller->PreviewZipArchive(fp);
-                        if (preview_res.ok()) {
-                            std::wstring preview_info = L"Archive: " + fp.filename().wstring() + L"\n" +
-                                                        L"Files: " + std::to_wstring(preview_res.value->total_files) + L"\n" +
-                                                        L"Folders: " + std::to_wstring(preview_res.value->total_folders) + L"\n" +
-                                                        L"Total Uncompressed: " + std::to_wstring(preview_res.value->total_uncompressed_bytes / 1024) + L" KB\n" +
-                                                        (preview_res.value->is_potential_zip_bomb ? L"[ALERT: High compression ratio (Zip Bomb Risk)]\n" : L"") +
-                                                        (preview_res.value->has_zip_slip_risk ? L"[ALERT: Suspicious paths (Zip Slip Risk)]\n" : L"");
-                            MessageBoxW(hwnd, preview_info.c_str(), L"ZIP Archive Preview", MB_OK | MB_ICONINFORMATION);
-                        } else {
-                            MessageBoxW(hwnd, L"Could not read ZIP Central Directory (file may not be a valid ZIP archive).", L"ZIP Preview Error", MB_OK | MB_ICONEXCLAMATION);
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_EXPORT_TASKS) {
-                auto exp_str = ctx->controller->ExportTasksData(storage::ExportFormat::kJson);
-                if (exp_str.ok()) {
-                    std::filesystem::path exp_path = PathSanitizer::GetDefaultDownloadDir() / "radium_tasks_export.json";
-                    std::ofstream ofs(exp_path);
-                    if (ofs) {
-                        ofs << exp_str.value.value();
-                        std::wstring export_info = L"Tasks successfully exported to:\n" + exp_path.wstring();
-                        MessageBoxW(hwnd, export_info.c_str(), L"Export Tasks", MB_OK | MB_ICONINFORMATION);
-                    }
-                }
-            } else if (cmd == IDM_CTX_OPEN_TORRENT) {
-                wchar_t szFile[MAX_PATH] = L"";
-                OPENFILENAMEW ofn{};
-                ofn.lStructSize = sizeof(ofn);
-                ofn.hwndOwner = hwnd;
-                ofn.lpstrFile = szFile;
-                ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
-                ofn.lpstrFilter = L"Torrent Files (*.torrent)\0*.torrent\0All Files (*.*)\0*.*\0\0";
-                ofn.nFilterIndex = 1;
-                ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-                if (GetOpenFileNameW(&ofn)) {
-                    std::string tor_path = WToUtf8(szFile);
-                    auto parsed = torrent::TorrentParser::ParseTorrentFile(tor_path);
-                    if (parsed.ok()) {
-                        auto tinfo = std::move(*parsed.value);
-                        std::string default_dir = ctx->controller->GetSettings().default_download_dir;
-                        bool start_torrent = true;
-                        if (ShowAddTorrentDialogWin32(hwnd, *ctx->view, *ctx->controller, tinfo, tor_path, default_dir,
-                                                      start_torrent, &default_dir, &start_torrent)) {
-                            TaskModel t;
-                            t.task_type = TaskType::kTorrent;
-                            t.url = tor_path;
-                            t.file_name = tinfo.name.empty() ? PathSanitizer::PathToUtf8(std::filesystem::path(tor_path).filename()) : tinfo.name;
-                            t.save_dir = default_dir;
-                            t.total_bytes = tinfo.selected_bytes();
-                            for (const auto& file : tinfo.files) {
-                                t.torrent_file_paths.push_back(file.relative_path.generic_string());
-                                t.torrent_file_selection.push_back(file.selected ? 1 : 0);
-                            }
-                            auto res = ctx->controller->AddTask(std::move(t), start_torrent, false);
-                            if (res.ok()) {
-                                ctx->view->SelectTask(res.value->task_id);
-                                ctx->view->ScrollTaskIntoView(res.value->task_id, true);
-                            }
-                        }
-                    } else {
-                        std::wstring err = L"Failed to parse torrent file:\n" + Utf8ToW(parsed.error->message);
-                        MessageBoxW(hwnd, err.c_str(), L"Invalid Torrent", MB_OK | MB_ICONERROR);
-                    }
-                }
-            } else if (cmd == IDM_CTX_IMPORT_TASKS) {
-                wchar_t szFile[MAX_PATH] = L"";
-                OPENFILENAMEW ofn{};
-                ofn.lStructSize = sizeof(ofn);
-                ofn.hwndOwner = hwnd;
-                ofn.lpstrFile = szFile;
-                ofn.nMaxFile = sizeof(szFile) / sizeof(szFile[0]);
-                ofn.lpstrFilter = L"Task Files (*.json;*.csv;*.txt)\0*.json;*.csv;*.txt\0JSON Files (*.json)\0*.json\0CSV / Text Files (*.csv;*.txt)\0*.csv;*.txt\0All Files (*.*)\0*.*\0";
-                ofn.nFilterIndex = 1;
-                ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-                if (GetOpenFileNameW(&ofn)) {
-                    std::filesystem::path imp_path(szFile);
-                    std::ifstream ifs(imp_path, std::ios::binary);
-                    if (ifs) {
-                        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-                        storage::ExportFormat fmt = (imp_path.extension() == ".json") ? storage::ExportFormat::kJson : storage::ExportFormat::kCsv;
-                        auto imp_res = ctx->controller->ImportTasksData(content, fmt);
-                        if (imp_res.ok()) {
-                            std::wstring ok_msg = L"Successfully imported " + std::to_wstring(*imp_res.value) + L" task(s).";
-                            MessageBoxW(hwnd, ok_msg.c_str(), L"Import Tasks", MB_OK | MB_ICONINFORMATION);
-                        } else {
-                            std::wstring err = L"Failed to import tasks: " + Utf8ToW(imp_res.error->message);
-                            MessageBoxW(hwnd, err.c_str(), L"Import Error", MB_OK | MB_ICONERROR);
-                        }
-                    }
-                }
-            } else if (cmd == IDM_CTX_SETTINGS) ctx->view->OpenSettingsCenter(SettingsCategory::kGeneral);
-            else if (cmd == IDM_CTX_BROWSER_STAT) ctx->view->OpenSettingsCenter(SettingsCategory::kBrowserIntegration);
-            else if (cmd == IDM_CTX_STARTUP_LOG) ShowStartupLogDialogWin32(hwnd, *ctx->controller, ctx->view->GetPalette());
-            else if (cmd == IDM_CTX_ABOUT) ctx->view->OpenSettingsCenter(SettingsCategory::kAboutAndDiagnostics);
+            if (cmd != 0) {
+                ExecuteContextCommandWin32(hwnd, ctx, cmd, sel_task);
+            }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -11201,7 +12330,13 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             return 0;
         }
         case WM_OPENIDM_SHOW_CONFLICT: {
-            RefreshConflictDialog(*ctx);
+            if (lParam != 0) {
+                std::unique_ptr<Win32WindowContext::PendingConflictItem> incoming(
+                    reinterpret_cast<Win32WindowContext::PendingConflictItem*>(lParam));
+                EnqueueConflictPrompt(*ctx, std::move(*incoming));
+            } else {
+                RefreshConflictDialog(*ctx);
+            }
             if (!IsWindowVisible(hwnd)) {
                 ShowWindow(hwnd, SW_SHOW);
             }
@@ -11214,9 +12349,53 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
+        case WM_OPENIDM_CONFLICT_COMMIT_COMPLETE: {
+            std::unique_ptr<ConflictCommitPayload> payload(reinterpret_cast<ConflictCommitPayload*>(lParam));
+            ctx->conflict_dialog_processing = false;
+            ctx->conflict_dialog_processing_choice = ConflictPolicy::kPrompt;
+            if (!payload) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            if (!payload->settings_warning.empty()) {
+                std::wstring message = L"This download choice will be applied, but Radium could not remember it: " + Utf8ToW(payload->settings_warning);
+                MessageBoxW(hwnd, message.c_str(), L"Could not save preference", MB_OK | MB_ICONWARNING);
+            }
+            if (payload->success) {
+                if (!ctx->pending_conflicts.empty()) {
+                    const auto& front = ctx->pending_conflicts.front();
+                    if (ctx->ipc_server && !front.draft_task.task_id.empty()) {
+                        ctx->ipc_server->ResolvePendingOffer(front.draft_task.task_id);
+                    }
+                    ctx->pending_conflicts.pop_front();
+                }
+                ctx->conflict_dialog_task_id.clear();
+                ctx->conflict_dialog_path.clear();
+                ctx->conflict_dialog_remember = false;
+                ctx->conflict_validation_error.clear();
+                HideConflictRenameEdit(*ctx);
+                if (!ctx->pending_conflicts.empty()) {
+                    ActivatePendingConflict(*ctx, ctx->pending_conflicts.front());
+                }
+                if (!payload->task_id.empty()) {
+                    ctx->view->SelectTask(payload->task_id);
+                    ctx->view->ScrollTaskIntoView(payload->task_id, true);
+                }
+            } else {
+                ctx->conflict_validation_error = payload->error_message.empty()
+                    ? "Could not apply conflict resolution for the selected destination."
+                    : payload->error_message;
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         case WM_OPENIDM_TASK_NOTIFICATION: {
             std::unique_ptr<TaskNotificationPayload> notice(reinterpret_cast<TaskNotificationPayload*>(lParam));
             if (notice && ctx->tray_added) {
+                if (!notice->success && !notice->task_id.empty() &&
+                    !ctx->notified_failure_task_ids.insert(notice->task_id).second) {
+                    return 0;
+                }
                 NOTIFYICONDATAW nid{};
                 nid.cbSize = sizeof(NOTIFYICONDATAW);
                 nid.hWnd = hwnd;
@@ -11241,6 +12420,12 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             }
             return 0;
         }
+        case WM_OPENIDM_CHECK_FIRST_LAUNCH_ONBOARDING: {
+            if (ctx && ctx->controller && ctx->view && ctx->controller->ShouldShowExtensionOnboarding()) {
+                ShowExtensionSetupDialogWin32(hwnd, *ctx->controller, ctx->view->GetPalette(), true /* is_first_launch */);
+            }
+            return 0;
+        }
         case WM_OPENIDM_SHOW_NEW_DOWNLOAD: {
             auto* offer = reinterpret_cast<OfferNotificationData*>(lParam);
             if (offer) {
@@ -11262,7 +12447,10 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
                 if (IsRemoteTorrentOffer(*offer)) {
                     OfferNotificationData torrent_offer = *offer;
-                    delete offer;
+                    if (ctx->ipc_server && !offer->task_id.empty()) {
+                    ctx->ipc_server->ResolvePendingOffer(offer->task_id);
+                }
+                delete offer;
                     const std::string torrent_task_id = torrent_offer.task_id;
                     try {
                         std::thread([hwnd, torrent_offer = std::move(torrent_offer)]() mutable {
@@ -11301,45 +12489,93 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     auto parsed = torrent::TorrentParser::ParseTorrentFile(offer->url);
                     if (parsed.ok()) {
                         auto tinfo = std::move(*parsed.value);
-                        std::string target_dir = offer->save_dir.empty() ? ctx->controller->GetSettings().default_download_dir : offer->save_dir;
-                        if (ShowAddTorrentDialogWin32(hwnd, *ctx->view, *ctx->controller, tinfo, offer->url, target_dir, true)) {
-                            TaskModel t;
-                            t.task_type = TaskType::kTorrent;
-                            t.url = offer->url;
-                            t.file_name = tinfo.name.empty() ? offer->file_name : tinfo.name;
-                            t.save_dir = target_dir;
-                            t.total_bytes = tinfo.selected_bytes();
-                            for (const auto& file : tinfo.files) {
-                                t.torrent_file_paths.push_back(file.relative_path.generic_string());
-                                t.torrent_file_selection.push_back(file.selected ? 1 : 0);
-                            }
-                            auto res = ctx->controller->AddTask(std::move(t), true, false);
-                            if (res.ok()) {
-                                ctx->view->SelectTask(res.value->task_id);
-                                ctx->view->ScrollTaskIntoView(res.value->task_id, true);
+                        std::string target_dir = offer->save_dir.empty()
+                            ? (ctx->controller->GetSettings().last_download_dir.empty()
+                                ? ctx->controller->GetSettings().default_download_dir
+                                : ctx->controller->GetSettings().last_download_dir)
+                            : offer->save_dir;
+                        auto tor_report = ctx->controller->InspectIncomingTorrent(tinfo, target_dir);
+                        if (tor_report.has_conflict() &&
+                            ctx->controller->GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
+                            Win32WindowContext::PendingConflictItem item;
+                            item.draft_task = offer->draft_task;
+                            item.draft_task.task_type = TaskType::kTorrent;
+                            item.draft_task.file_name = tinfo.name.empty() ? offer->file_name : tinfo.name;
+                            item.draft_task.save_dir = target_dir;
+                            item.torrent_info = std::move(tinfo);
+                            item.report = std::move(tor_report);
+                            item.start_immediately = true;
+                            EnqueueConflictPrompt(*ctx, std::move(item));
+                            InvalidateRect(hwnd, nullptr, FALSE);
+                        } else if (ShowAddTorrentDialogWin32(hwnd, *ctx->view, *ctx->controller, tinfo, offer->url, target_dir, true, &target_dir)) {
+                            auto post_report = ctx->controller->InspectIncomingTorrent(tinfo, target_dir);
+                            if (post_report.has_conflict() &&
+                                ctx->controller->GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
+                                Win32WindowContext::PendingConflictItem item;
+                                item.draft_task = offer->draft_task;
+                                item.draft_task.task_type = TaskType::kTorrent;
+                                item.draft_task.file_name = tinfo.name.empty() ? offer->file_name : tinfo.name;
+                                item.draft_task.save_dir = target_dir;
+                                item.torrent_info = std::move(tinfo);
+                                item.report = std::move(post_report);
+                                item.start_immediately = true;
+                                EnqueueConflictPrompt(*ctx, std::move(item));
+                                InvalidateRect(hwnd, nullptr, FALSE);
+                            } else {
+                                TaskModel t = offer->draft_task;
+                                t.task_type = TaskType::kTorrent;
+                                t.url = offer->url;
+                                t.file_name = tinfo.name.empty() ? offer->file_name : tinfo.name;
+                                t.save_dir = target_dir;
+                                t.total_bytes = tinfo.selected_bytes();
+                                for (const auto& file : tinfo.files) {
+                                    t.torrent_file_paths.push_back(file.relative_path.generic_string());
+                                    t.torrent_file_selection.push_back(file.selected ? 1 : 0);
+                                }
+                                auto res = ctx->controller->AddTask(std::move(t), true, false);
+                                if (res.ok()) {
+                                    ctx->view->SelectTask(res.value->task_id);
+                                    ctx->view->ScrollTaskIntoView(res.value->task_id, true);
+                                }
                             }
                         }
                     } else {
                         ShowNewDownloadDialogWin32(
-                            hwnd, *ctx->view, *ctx->controller, offer->url, offer->file_name, offer->save_dir, static_cast<int64_t>(offer->file_size), offer->task_id);
+                            hwnd, *ctx->view, *ctx->controller, offer->url, offer->file_name, offer->save_dir,
+                            static_cast<int64_t>(offer->file_size), "", offer->draft_task);
                     }
                 } else {
-                    int64_t initial_sz = static_cast<int64_t>(offer->file_size);
-                    if (initial_sz <= 0 && !offer->task_id.empty()) {
-                        auto existing = ctx->controller->GetTask(offer->task_id);
-                        if (existing.has_value() && existing->total_bytes > 0) {
-                            initial_sz = static_cast<int64_t>(existing->total_bytes);
-                        }
+                    auto report = ctx->controller->InspectIncomingDownload(offer->draft_task);
+                    if (report.kind == DownloadController::IncomingConflictKind::kActiveOrQueuedSameDownload &&
+                        report.matched_task.has_value()) {
+                        ctx->view->SelectTask(report.matched_task->task_id);
+                        ctx->view->ScrollTaskIntoView(report.matched_task->task_id, true);
+                    } else if (report.has_conflict() &&
+                               ctx->controller->GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
+                        Win32WindowContext::PendingConflictItem item;
+                        item.draft_task = offer->draft_task;
+                        item.draft_task.file_name = report.resolved_file_name;
+                        item.draft_task.save_dir = report.resolved_save_dir;
+                        item.report = std::move(report);
+                        item.start_immediately = true;
+                        EnqueueConflictPrompt(*ctx, std::move(item));
+                        InvalidateRect(hwnd, nullptr, FALSE);
+                    } else {
+                        int64_t initial_sz = static_cast<int64_t>(offer->file_size);
+                        ShowNewDownloadDialogWin32(
+                            hwnd,
+                            *ctx->view,
+                            *ctx->controller,
+                            offer->url,
+                            offer->file_name,
+                            offer->save_dir,
+                            initial_sz,
+                            "",
+                            offer->draft_task);
                     }
-                    ShowNewDownloadDialogWin32(
-                        hwnd,
-                        *ctx->view,
-                        *ctx->controller,
-                        offer->url,
-                        offer->file_name,
-                        offer->save_dir,
-                        initial_sz,
-                        offer->task_id);
+                }
+                if (ctx->ipc_server && !offer->task_id.empty()) {
+                    ctx->ipc_server->ResolvePendingOffer(offer->task_id);
                 }
                 delete offer;
             }
@@ -11373,16 +12609,32 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 MessageBoxW(hwnd, error.c_str(), L"Invalid Torrent", MB_OK | MB_ICONERROR);
                 return 0;
             }
-            auto existing = ctx->controller->GetTask(payload->offer.task_id);
-            if (!existing.has_value()) {
-                remove_metainfo();
-                return 0;
-            }
-
             auto tinfo = std::move(*parsed.value);
             std::string target_dir = payload->offer.save_dir.empty()
-                ? ctx->controller->GetSettings().default_download_dir
+                ? (ctx->controller->GetSettings().last_download_dir.empty()
+                    ? ctx->controller->GetSettings().default_download_dir
+                    : ctx->controller->GetSettings().last_download_dir)
                 : payload->offer.save_dir;
+            auto tor_report = ctx->controller->InspectIncomingTorrent(tinfo, target_dir);
+            if (tor_report.has_conflict() &&
+                ctx->controller->GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
+                Win32WindowContext::PendingConflictItem item;
+                item.draft_task = payload->offer.draft_task;
+                item.draft_task.task_type = TaskType::kTorrent;
+                item.draft_task.url = payload->metainfo_path;
+                item.draft_task.file_name = tinfo.name.empty() ? payload->offer.file_name : tinfo.name;
+                item.draft_task.save_dir = target_dir;
+                item.draft_task.part_path = std::filesystem::path(payload->metainfo_path).parent_path().string();
+                item.draft_task.headers.clear();
+                item.draft_task.auth_headers.clear();
+                item.torrent_info = std::move(tinfo);
+                item.torrent_metainfo_path = payload->metainfo_path;
+                item.report = std::move(tor_report);
+                item.start_immediately = true;
+                EnqueueConflictPrompt(*ctx, std::move(item));
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             bool start_torrent = true;
             std::string selected_category;
             if (!ShowAddTorrentDialogWin32(hwnd, *ctx->view, *ctx->controller, tinfo,
@@ -11393,7 +12645,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 return 0;
             }
 
-            TaskModel task = *existing;
+            TaskModel task = payload->offer.draft_task;
             task.task_type = TaskType::kTorrent;
             task.url = payload->metainfo_path;
             task.file_name = tinfo.name.empty() ? payload->offer.file_name : tinfo.name;
@@ -11410,23 +12662,28 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 task.torrent_file_paths.push_back(file.relative_path.generic_string());
                 task.torrent_file_selection.push_back(file.selected ? 1 : 0);
             }
-            auto updated = ctx->controller->UpdateTask(task);
-            if (!updated.ok()) {
-                remove_offer_task();
+            auto post_report = ctx->controller->InspectIncomingTorrent(tinfo, target_dir);
+            if (post_report.has_conflict() &&
+                ctx->controller->GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
+                Win32WindowContext::PendingConflictItem item;
+                item.draft_task = std::move(task);
+                item.torrent_info = std::move(tinfo);
+                item.torrent_metainfo_path = payload->metainfo_path;
+                item.report = std::move(post_report);
+                item.start_immediately = start_torrent;
+                EnqueueConflictPrompt(*ctx, std::move(item));
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            auto added = ctx->controller->AddTask(std::move(task), start_torrent, false);
+            if (!added.ok()) {
                 remove_metainfo();
-                MessageBoxW(hwnd, Utf8ToW("Could not add torrent: " + updated.error->message).c_str(),
+                MessageBoxW(hwnd, Utf8ToW("Could not add torrent: " + added.error->message).c_str(),
                             L"Torrent Error", MB_OK | MB_ICONERROR);
                 return 0;
             }
-            if (start_torrent) {
-                auto started = ctx->controller->StartTask(task.task_id);
-                if (!started.ok()) {
-                    MessageBoxW(hwnd, Utf8ToW("Torrent was added but could not be started: " + started.error->message).c_str(),
-                                L"Torrent Error", MB_OK | MB_ICONERROR);
-                }
-            }
-            ctx->view->SelectTask(task.task_id);
-            ctx->view->ScrollTaskIntoView(task.task_id, true);
+            ctx->view->SelectTask(added.value->task_id);
+            ctx->view->ScrollTaskIntoView(added.value->task_id, true);
             return 0;
         }
         case WM_OPENIDM_SELECT_TORRENT_METADATA: {
@@ -11443,10 +12700,31 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 ctx->view->CheckAndAutoScrollNewOrStartedDownloads();
                 // Sync Windows taskbar progress indicator
                 SyncTaskbarProgress(hwnd, ctx->pTaskbarList, *ctx->view, ctx);
-                // Always repaint: active downloads, smooth animations, icon pulses
-                InvalidateRect(hwnd, nullptr, FALSE);
+                bool has_active = false;
+                if (ctx->controller) {
+                    for (const auto& t : ctx->controller->ListTasks()) {
+                        if (t.state == TaskState::kDownloading || t.state == TaskState::kProbing ||
+                            t.state == TaskState::kQueued) {
+                            has_active = true;
+                            break;
+                        }
+                    }
+                }
+                if (has_active || ctx->was_active_last_tick || !ctx->conflict_dialog_task_id.empty()) {
+                    InvalidateRect(hwnd, nullptr, FALSE);
+                }
+                ctx->was_active_last_tick = has_active;
             }
             return 0;
+        }
+        case WM_GETOBJECT: {
+            if (static_cast<long>(lParam) == UiaRootObjectId) {
+                if (!ctx->pUiaProvider) {
+                    ctx->pUiaProvider = new RadiumTaskListUiaProvider(hwnd, ctx->view);
+                }
+                return UiaReturnRawElementProvider(hwnd, wParam, lParam, ctx->pUiaProvider);
+            }
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
         case WM_KEYDOWN: {
             bool ctrl_down = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -11561,7 +12839,64 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             PaintMainWindow(hwnd, *ctx->view);
             return 0;
         }
+        case WM_CLIPBOARDUPDATE: {
+            if (ctx && ctx->controller && ctx->controller->GetSettings().monitor_clipboard) {
+                if (OpenClipboard(hwnd)) {
+                    HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+                    if (hData) {
+                        const wchar_t* ptr = static_cast<const wchar_t*>(GlobalLock(hData));
+                        if (ptr) {
+                            int needed = WideCharToMultiByte(CP_UTF8, 0, ptr, -1, nullptr, 0, nullptr, nullptr);
+                            std::string text;
+                            if (needed > 1) {
+                                text.resize(static_cast<size_t>(needed - 1));
+                                WideCharToMultiByte(CP_UTF8, 0, ptr, -1, text.data(), needed - 1, nullptr, nullptr);
+                            }
+                            GlobalUnlock(hData);
+                            while (!text.empty() && (text.back() == '\r' || text.back() == '\n' || text.back() == ' ')) text.pop_back();
+                            if ((text.rfind("http://", 0) == 0 || text.rfind("https://", 0) == 0 ||
+                                 text.rfind("ftp://", 0) == 0 || text.rfind("magnet:?", 0) == 0) &&
+                                text != ctx->last_clipboard_url) {
+                                ctx->last_clipboard_url = text;
+                                ShowNewDownloadDialogWin32(hwnd, *ctx->view, *ctx->controller, text);
+                            }
+                        }
+                    }
+                    CloseClipboard();
+                }
+            }
+            return 0;
+        }
+        case WM_HOTKEY: {
+            if (wParam == IDHOT_SHOW_RADIUM) {
+                ShowWindow(hwnd, SW_RESTORE);
+                SetForegroundWindow(hwnd);
+            }
+            return 0;
+        }
         case WM_DESTROY: {
+            if (ctx->hEditFont) {
+                DeleteObject(ctx->hEditFont);
+                ctx->hEditFont = nullptr;
+            }
+            if (ctx->pUiaProvider) {
+                ctx->pUiaProvider->Release();
+                ctx->pUiaProvider = nullptr;
+            }
+            if (ctx->clipboard_listener_added) {
+                RemoveClipboardFormatListener(hwnd);
+                ctx->clipboard_listener_added = false;
+            }
+            if (ctx->hotkey_registered) {
+                UnregisterHotKey(hwnd, IDHOT_SHOW_RADIUM);
+                ctx->hotkey_registered = false;
+            }
+            if (ctx->hDropTargetWnd && IsWindow(ctx->hDropTargetWnd)) {
+                platform::WindowsIntegrations::RevokeWindowDropTarget(ctx->hDropTargetWnd);
+                DestroyWindow(ctx->hDropTargetWnd);
+                ctx->hDropTargetWnd = nullptr;
+            }
+            platform::WindowsIntegrations::RevokeWindowDropTarget(hwnd);
             KillTimer(hwnd, IDT_UI_REFRESH);
             // Clear taskbar progress and release COM
             if (ctx->pTaskbarList) {
@@ -11571,7 +12906,11 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             }
             ctx->taskbar_info_initialized = false;
             ctx->last_taskbar_info = {};
-            if (ctx->com_initialized) {
+            if (ctx->ole_initialized) {
+                OleUninitialize();
+                ctx->ole_initialized = false;
+                ctx->com_initialized = false;
+            } else if (ctx->com_initialized) {
                 CoUninitialize();
                 ctx->com_initialized = false;
             }
@@ -11641,6 +12980,7 @@ int DesktopView::RunWin32MessageLoop() {
     RegisterClassExW(&wc);
 
     Win32WindowContext ctx{this, &m_controller, nullptr, nullptr, {}, false};
+    ctx.ipc_server = m_ipc_server;
     OPENIDM_LOG_INFO("UI", "Calling CreateWindowExW for Radium_MainWindowClass");
     HWND hwnd = CreateWindowExW(
         0,
@@ -11696,6 +13036,7 @@ int DesktopView::RunWin32MessageLoop() {
     m_controller.SetTaskNotificationCallback([hwnd](const DownloadController::TaskNotification& notice) {
         if (!IsWindow(hwnd)) return;
         auto* payload = new TaskNotificationPayload;
+        payload->task_id = notice.task_id;
         payload->success = notice.success;
         payload->title = notice.success ? L"Download complete" : L"Download failed";
         const std::string body = notice.file_name + (notice.success ? " finished downloading" : ": " + notice.message);
@@ -11716,10 +13057,9 @@ int DesktopView::RunWin32MessageLoop() {
     if (m_ipc_server) {
         m_ipc_server->SetOfferNotificationCallback(
             [hwnd, this](const TaskModel& task) {
-                // Browser file offers are queued until the UI confirms them; `.torrent` offers are
-                // routed to the metainfo fetch and dedicated file-selection dialog in the UI handler.
-                auto* offer = new OfferNotificationData{
-                    task.task_id, task.url, task.file_name, task.save_dir, task.total_bytes, task.headers, task.auth_headers};
+                // Browser file offers are held as pending drafts until the UI resolves any
+                // file conflict or confirms them; `.torrent` offers fetch metainfo first.
+                auto* offer = new OfferNotificationData(task);
                 PostMessageW(hwnd, WM_OPENIDM_SHOW_NEW_DOWNLOAD, 0, reinterpret_cast<LPARAM>(offer));
             });
     }
@@ -11730,6 +13070,7 @@ int DesktopView::RunWin32MessageLoop() {
     ShowWindow(hwnd, start_min ? SW_HIDE : SW_SHOWNORMAL);
     if (!start_min) {
         SetForegroundWindow(hwnd);
+        PostMessageW(hwnd, WM_OPENIDM_CHECK_FIRST_LAUNCH_ONBOARDING, 0, 0);
     }
     UpdateWindow(hwnd);
 

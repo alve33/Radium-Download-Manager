@@ -589,16 +589,32 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             t.save_dir = sd;
         }
         ExtractHeadersMap(params["headers"], t.headers, t.auth_headers);
+        if (params.contains("post") && params["post"].is_string()) {
+            std::string post_data = params["post"].as_string();
+            constexpr size_t kMaxPostBodyBytes = 2 * 1024 * 1024;
+            if (post_data.size() <= kMaxPostBodyBytes) {
+                t.http_method = "POST";
+                t.post_body = std::move(post_data);
+                if (params.contains("postType") && params["postType"].is_string()) {
+                    t.post_content_type = params["postType"].as_string();
+                } else {
+                    t.post_content_type = "application/x-www-form-urlencoded";
+                }
+            }
+        }
         if (params.contains("fileSize") && params["fileSize"].as_int64(0) > 0) {
             t.total_bytes = static_cast<uint64_t>(params["fileSize"].as_int64(0));
         }
 
         // For browser intercepted downloads in GUI mode (desktop app running with a UI):
-        // NEVER auto-start; always route to the Win32 conflict / New Download sub-window.
+        // NEVER auto-start and NEVER create a persistent/visible task before the user resolves
+        // any file conflict or confirms the New Download / Torrent dialog.
         // In headless daemon / automated test mode (m_is_headless == true), start automatically.
         const auto& settings = m_controller.GetSettings();
         if (t.save_dir.empty()) {
-            t.save_dir = settings.default_download_dir.empty() ? m_controller.GetConfig().default_download_dir.string() : settings.default_download_dir;
+            t.save_dir = !settings.last_download_dir.empty()
+                ? settings.last_download_dir
+                : (settings.default_download_dir.empty() ? m_controller.GetConfig().default_download_dir.string() : settings.default_download_dir);
         }
         bool auto_start = m_is_headless.load();
         uint64_t client_click_ms = static_cast<uint64_t>(params["clientClickTime"].as_int64(0));
@@ -606,6 +622,31 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         std::string raw_url = t.url;
         std::string raw_fn = t.file_name;
         uint64_t raw_sz = t.total_bytes;
+
+        if (!auto_start && !correlation_id.empty()) {
+            const int64_t now_ms = NowEpochMs();
+            std::lock_guard<std::mutex> lock(m_offer_mutex);
+            for (auto it = m_recent_offer_correlations.begin(); it != m_recent_offer_correlations.end();) {
+                if (now_ms - it->second.created_at_ms > 60000) {
+                    it = m_recent_offer_correlations.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            auto seen_it = m_recent_offer_correlations.find(correlation_id);
+            if (seen_it != m_recent_offer_correlations.end() &&
+                m_gui_pending_offers.count(seen_it->second.task_id) > 0) {
+                json::Value res = json::Object{};
+                res["accepted"] = true;
+                res["started"] = false;
+                res["duplicateSuppressed"] = true;
+                res["status"] = "pending_user";
+                res["taskId"] = seen_it->second.task_id;
+                res["fileName"] = seen_it->second.file_name;
+                res["correlationId"] = correlation_id;
+                return MakeRpcResult(id, std::move(res)).dump();
+            }
+        }
 
         if (t.task_id.empty()) {
             t.task_id = GenerateUuidV4();
@@ -619,6 +660,47 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             task_id, "Native messaging host receives the request",
             "NMH bridged download.offer to Radium core via named pipe");
 
+        if (!auto_start) {
+            if (t.task_type == TaskType::kHttpFile) {
+                if (auto matched = m_controller.TryMatchFreshLink(t)) {
+                    json::Value res = json::Object{};
+                    res["accepted"] = true;
+                    res["started"] = true;
+                    res["freshlinkResumed"] = true;
+                    res["status"] = "started";
+                    res["taskId"] = matched->task_id;
+                    res["fileName"] = matched->file_name;
+                    res["correlationId"] = correlation_id;
+                    return MakeRpcResult(id, std::move(res)).dump();
+                }
+            }
+            if (t.file_name.empty()) {
+                std::string fallback_ext = (t.task_type == TaskType::kHttpFile) ? "" : t.stream_options.output_format;
+                t.file_name = PathSanitizer::ExtractFromUrl(t.url, fallback_ext);
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_offer_mutex);
+                if (!correlation_id.empty()) {
+                    m_recent_offer_correlations[correlation_id] = {t.task_id, t.file_name, NowEpochMs()};
+                }
+                m_gui_pending_offers[t.task_id] = t;
+                if (m_offer_cb) {
+                    m_offer_cb(t);
+                } else {
+                    m_pending_offers.push_back(t);
+                }
+            }
+            json::Value res = json::Object{};
+            res["accepted"] = true;
+            res["started"] = false;
+            res["freshlinkResumed"] = false;
+            res["status"] = "pending_user";
+            res["taskId"] = t.task_id;
+            res["fileName"] = t.file_name;
+            res["correlationId"] = t.correlation_id;
+            return MakeRpcResult(id, std::move(res)).dump();
+        }
+
         auto add_res = m_controller.AddTask(std::move(t), auto_start, false);
         if (!add_res.ok()) {
             json::Value res = json::Object{};
@@ -627,18 +709,12 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             res["reason"] = add_res.error->code + ": " + add_res.error->message;
             return MakeRpcResult(id, std::move(res)).dump();
         }
-        if (!m_is_headless.load() && !auto_start && add_res.value->error_code != "ERR_FILE_EXISTS") {
-            std::lock_guard<std::mutex> lock(m_offer_mutex);
-            if (m_offer_cb) {
-                m_offer_cb(*add_res.value);
-            } else {
-                m_pending_offers.push_back(*add_res.value);
-            }
-        }
+        const bool freshlink_resumed = (add_res.value->task_id != task_id);
         json::Value res = json::Object{};
         res["accepted"] = true;
-        res["started"] = auto_start;
-        res["status"] = auto_start ? "started" : "queued";
+        res["started"] = auto_start || freshlink_resumed;
+        res["freshlinkResumed"] = freshlink_resumed;
+        res["status"] = "started";
         res["taskId"] = add_res.value->task_id;
         res["fileName"] = add_res.value->file_name;
         res["correlationId"] = add_res.value->correlation_id;
@@ -648,6 +724,16 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
     // 2b. download.getDecision (Query whether user confirmed or cancelled dialog in Flux)
     if (method == "download.getDecision") {
         std::string tid = params["taskId"].as_string();
+        {
+            std::lock_guard<std::mutex> lock(m_offer_mutex);
+            if (m_gui_pending_offers.count(tid) > 0) {
+                json::Value res = json::Object{};
+                res["taskId"] = tid;
+                res["decision"] = "PENDING";
+                res["state"] = "PENDING";
+                return MakeRpcResult(id, std::move(res)).dump();
+            }
+        }
         auto task_opt = m_controller.GetTask(tid);
         json::Value res = json::Object{};
         res["taskId"] = tid;
@@ -929,41 +1015,34 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             return MakeRpcResult(id, std::move(res)).dump();
         }
 
-        // In GUI mode, queue the staged blob transfer paused and route through the standard
+        // In GUI mode, keep the staged blob transfer as a pending UI offer and route through
         // Conflict ("Download Already Exists") or "New Download" sub-window before committing.
         t.part_path = PathSanitizer::PathToUtf8(sess.staging_path);
         t.downloaded_bytes = 0;
         if (t.save_dir.empty()) {
             const auto& settings = m_controller.GetSettings();
-            t.save_dir = settings.default_download_dir.empty()
-                ? m_controller.GetConfig().default_download_dir.string()
-                : settings.default_download_dir;
+            t.save_dir = !settings.last_download_dir.empty()
+                ? settings.last_download_dir
+                : (settings.default_download_dir.empty()
+                    ? m_controller.GetConfig().default_download_dir.string()
+                    : settings.default_download_dir);
         }
-        auto add_res = m_controller.AddTask(std::move(t), false, false);
-        if (!add_res.ok()) {
-            std::error_code ec;
-            std::filesystem::remove(sess.staging_path, ec);
-            json::Value res = json::Object{};
-            res["success"] = false;
-            res["error"] = add_res.error->code + ": " + add_res.error->message;
-            return MakeRpcResult(id, std::move(res)).dump();
-        }
-
-        if (add_res.value->error_code != "ERR_FILE_EXISTS") {
+        {
             std::lock_guard<std::mutex> lock(m_offer_mutex);
+            m_gui_pending_offers[t.task_id] = t;
             if (m_offer_cb) {
-                m_offer_cb(*add_res.value);
+                m_offer_cb(t);
             } else {
-                m_pending_offers.push_back(*add_res.value);
+                m_pending_offers.push_back(t);
             }
         }
 
         json::Value res = json::Object{};
         res["success"] = true;
-        res["taskId"] = add_res.value->task_id;
-        res["fileName"] = add_res.value->file_name;
-        res["saveDir"] = add_res.value->save_dir;
-        res["totalBytes"] = static_cast<int64_t>(add_res.value->total_bytes);
+        res["taskId"] = t.task_id;
+        res["fileName"] = t.file_name;
+        res["saveDir"] = t.save_dir;
+        res["totalBytes"] = static_cast<int64_t>(t.total_bytes);
         return MakeRpcResult(id, std::move(res)).dump();
     }
 
@@ -1300,6 +1379,24 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         std::string stream_res = t.stream_options.video_filter;
         std::string effective_type = is_explicit_youtube ? "YouTube" : (stream_type == "DASH" ? "DASH" : "HLS");
 
+        if (!auto_start && !correlation_id.empty()) {
+            const int64_t now_ms = NowEpochMs();
+            std::lock_guard<std::mutex> lock(m_offer_mutex);
+            auto seen_it = m_recent_offer_correlations.find(correlation_id);
+            if (seen_it != m_recent_offer_correlations.end() &&
+                now_ms - seen_it->second.created_at_ms <= 60000 &&
+                m_gui_pending_offers.count(seen_it->second.task_id) > 0) {
+                json::Value res = json::Object{};
+                res["accepted"] = true;
+                res["taskId"] = seen_it->second.task_id;
+                res["fileName"] = seen_it->second.file_name;
+                res["status"] = "PENDING";
+                res["duplicateSuppressed"] = true;
+                res["taskType"] = params.contains("sourceType") ? params["sourceType"].as_string() : TaskTypeToString(t.task_type);
+                return MakeRpcResult(id, std::move(res)).dump();
+            }
+        }
+
         if (t.task_id.empty()) {
             t.task_id = GenerateUuidV4();
         }
@@ -1312,19 +1409,39 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
             task_id, "Native messaging host receives the request",
             "NMH bridged stream.add (" + effective_type + ") to Radium core via named pipe");
 
+        if (!auto_start) {
+            if (t.save_dir.empty()) {
+                const auto& settings = m_controller.GetSettings();
+                t.save_dir = !settings.last_download_dir.empty()
+                    ? settings.last_download_dir
+                    : (settings.default_download_dir.empty() ? m_controller.GetConfig().default_download_dir.string() : settings.default_download_dir);
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_offer_mutex);
+                if (!correlation_id.empty()) {
+                    m_recent_offer_correlations[correlation_id] = {t.task_id, t.file_name, NowEpochMs()};
+                }
+                m_gui_pending_offers[t.task_id] = t;
+                if (m_offer_cb) {
+                    m_offer_cb(t);
+                } else {
+                    m_pending_offers.push_back(t);
+                }
+            }
+            json::Value res = json::Object{};
+            res["accepted"] = true;
+            res["taskId"] = t.task_id;
+            res["fileName"] = t.file_name;
+            res["status"] = "PENDING";
+            res["taskType"] = params.contains("sourceType") ? params["sourceType"].as_string() : TaskTypeToString(t.task_type);
+            return MakeRpcResult(id, std::move(res)).dump();
+        }
+
         auto add_res = m_controller.AddTask(std::move(t), auto_start, false);
         if (!add_res.ok()) {
             return MakeRpcError(id, -32602, add_res.error->code + ": " + add_res.error->message).dump();
         }
 
-        if (!m_is_headless.load() && !auto_start && add_res.value->error_code != "ERR_FILE_EXISTS") {
-            std::lock_guard<std::mutex> lock(m_offer_mutex);
-            if (m_offer_cb) {
-                m_offer_cb(*add_res.value);
-            } else {
-                m_pending_offers.push_back(*add_res.value);
-            }
-        }
         json::Value res = json::Object{};
         res["accepted"] = true;
         res["taskId"] = add_res.value->task_id;

@@ -72,6 +72,13 @@ enum class ConflictPolicy {
     kFailIfExists
 };
 
+enum class PostCompletionAction {
+    kNone = 0,
+    kOpenFile = 1,
+    kOpenFolder = 2,
+    kRestartSystem = 3
+};
+
 struct Error {
     std::string code;
     std::string message;
@@ -151,6 +158,10 @@ struct StreamSelectionOptions {
     bool concurrent_download{true};       // -mt
     std::string custom_hls_key_hex;       // Optional user-supplied AES-128 key
     std::string cached_manifest_body;     // Optional cached manifest from Cat Catch Deep Search
+    bool embed_subtitles{false};          // Download & mux subtitles (--write-subs --embed-subs)
+    std::string download_sections;        // Optional yt-dlp --download-sections (e.g. "*90-250")
+    bool force_keyframes_at_cuts{false};  // Exact part cutting (--force-keyframes-at-cuts)
+    bool download_danmaku{false};         // Optional Bilibili danmaku XML/ASS download
 };
 
 enum class PauseReason {
@@ -158,7 +169,8 @@ enum class PauseReason {
     kUser,
     kSystemSuspend,
     kError,
-    kQueueSchedule
+    kQueueSchedule,
+    kQuota
 };
 
 inline std::string PauseReasonToString(PauseReason r) {
@@ -167,6 +179,7 @@ inline std::string PauseReasonToString(PauseReason r) {
         case PauseReason::kSystemSuspend: return "SYSTEM_SUSPEND";
         case PauseReason::kError: return "ERROR";
         case PauseReason::kQueueSchedule: return "QUEUE_SCHEDULE";
+        case PauseReason::kQuota: return "QUOTA";
         default: return "NONE";
     }
 }
@@ -176,6 +189,7 @@ inline PauseReason PauseReasonFromString(const std::string& s) {
     if (s == "SYSTEM_SUSPEND") return PauseReason::kSystemSuspend;
     if (s == "ERROR") return PauseReason::kError;
     if (s == "QUEUE_SCHEDULE") return PauseReason::kQueueSchedule;
+    if (s == "QUOTA") return PauseReason::kQuota;
     return PauseReason::kNone;
 }
 
@@ -205,7 +219,10 @@ struct TaskModel {
     bool range_supported{false};
     uint32_t max_connections{8};
     ConflictPolicy conflict_policy{ConflictPolicy::kAutoRename};
+    bool conflict_policy_explicit{false};
+    bool user_edited_filename{false};
     uint32_t retry_count{0};
+    bool failure_notification_sent{false};
     bool scheduled{false};
     std::string schedule_time_local;
     std::string schedule_stop_time_local;             // Optional scheduled stop time ("HH:MM")
@@ -214,6 +231,11 @@ struct TaskModel {
     std::string last_modified;
     std::map<std::string, std::string> headers;       // Non-sensitive: Referer, Origin, User-Agent
     std::map<std::string, std::string> auth_headers;  // Sensitive: Cookie, Authorization (DPAPI/AES encrypted at rest)
+    std::string http_method{"GET"};                   // "GET" or "POST" (captured from browser form submission)
+    std::string post_body;                            // Optional POST payload (volatile/session-scoped)
+    std::string post_content_type;                    // Optional POST Content-Type
+    bool waits_for_address{false};                    // True when awaiting a refreshed URL (401/403/410 or manual refresh)
+    PostCompletionAction post_action{PostCompletionAction::kNone};
     std::vector<std::string> alternate_urls;          // User-configured or discovered alternate mirror URLs
     size_t current_url_index{0};                      // Current mirror index attempted
     StreamSelectionOptions stream_options;
@@ -241,6 +263,16 @@ struct QueueConfig {
     std::string start_time_local; // "HH:MM"
     std::string stop_time_local;  // "HH:MM"
     std::string post_completion_action{"NONE"};
+};
+
+struct IdentityPreset {
+    bool enabled{true};
+    std::vector<std::string> hosts;       // Exact host or "*.domain.com"
+    std::string profile{"chrome"};        // "chrome", "edge", "firefox", "safari", "raw"
+    std::string user_agent;
+    std::map<std::string, std::string> headers;
+
+    bool operator==(const IdentityPreset& other) const = default;
 };
 
 struct AppSettings {
@@ -283,6 +315,16 @@ struct AppSettings {
     uint32_t retry_interval_sec{15};
     std::string queue_completion_action{"NONE"};      // "NONE", "SLEEP", "SHUTDOWN"
     std::string table_column_widths;
+    bool enable_bot_check_fallback{true};
+    std::vector<IdentityPreset> identity_presets;
+    bool mark_of_the_web{true};
+    bool prevent_sleep{true};
+    bool run_at_login{false};
+    bool monitor_clipboard{false};
+    bool show_drop_target{false};
+    uint64_t quota_max_mb{0};
+    uint32_t quota_window_hours{24};
+    bool enable_category_subfolders{false};
 
     bool operator==(const AppSettings& other) const {
         return theme == other.theme &&

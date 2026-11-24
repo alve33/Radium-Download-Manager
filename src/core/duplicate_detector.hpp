@@ -263,12 +263,23 @@ public:
         return DuplicateMatch{DuplicateKind::kNone, {}};
     }
 
+    static bool IsTaskReservingDestination(TaskState s) {
+        return s == TaskState::kQueued ||
+               s == TaskState::kProbing ||
+               s == TaskState::kDownloading ||
+               s == TaskState::kMuxing ||
+               s == TaskState::kVerifying ||
+               s == TaskState::kFinalizing ||
+               s == TaskState::kPaused;
+    }
+
     // Evaluates destination file conflict against existing tasks
     static DuplicateMatch FindDestinationConflict(
         const std::vector<TaskModel>& tasks,
         const std::string& save_dir,
         const std::string& file_name,
-        const std::string& exclude_task_id = "") {
+        const std::string& exclude_task_id = "",
+        bool active_or_paused_only = false) {
 
         std::string clean_name = Trim(file_name);
         std::string clean_dir = Trim(save_dir);
@@ -276,15 +287,28 @@ public:
             return DuplicateMatch{DuplicateKind::kNone, {}};
         }
 
-        std::filesystem::path target_p = PathSanitizer::Utf8ToPath(clean_dir) / PathSanitizer::Utf8ToPath(clean_name);
+        std::filesystem::path target_p = (PathSanitizer::Utf8ToPath(clean_dir) / PathSanitizer::Utf8ToPath(clean_name)).lexically_normal();
+#ifdef _WIN32
+        const std::wstring target_w = target_p.native();
+#else
+        const std::string target_s = target_p.native();
+#endif
         const TaskModel* best_match = nullptr;
 
         for (const auto& t : tasks) {
             if (!exclude_task_id.empty() && t.task_id == exclude_task_id) continue;
+            if (active_or_paused_only && !IsTaskReservingDestination(t.state)) continue;
             if (t.file_name.empty() || t.save_dir.empty()) continue;
 
-            std::filesystem::path existing_p = PathSanitizer::Utf8ToPath(t.save_dir) / PathSanitizer::Utf8ToPath(t.file_name);
-            if (PathSanitizer::PathsEquivalent(target_p, existing_p)) {
+            std::filesystem::path existing_p = (PathSanitizer::Utf8ToPath(t.save_dir) / PathSanitizer::Utf8ToPath(t.file_name)).lexically_normal();
+#ifdef _WIN32
+            const std::wstring& existing_w = existing_p.native();
+            const bool same_path = (existing_w.size() == target_w.size() &&
+                                    _wcsicmp(existing_w.c_str(), target_w.c_str()) == 0);
+#else
+            const bool same_path = (existing_p.native() == target_s);
+#endif
+            if (same_path) {
                 if (!best_match || t.created_at_ms > best_match->created_at_ms) {
                     best_match = &t;
                 }
@@ -301,14 +325,15 @@ public:
         const std::map<std::string, TaskModel>& tasks_map,
         const std::string& save_dir,
         const std::string& file_name,
-        const std::string& exclude_task_id = "") {
+        const std::string& exclude_task_id = "",
+        bool active_or_paused_only = false) {
 
         std::vector<TaskModel> task_list;
         task_list.reserve(tasks_map.size());
         for (const auto& [id, t] : tasks_map) {
             task_list.push_back(t);
         }
-        return FindDestinationConflict(task_list, save_dir, file_name, exclude_task_id);
+        return FindDestinationConflict(task_list, save_dir, file_name, exclude_task_id, active_or_paused_only);
     }
 
     static DuplicateMatch FindDuplicate(

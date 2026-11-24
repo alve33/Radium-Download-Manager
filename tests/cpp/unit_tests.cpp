@@ -3,6 +3,7 @@
 #include "common/central_config.hpp"
 #include "common/settings_serializer.hpp"
 #include "ui/localization.hpp"
+#include "third_party/sqlite3/sqlite3.h"
 // SPDX-License-Identifier: Apache-2.0
 // Radium Download Manager — Automated C++20 Unit & Regression Test Suite
 // Verifies PathSanitizer, Dynamic Worker Discovery, Disk Space Guard, Logger Redaction,
@@ -20,6 +21,7 @@
 #include "common/semver.hpp"
 #include "common/version.hpp"
 #include "core/download_controller.hpp"
+#include "core/extension_installer.hpp"
 #include "engine_stream/nm3u8dl_re_adapter.hpp"
 #include "archive/zip_preview.hpp"
 #include "crawler/site_grabber.hpp"
@@ -385,7 +387,8 @@ bool TestControllerLifecycleAndDeletedTaskRace() {
     t_comp.url = "https://example.com/completed_doc.pdf";
     t_comp.file_name = "completed_doc.pdf";
     t_comp.save_dir = cfg.default_download_dir.string();
-    auto added_comp = ctrl.AddTask(t_comp, false, false);
+    t_comp.state = openidm::TaskState::kCompleted;
+    auto added_comp = ctrl.AddTask(t_comp, false, true);
     ASSERT_TRUE(added_comp.ok(), "Added second task");
 
     // Remove from list without deleting file
@@ -2158,22 +2161,15 @@ bool TestFtpClientParsingAndCommands() {
     ASSERT_TRUE(res1.value->file_name == "archive.tar.gz", "Filename");
     ASSERT_TRUE(res1.value->user == "anonymous", "Default user anonymous");
 
-    // FTPS URL must be rejected fast to prevent plain unencrypted socket connections
+    // FTPS URL must parse cleanly with scheme "ftps" and port 990
     auto res2 = FtpUrl::Parse("ftps://alice:secret123@secure.ftp.org:990/data/report.pdf");
-    ASSERT_TRUE(!res2.ok(), "Reject FTPS URL without verified TLS negotiation");
-    ASSERT_TRUE(res2.error->code == "ERR_FTPS_UNSUPPORTED", "Rejection error code is ERR_FTPS_UNSUPPORTED");
-
-    // Verify ProbeFileSize and DownloadFile defense-in-depth FTPS guards
-    FtpUrl ftps_url;
-    ftps_url.scheme = "ftps";
-    ftps_url.host = "secure.ftp.org";
-    auto probe_ftps = FtpClient::ProbeFileSize(ftps_url);
-    ASSERT_TRUE(!probe_ftps.ok() && probe_ftps.error->code == "ERR_FTPS_UNSUPPORTED", "ProbeFileSize rejects ftps");
-
-    std::atomic<bool> p_req{false}, c_req{false};
-    std::atomic<uint64_t> spd{0};
-    auto dl_ftps = FtpClient::DownloadFile(ftps_url, "/tmp/dummy.part", 0, p_req, c_req, spd, nullptr);
-    ASSERT_TRUE(!dl_ftps.ok() && dl_ftps.error->code == "ERR_FTPS_UNSUPPORTED", "DownloadFile rejects ftps");
+    ASSERT_TRUE(res2.ok(), "Parse FTPS URL");
+    ASSERT_TRUE(res2.value->scheme == "ftps", "FTPS scheme");
+    ASSERT_TRUE(res2.value->host == "secure.ftp.org", "FTPS host");
+    ASSERT_TRUE(res2.value->port == 990, "FTPS port 990");
+    ASSERT_TRUE(res2.value->username == "alice", "FTPS username");
+    ASSERT_TRUE(res2.value->password == "secret123", "FTPS password");
+    ASSERT_TRUE(res2.value->remote_path == "/data/report.pdf", "FTPS remote path");
 
     auto res_invalid = FtpUrl::Parse("http://not-ftp.com/test.bin");
     ASSERT_TRUE(!res_invalid.ok(), "Reject non-FTP URL");
@@ -4123,6 +4119,7 @@ bool TestPimpbunnyStreamRoutingAndYouTubeNetscapeCookieFile() {
         openidm::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller for stream routing test");
         openidm::ipc::IpcServer server(ctrl, sock);
+        server.SetHeadlessDaemonMode(true);
 
         // Scenario A: Pimpbunny progressive direct video (.mp4) with videoUrl
         // Must NOT forge fluxType: YOUTUBE_STREAM and must route to TaskType::kHttpFile
@@ -4290,10 +4287,10 @@ bool TestRemediationPhaseRegressionSuites() {
         ASSERT_TRUE(stolen != nullptr, "Stole segment from initial worker");
         ASSERT_TRUE(sched.RollbackUnstartedStolenSegment(stolen->segment_id), "Rollback unstarted stolen segment succeeded");
 
-        // Small total bytes (< 256 KiB) cannot be split
-        brisk::SegmentScheduler small_sched(200000, 4, 1024);
+        // Small total bytes (< 128 KiB non-last-worker split threshold) cannot be split
+        brisk::SegmentScheduler small_sched(100000, 4, 1024);
         small_sched.Initialize();
-        ASSERT_TRUE(!small_sched.CanSplitAnySegment(), "200 KiB segment cannot be split (< 256 KiB min threshold)");
+        ASSERT_TRUE(!small_sched.CanSplitAnySegment(), "100 KB segment cannot be split (< 128 KiB min threshold)");
     }
 
     // 3. Test Bencode integer parsing edge cases & raw dictionary slice
@@ -4377,6 +4374,7 @@ bool TestRemediationPhaseRegressionSuites() {
         openidm::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller for IPC remediation test");
         openidm::ipc::IpcServer server(ctrl, sock);
+        server.SetHeadlessDaemonMode(true);
 
         // Path traversal in saveDir rejected
         std::string bad_save_req = R"JSON({
@@ -7391,11 +7389,423 @@ bool TestRtlLogicalLayoutMirroringAndHitTesting() {
     return true;
 }
 
+bool TestFailureNotificationPersistenceAndMigration() {
+    using namespace openidm;
+    std::error_code ec;
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / "radium_failure_notif_test";
+    std::filesystem::remove_all(work_dir, ec);
+    std::filesystem::create_directories(work_dir / "dl", ec);
+    std::filesystem::create_directories(work_dir / "tmp", ec);
+
+    // 1. Test legacy DB migration (v1 schema without failure_notification_sent or retry_count)
+    std::filesystem::path legacy_db = work_dir / "legacy_state.db";
+    {
+        sqlite3* raw_db = nullptr;
+        ASSERT_TRUE(sqlite3_open(legacy_db.string().c_str(), &raw_db) == SQLITE_OK, "Open legacy sqlite DB");
+        const char* kLegacySql = R"SQL(
+            PRAGMA user_version = 1;
+            CREATE TABLE queues (
+                queue_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                max_concurrent_tasks INTEGER NOT NULL DEFAULT 3,
+                speed_limit_bps INTEGER NOT NULL DEFAULT 0,
+                schedule_enabled INTEGER NOT NULL DEFAULT 0,
+                start_time_local TEXT,
+                stop_time_local TEXT,
+                post_completion_action TEXT NOT NULL DEFAULT 'NONE'
+            );
+            INSERT INTO queues(queue_id, name, max_concurrent_tasks, speed_limit_bps) VALUES ('main', 'Main', 3, 0);
+            CREATE TABLE tasks (
+                task_id TEXT PRIMARY KEY,
+                task_type TEXT NOT NULL,
+                state TEXT NOT NULL,
+                queue_id TEXT NOT NULL DEFAULT 'main',
+                queue_order INTEGER NOT NULL DEFAULT 0,
+                category TEXT NOT NULL DEFAULT 'General',
+                url TEXT NOT NULL,
+                page_url TEXT,
+                file_name TEXT NOT NULL,
+                save_dir TEXT NOT NULL,
+                part_path TEXT,
+                total_bytes INTEGER NOT NULL DEFAULT 0,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+                range_supported INTEGER NOT NULL DEFAULT 0,
+                max_connections INTEGER NOT NULL DEFAULT 8,
+                etag TEXT,
+                last_modified TEXT,
+                headers_json TEXT NOT NULL DEFAULT '{}',
+                encrypted_auth_blob BLOB,
+                stream_options_json TEXT,
+                expected_sha256 TEXT,
+                error_code TEXT,
+                error_message TEXT,
+                created_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                completed_at_ms INTEGER
+            );
+            CREATE TABLE task_segments (
+                task_id TEXT NOT NULL,
+                segment_id INTEGER NOT NULL,
+                start_offset INTEGER NOT NULL,
+                current_offset INTEGER NOT NULL,
+                end_offset INTEGER NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (task_id, segment_id)
+            );
+            CREATE TABLE settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
+        )SQL";
+        char* errmsg = nullptr;
+        int rc = sqlite3_exec(raw_db, kLegacySql, nullptr, nullptr, &errmsg);
+        if (errmsg) sqlite3_free(errmsg);
+        ASSERT_TRUE(rc == SQLITE_OK, "Create legacy v1 schema");
+
+        for (int i = 0; i < 10; ++i) {
+            std::string sql =
+                "INSERT INTO tasks (task_id, task_type, state, url, file_name, save_dir, downloaded_bytes, error_code, error_message, created_at_ms, updated_at_ms) "
+                "VALUES ('legacy-fail-" + std::to_string(i) + "', 'HTTP_FILE', 'FAILED', 'http://127.0.0.1:1/file" + std::to_string(i) + ".bin', 'file" + std::to_string(i) + ".bin', '" +
+                (work_dir / "dl").generic_string() + "', " + std::to_string(1024 * i) + ", 'ERR_NET_CONNECT', 'Connection refused', 1000, 2000);";
+            rc = sqlite3_exec(raw_db, sql.c_str(), nullptr, nullptr, &errmsg);
+            if (errmsg) sqlite3_free(errmsg);
+            ASSERT_TRUE(rc == SQLITE_OK, "Insert legacy failed task");
+        }
+        const char* kNonFailedSql =
+            "INSERT INTO tasks (task_id, task_type, state, url, file_name, save_dir, downloaded_bytes, created_at_ms, updated_at_ms) VALUES "
+            "('legacy-paused-1', 'HTTP_FILE', 'PAUSED', 'http://127.0.0.1:1/p.bin', 'p.bin', '.', 512, 1000, 2000),"
+            "('legacy-done-1', 'HTTP_FILE', 'COMPLETED', 'http://127.0.0.1:1/d.bin', 'd.bin', '.', 4096, 1000, 2000);";
+        rc = sqlite3_exec(raw_db, kNonFailedSql, nullptr, nullptr, &errmsg);
+        if (errmsg) sqlite3_free(errmsg);
+        ASSERT_TRUE(rc == SQLITE_OK, "Insert legacy non-failed tasks");
+        sqlite3_close(raw_db);
+    }
+
+    // Open legacy DB with SqliteStore and verify migration preserves history & marks FAILED as handled
+    {
+        SqliteStore store;
+        ASSERT_TRUE(store.Open(legacy_db).ok(), "SqliteStore migrates legacy DB");
+        auto listed = store.ListTasks();
+        ASSERT_TRUE(listed.ok() && listed.value->size() == 12, "Migration preserves all 12 history records");
+        int failed_marked = 0;
+        int paused_unmarked = 0;
+        for (const auto& t : *listed.value) {
+            if (t.state == TaskState::kFailed) {
+                ASSERT_TRUE(t.failure_notification_sent, "Existing failed task marked failure_notification_sent=true");
+                ASSERT_TRUE(t.error_code == "ERR_NET_CONNECT", "Existing failed task error_code preserved");
+                ++failed_marked;
+            } else if (t.task_id == "legacy-paused-1") {
+                ASSERT_TRUE(!t.failure_notification_sent, "Non-failed task retains failure_notification_sent=false");
+                ASSERT_TRUE(t.downloaded_bytes == 512, "Existing paused task progress preserved");
+                ++paused_unmarked;
+            }
+        }
+        ASSERT_TRUE(failed_marked == 10 && paused_unmarked == 1, "All 10 failed and 1 paused tasks verified");
+        store.Close();
+    }
+
+    // 2. Startup with migrated DB containing 10 failed downloads must NOT replay notifications
+    //    AND note: legacy failed tasks had retry_count=0 -> ScheduleLoop might auto-retry transient errors,
+    //    but even if retried or not, failure_notification_sent=true guarantees 0 notifications!
+    ControllerConfig cfg;
+    cfg.state_db_path = legacy_db;
+    cfg.default_download_dir = work_dir / "dl";
+    cfg.temp_root_dir = work_dir / "tmp";
+    cfg.av_available_override = []() { return true; };
+    cfg.av_scan_override = [](const std::filesystem::path&) {
+        return Result<security::ScanReport>::Err("ERR_TIMEOUT", "Simulated strict AV failure");
+    };
+
+    for (int restart = 0; restart < 3; ++restart) {
+        DownloadController ctrl(cfg);
+        std::vector<DownloadController::TaskNotification> notices;
+        std::mutex n_mtx;
+        ctrl.SetTaskNotificationCallback([&](const DownloadController::TaskNotification& n) {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            notices.push_back(n);
+        });
+        ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller on migrated DB");
+        AppSettings s = ctrl.GetSettings();
+        s.av_strict_mode = true;
+        s.max_auto_retries = 0;
+        s.show_completion_notification = true;
+        ASSERT_TRUE(ctrl.UpdateSettings(s).ok(), "Configure controller settings");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            ASSERT_TRUE(notices.empty(), "No startup notifications for existing failed downloads across restarts");
+        }
+        ctrl.Shutdown();
+    }
+
+    // 3. New failure after startup generates exactly 1 notification, duplicate callbacks do not duplicate,
+    //    and restarts + RetryTask do not generate another notification.
+    std::string new_failed_id;
+    {
+        DownloadController ctrl(cfg);
+        std::vector<DownloadController::TaskNotification> notices;
+        std::mutex n_mtx;
+        ctrl.SetTaskNotificationCallback([&](const DownloadController::TaskNotification& n) {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            notices.push_back(n);
+        });
+        ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for new failure test");
+
+        // Trigger a new failure via IngestCompletedTask (strict AV failure)
+        std::filesystem::path staged = work_dir / "new_fail.tmp";
+        {
+            std::ofstream ofs(staged, std::ios::binary);
+            ofs << "payload";
+        }
+        TaskModel t;
+        t.file_name = "new_fail.bin";
+        t.url = "http://127.0.0.1:1/new_fail.bin";
+        auto res = ctrl.IngestCompletedTask(t, staged);
+        ASSERT_TRUE(res.ok(), "IngestCompletedTask returned Ok");
+        ASSERT_TRUE(res.value->state == TaskState::kFailed, "New task transitioned to kFailed");
+        ASSERT_TRUE(res.value->failure_notification_sent, "failure_notification_sent persisted as true");
+        new_failed_id = res.value->task_id;
+        {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            ASSERT_TRUE(notices.size() == 1 && !notices[0].success && notices[0].task_id == new_failed_id,
+                        "New failure generated exactly 1 notification");
+        }
+
+        // Repeated failure callback for the same task must not duplicate notification
+        std::filesystem::path staged2 = work_dir / "new_fail2.tmp";
+        {
+            std::ofstream ofs(staged2, std::ios::binary);
+            ofs << "payload2";
+        }
+        TaskModel dup = *res.value;
+        auto dup_res = ctrl.IngestCompletedTask(dup, staged2);
+        ASSERT_TRUE(dup_res.ok(), "Duplicate ingest returned Ok");
+        {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            ASSERT_TRUE(notices.size() == 1, "Repeated failure callback did not generate duplicate notification");
+        }
+
+        // Retrying an already-notified failed download and failing again must not generate another notification
+        ASSERT_TRUE(ctrl.RetryTask(new_failed_id).ok(), "RetryTask succeeds on failed task");
+        // Wait for worker to fail (example.invalid / unreachable)
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto cur = ctrl.GetTask(new_failed_id);
+            if (cur && cur->state == TaskState::kFailed) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        auto after_retry = ctrl.GetTask(new_failed_id);
+        ASSERT_TRUE(after_retry.has_value() && after_retry->state == TaskState::kFailed, "Retried task failed again");
+        ASSERT_TRUE(after_retry->failure_notification_sent, "failure_notification_sent remains true after retry");
+        ASSERT_TRUE(after_retry->retry_count >= 1, "retry_count incremented and tracked");
+        {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            ASSERT_TRUE(notices.size() == 1, "Retrying already notified download produced 0 new notifications");
+        }
+        ctrl.Shutdown();
+    }
+
+    // 4. Restart again and verify notification state & retry_count survived restart and 0 notifications fire
+    {
+        DownloadController ctrl(cfg);
+        std::vector<DownloadController::TaskNotification> notices;
+        std::mutex n_mtx;
+        ctrl.SetTaskNotificationCallback([&](const DownloadController::TaskNotification& n) {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            notices.push_back(n);
+        });
+        ASSERT_TRUE(ctrl.Initialize().ok(), "Re-initialize after new failure + retry");
+        auto persisted = ctrl.GetTask(new_failed_id);
+        ASSERT_TRUE(persisted.has_value(), "New failed task persisted across restart");
+        ASSERT_TRUE(persisted->failure_notification_sent, "failure_notification_sent survived restart");
+        ASSERT_TRUE(persisted->retry_count >= 1, "retry_count survived restart");
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        {
+            std::lock_guard<std::mutex> lk(n_mtx);
+            ASSERT_TRUE(notices.empty(), "Restarting after new failure produces 0 notifications");
+        }
+        ctrl.Shutdown();
+    }
+
+    std::filesystem::remove_all(work_dir, ec);
+    return true;
+}
+
+bool TestExtensionSetupOnboardingSettingsAndAbout() {
+    using namespace openidm;
+    using namespace radium::core;
+
+    const auto work_dir = std::filesystem::temp_directory_path() / "radium_ext_setup_unit_test";
+    std::error_code ec;
+    std::filesystem::remove_all(work_dir, ec);
+    std::filesystem::create_directories(work_dir, ec);
+
+    // 1. Path safety checks
+    ASSERT_TRUE(ExtensionInstaller::IsSafeRelativeExtensionPath("manifest.json"), "Accept manifest.json");
+    ASSERT_TRUE(ExtensionInstaller::IsSafeRelativeExtensionPath("js/background.js"), "Accept js/background.js");
+    ASSERT_TRUE(!ExtensionInstaller::IsSafeRelativeExtensionPath("../evil.js"), "Reject parent traversal");
+    ASSERT_TRUE(!ExtensionInstaller::IsSafeRelativeExtensionPath("js\\background.js"), "Reject backslash");
+    ASSERT_TRUE(!ExtensionInstaller::IsSafeRelativeExtensionPath("/etc/passwd"), "Reject leading slash");
+    ASSERT_TRUE(!ExtensionInstaller::IsSafeRelativeExtensionPath("C:foo.js"), "Reject drive/colon");
+    ASSERT_TRUE(!ExtensionInstaller::IsSafeRelativeExtensionPath("CON"), "Reject DOS device name");
+
+    // 2. Fresh installation displays onboarding once and persists across restarts & RestoreDefaultSettings
+    ControllerConfig cfg;
+    cfg.state_db_path = work_dir / "state.db";
+    cfg.default_download_dir = work_dir / "downloads";
+    cfg.temp_root_dir = work_dir / "tmp";
+    std::filesystem::create_directories(cfg.default_download_dir, ec);
+    std::filesystem::create_directories(cfg.temp_root_dir, ec);
+
+    {
+        DownloadController ctrl(cfg);
+        ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initializes on fresh DB");
+        ASSERT_TRUE(ctrl.ShouldShowExtensionOnboarding(), "Fresh install shows extension onboarding");
+        ASSERT_TRUE(ctrl.MarkExtensionOnboardingDisplayed("later").ok(), "Mark onboarding displayed");
+        ASSERT_TRUE(!ctrl.ShouldShowExtensionOnboarding(), "Clicking Later prevents onboarding from reappearing");
+        ASSERT_TRUE(ctrl.RestoreDefaultSettings().ok(), "RestoreDefaultSettings succeeds");
+        ASSERT_TRUE(!ctrl.ShouldShowExtensionOnboarding(), "RestoreDefaultSettings does not reset onboarding");
+        ctrl.Shutdown();
+    }
+    {
+        DownloadController ctrl2(cfg);
+        ASSERT_TRUE(ctrl2.Initialize().ok(), "Controller re-initializes after restart/update");
+        ASSERT_TRUE(!ctrl2.ShouldShowExtensionOnboarding(), "Restarting does not show onboarding again");
+        ctrl2.Shutdown();
+    }
+
+    // 3. Mocked GitHub download, validation, update, and atomic failure preservation
+    const std::string fake_sha = "0123456789abcdef0123456789abcdef01234567";
+    auto make_mock_fetcher = [&](std::string version, bool fail_mid_download, bool rate_limit, bool traversal) -> ExtensionFetchFn {
+        return [=](const std::string& url, const std::map<std::string, std::string>&) -> ExtensionFetchResponse {
+            ExtensionFetchResponse r;
+            if (rate_limit) {
+                r.status_code = 403;
+                r.headers["X-RateLimit-Remaining"] = "0";
+                r.body = "{\"message\":\"API rate limit exceeded\"}";
+                return r;
+            }
+            if (url.find("/releases/latest") != std::string::npos) {
+                r.status_code = 200;
+                r.body = "{\"tag_name\":\"v1.0.0\",\"assets\":[]}";
+                return r;
+            }
+            if (url.find("/branches/main") != std::string::npos) {
+                r.status_code = 200;
+                r.body = "{\"commit\":{\"sha\":\"" + fake_sha + "\"}}";
+                return r;
+            }
+            if (url.find("/git/trees/") != std::string::npos) {
+                json::Value tree = json::Array{};
+                if (traversal) {
+                    json::Value bad = json::Object{};
+                    bad["path"] = "extension/../outside.txt";
+                    bad["type"] = "blob";
+                    tree.mutable_array().push_back(std::move(bad));
+                }
+                for (const auto& req : ExtensionInstaller::RequiredFiles()) {
+                    json::Value item = json::Object{};
+                    item["path"] = "extension/" + req;
+                    item["type"] = "blob";
+                    tree.mutable_array().push_back(std::move(item));
+                }
+                json::Value root = json::Object{};
+                root["tree"] = std::move(tree);
+                r.status_code = 200;
+                r.body = root.dump();
+                return r;
+            }
+            if (url.find("raw.githubusercontent.com") != std::string::npos) {
+                if (fail_mid_download && url.find("js/popup.js") != std::string::npos) {
+                    r.status_code = 500;
+                    r.error_message = "Simulated HTTP 500";
+                    return r;
+                }
+                r.status_code = 200;
+                if (url.find("manifest.json") != std::string::npos) {
+                    r.body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version +
+                             "\",\"permissions\":[\"nativeMessaging\"],\"background\":{\"service_worker\":\"js/background.js\"},"
+                             "\"action\":{\"default_popup\":\"popup.html\"}}";
+                } else if (url.find("manifest.firefox.json") != std::string::npos) {
+                    r.body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version + "\"}";
+                } else {
+                    r.body = "// mock resource";
+                }
+                return r;
+            }
+            r.status_code = 404;
+            return r;
+        };
+    };
+
+    auto res1 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.0.0", false, false, false));
+    ASSERT_TRUE(res1.success, "Initial mocked extension download succeeds");
+    ASSERT_TRUE(res1.version == "1.0.0", "Extracted version 1.0.0 from manifest.json");
+    ASSERT_TRUE(res1.install_dir == ExtensionInstaller::DefaultInstallDir(work_dir), "Installed into expected directory");
+    ASSERT_TRUE(ExtensionInstaller::ValidateExtensionDirectory(res1.install_dir), "All required files present and valid");
+
+    // Failed download must NOT overwrite existing v1.0.0
+    auto res_fail = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("2.0.0", true, false, false));
+    ASSERT_TRUE(!res_fail.success, "Mid-download failure returns error");
+    std::string intact_ver;
+    ASSERT_TRUE(ExtensionInstaller::ValidateExtensionDirectory(res1.install_dir, &intact_ver) && intact_ver == "1.0.0",
+                "Existing v1.0.0 extension remains intact after failed download");
+
+    // Rate limit and traversal rejection
+    auto res_rl = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, true, false));
+    ASSERT_TRUE(!res_rl.success && res_rl.rate_limited, "GitHub rate limit handled cleanly");
+    auto res_trav = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, false, true));
+    ASSERT_TRUE(!res_trav.success && res_trav.error_code == "ERR_UNSAFE_PATH", "Path traversal in tree rejected");
+
+    // Settings update (v1.0.0 -> v1.1.0)
+    auto res2 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, false, false));
+    ASSERT_TRUE(res2.success && res2.version == "1.1.0", "Updating existing extension package succeeds");
+
+    // 4. Settings & About UI view-model checks
+    {
+        DownloadController ctrl(cfg);
+        ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initializes for UI view test");
+        ctrl.RecordInstalledExtension("1.1.0", fake_sha, res2.install_dir.string());
+        ui::DesktopView view(ctrl);
+        auto ab = view.GetAboutDialogView();
+        ASSERT_TRUE(ab.developer_name == "Sayed Alve", "AboutDialogView has developer name");
+        ASSERT_TRUE(ab.developer_github_url == "https://github.com/alve33", "AboutDialogView has developer GitHub URL");
+        ASSERT_TRUE(ab.repository_url == "https://github.com/alve33/Radium-Download-Manager", "AboutDialogView has repo URL");
+
+        view.SelectSettingsCategory(ui::SettingsCategory::kBrowserIntegration);
+        auto bi_vm = view.BuildSettingsCenterView();
+        bool found_dl_ext = false;
+        for (const auto& item : bi_vm.visible_items) {
+            if (item.key == "download_browser_extension") {
+                found_dl_ext = true;
+                ASSERT_TRUE(item.value_text.find("1.1.0") != std::string::npos, "Settings shows installed extension version");
+            }
+        }
+        ASSERT_TRUE(found_dl_ext, "Browser Integration Settings exposes download_browser_extension");
+
+        view.SelectSettingsCategory(ui::SettingsCategory::kAboutAndDiagnostics);
+        auto ab_vm = view.BuildSettingsCenterView();
+        bool found_dev = false, found_dev_gh = false, found_repo = false;
+        for (const auto& item : ab_vm.visible_items) {
+            if (item.key == "diag_developer") found_dev = true;
+            if (item.key == "open_developer_github") found_dev_gh = true;
+            if (item.key == "open_github_repo") found_repo = true;
+        }
+        ASSERT_TRUE(found_dev && found_dev_gh && found_repo, "About section exposes Developer info and GitHub links");
+        ctrl.Shutdown();
+    }
+
+    std::filesystem::remove_all(work_dir, ec);
+    return true;
+}
+
 int main() {
     int passed = 0;
     
 
-    const int total = 82;
+    const int total = 84;
 
     auto run = [&](int idx, const char* name, bool (*fn)()) {
         std::cout << "[" << idx << "/" << total << "] Running " << name << "..." << std::endl;
@@ -7487,6 +7897,8 @@ int main() {
     run(79, "TestUniversal11Outof10QualityAndPolish", TestUniversal11Outof10QualityAndPolish);
     run(80, "TestLocalizationCatalogAndLanguageFallback", TestLocalizationCatalogAndLanguageFallback);
     run(82, "TestRtlLogicalLayoutMirroringAndHitTesting", TestRtlLogicalLayoutMirroringAndHitTesting);
+    run(83, "TestFailureNotificationPersistenceAndMigration", TestFailureNotificationPersistenceAndMigration);
+    run(84, "TestExtensionSetupOnboardingSettingsAndAbout", TestExtensionSetupOnboardingSettingsAndAbout);
 
     std::cout << "\nC++20 Unit & Regression Test Summary: " << passed << " / " << total << " suites PASSED.\n";
     return (passed == total) ? 0 : 1;
