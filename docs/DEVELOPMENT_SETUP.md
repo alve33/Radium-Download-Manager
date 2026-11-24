@@ -6,12 +6,12 @@ The desktop build copies `translations/desktop.json` to the executable output di
 
 **Document Status:** Active Setup Guide (`v1.0.0`)  
 **Last Reviewed:** 2026-11-04  
-**Scope:** Preparing a clean Windows 11 `x64` workstation to build, debug, and test Radium Download Manager.  
+**Scope:** Preparing a clean Windows 10 / 11 `x64` workstation to build, debug, and test Radium Download Manager.  
 **Related Documents:** [WINDOWS_BUILD_AND_PACKAGING.md](WINDOWS_BUILD_AND_PACKAGING.md), [TECHNOLOGY_STACK.md](TECHNOLOGY_STACK.md), [TEST_STRATEGY.md](TEST_STRATEGY.md), [FEATURE_MATRIX.md](FEATURE_MATRIX.md)
 
 ---
 
-## 1. Required & Optional Tools on Windows 11 x64
+## 1. Required & Optional Tools on Windows 10 / 11 x64
 
 ### 1.1 Required Tools
 1. **Git for Windows** (`2.43+`)

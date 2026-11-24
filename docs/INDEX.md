@@ -11,7 +11,7 @@
 1. **[../README.md](../README.md)** — Project overview, architecture summary, live benchmarks, and build instructions.
 2. **[../AGENTS.md](../AGENTS.md)** — Mandatory coding instructions, RAII rules, security invariants, and documentation sync requirements.
 3. **[../CONTRIBUTING.md](../CONTRIBUTING.md)** — Development workflow, commit guidelines, and testing requirements.
-4. **[DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)** — Step-by-step developer environment setup for Windows 11 MSVC and CMake.
+4. **[DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)** — Step-by-step developer environment setup for Windows 10 / 11 MSVC and CMake.
 5. **[SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)** — Process boundaries, IPC topologies, component design, and storage architecture.
 
 ---

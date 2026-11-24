@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <b>Fast, simple Windows 11 download manager with built-in video fetching.</b><br>
+  <b>Fast, simple Windows 10 / 11 download manager with built-in video fetching.</b><br>
   Accelerate multi-connection file downloads and download videos from YouTube, Bilibili, and many other websites (HLS, DASH, and web streams).<br>
   Lightweight native C++20 &amp; Win32 app with zero Electron bloat, minimal RAM, and no background noise.
 </p>
@@ -58,7 +58,7 @@
 
 ## Quick Overview
 
-Radium is a lightweight, high-speed Windows 11 download manager designed to replace bulky, ad-filled alternatives. It combines high-speed multi-connection file downloads with one-click browser video fetching and stream muxing.
+Radium is a lightweight, high-speed Windows 10 / 11 download manager designed to replace bulky, ad-filled alternatives. It combines high-speed multi-connection file downloads with one-click browser video fetching and stream muxing.
 
 <table>
   <tr>
@@ -93,7 +93,7 @@ The latest published release is **[v1.0.0](https://github.com/alve33/Radium-Down
 | **Radium Portable Full** | x64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | Portable package bundling N_m3u8DL-RE & FFmpeg stream workers |
 | **Radium Portable Core** | x64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | Core package; stream tools must be available separately |
 | **Radium Core Installer** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | Lightweight installer without bundled stream binaries |
-| **Radium Installer (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Native installer for Windows 11 on ARM |
+| **Radium Installer (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Native installer for Windows 10 / 11 on ARM |
 | **Radium Portable Full (ARM64)** | ARM64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | Portable package with ARM64 stream tools |
 | **Browser Extension** | Cross-browser | [extension source](extension/) | Manifest V3 extension for Chrome, Brave, Edge & Firefox |
 
@@ -178,7 +178,7 @@ Cryptographic checksums for published release binaries are available in [SHA256S
 
 ## Light and Dark Themes
 
-Radium is tailored for Windows 11 with comprehensive first-class support for both light and dark visual aesthetics. Whether working in bright daytime ambient environments or low-light workspaces, the entire user interface—from table grids and progress indicators to configuration modals—adapts cleanly.
+Radium is tailored for Windows 10 / 11 with comprehensive first-class support for both light and dark visual aesthetics. Whether working in bright daytime ambient environments or low-light workspaces, the entire user interface—from table grids and progress indicators to configuration modals—adapts cleanly.
 
 <p align="center">
   <img src="docs/images/readme/radium-main-window-light.png" alt="Radium Download Manager Main Window (Light Mode) showing clean light appearance with native Win32 styling" width="100%">
@@ -436,7 +436,7 @@ See [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) and [`docs/DATA
 
 ## Building from Source
 
-To compile Radium from source, use **Windows 11**, **Visual Studio 2022** (Desktop development with C++), and **CMake 3.25 or newer**:
+To compile Radium from source, use **Windows 10 / 11**, **Visual Studio 2022** (Desktop development with C++), and **CMake 3.25 or newer**:
 
 ```powershell
 git clone https://github.com/alve33/Radium-Download-Manager.git

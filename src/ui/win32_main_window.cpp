@@ -2811,7 +2811,7 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
     add_item(
         "diag_app_summary", SettingsCategory::kAboutAndDiagnostics, "About Radium",
         "Radium Download Manager",
-        "Fast, clean download manager and browser video grabber for Windows 11. Multi-connection acceleration with zero bloat.",
+        "Fast, clean download manager and browser video grabber for Windows 10 / 11. Multi-connection acceleration with zero bloat.",
         SettingControlType::kDiagnosticReadOnly,
         "v" + ab.version, "v" + ab.version, true, false);
     add_item(
@@ -2824,7 +2824,7 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
     add_item(
         "diag_version", SettingsCategory::kAboutAndDiagnostics, "System & License",
         "Platform & License",
-        "Windows 11 x64 (Native Win32 C++20)  |  " + ab.license,
+        "Windows 10 / 11 x64 (Native Win32 C++20)  |  " + ab.license,
         SettingControlType::kDiagnosticReadOnly,
         "Active", "Active", true, false);
     if (security::IsCurrentUserLocalAdmin()) {
@@ -3768,7 +3768,7 @@ std::string DesktopView::RenderFullDesktopSnapshotText() const {
 
 #ifdef _WIN32
 // -----------------------------------------------------------------------------
-// Native Windows 11 Win32 + GDI Double-Buffered Dark Interface, Taskbar Progress & Settings Center
+// Native Windows 10 / 11 Win32 + GDI Double-Buffered Dark Interface, Taskbar Progress & Settings Center
 // -----------------------------------------------------------------------------
 namespace {
 

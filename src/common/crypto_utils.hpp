@@ -20,7 +20,7 @@ public:
     static std::vector<uint8_t> ComputeBufferSha1Raw(const uint8_t* data, size_t len);
 
     // Encrypts sensitive session headers (Cookie, Authorization) at rest.
-    // Uses Windows DPAPI (CryptProtectData) on Windows 11, and OpenSSL AES-256-GCM with per-user OS key on POSIX.
+    // Uses Windows DPAPI (CryptProtectData) on Windows 10 / 11, and OpenSSL AES-256-GCM with per-user OS key on POSIX.
     static Result<std::vector<uint8_t>> ProtectSecret(std::string_view plaintext);
     static Result<std::string> UnprotectSecret(const std::vector<uint8_t>& ciphertext);
 

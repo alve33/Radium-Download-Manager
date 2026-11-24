@@ -21,7 +21,7 @@ Existing open-source alternatives each solve only a fraction of this problem:
 
 ## 2. Project Vision
 
-Build **Radium Download Manager** (short: **Radium**, abbr: **RDM**): a cohesive, genuinely open-source (`GPL-3.0-or-later`), native Windows 11 download manager that unifies:
+Build **Radium Download Manager** (short: **Radium**, abbr: **RDM**): a cohesive, genuinely open-source (`GPL-3.0-or-later`), native Windows 10 / 11 download manager that unifies:
 - A fast, low-memory **Native C++20 / Win32 Desktop Application** (`radium.exe`) with an in-process `WinHTTP` segmented download engine implementing Brisk's dynamic connection spawning and work-stealing byte-range algorithms.
 - A **Manifest V3 Browser Extension** combining Brisk's download interception and non-intrusive in-page video button with Cat Catch's multi-layered media and manifest discovery.
 - A secure **Native Messaging + ACL Named Pipe IPC** bridge (`radium-nmh.exe`) that passes URLs, transient `Referer`/`Cookie` headers, and stream metadata from the browser to the desktop application without opening any network port or exposing command-line injection surfaces.
@@ -42,9 +42,9 @@ Build **Radium Download Manager** (short: **Radium**, abbr: **RDM**): a cohesive
 To ensure engineering discipline and prevent scope creep, development is strictly separated into an **Immediate MVP (Milestones 1–3)** and **Post-MVP Enhancements (Milestones 4–5)**.
 
 ### 4.1 Minimum Viable Product (MVP — Milestones 1–3)
-- **Native Win32 Desktop Application (`Windows 11 x64`):**
+- **Native Win32 Desktop Application (`Windows 10 / 11 x64`):**
   - Main window with Virtual ListView (`LVS_OWNERDATA`) for tasks, category filter sidebar, toolbar, and status bar.
-  - Per-Monitor v2 High-DPI awareness, Windows 11 system Dark/Light theme support, and system tray (`Shell_NotifyIconW`) integration.
+  - Per-Monitor v2 High-DPI awareness, Windows 10 / 11 system Dark/Light theme support, and system tray (`Shell_NotifyIconW`) integration.
   - Task progress dialog showing overall progress, per-segment byte progress bars, transfer speed, ETA, and log tab.
 - **Ordinary File Download Engine (`WinHTTP` + IOCP):**
   - HTTP/1.1 and HTTP/2 downloads with `Accept-Ranges` / `206 Partial Content` probing.
@@ -76,7 +76,7 @@ OpenIDM will **never** implement the following:
 2. **Proprietary Site-Specific Extractor Scraping:** OpenIDM is a general HTTP and standard streaming (HLS/DASH/MSS) download manager with browser-assisted media capture—not a replacement for `yt-dlp`'s 1,800+ site-specific Python scrapers. (Future plugin hooks for external extractors are out of scope for MVP.)
 3. **BitTorrent / Peer-to-Peer Protocols:** P2P torrent downloading (`libtorrent` / `aria2` BitTorrent mode) adds significant attack surface, firewall complexity, and binary bloat, and is explicitly excluded.
 4. **In-Browser Video Transcoding or RAM Buffering:** Unlike Cat Catch's standalone mode, OpenIDM will never buffer full M3U8/MPD segment arrays inside the browser extension or run `ffmpeg.wasm` in browser memory.
-5. **Cross-Platform Desktop GUI in MVP:** Linux and macOS desktop GUIs are non-goals; the desktop architecture is purpose-built for Windows 11 `x64` (and later `ARM64`).
+5. **Cross-Platform Desktop GUI in MVP:** Linux and macOS desktop GUIs are non-goals; the desktop architecture is purpose-built for Windows 10 / 11 `x64` (and later `ARM64`).
 
 ---
 

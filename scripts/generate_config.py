@@ -153,7 +153,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "{company_name}"
-            VALUE "FileDescription",  "{product_name} — Native Windows 11 Desktop Application"
+            VALUE "FileDescription",  "{product_name} — Native Windows 10 / 11 Desktop Application"
             VALUE "FileVersion",      "{version_str}.0"
             VALUE "InternalName",     "radium.exe"
             VALUE "LegalCopyright",   "{copyright_str}"

@@ -17,7 +17,7 @@
 <div dir="rtl">
 
 <p align="center">
-  <b>مدير تنزيل سريع وخفيف لنظام Windows 11 مع ميزة التقاط الوسائط والفيديو المدمجة.</b><br>
+  <b>مدير تنزيل سريع وخفيف لنظام Windows 10 / 11 مع ميزة التقاط الوسائط والفيديو المدمجة.</b><br>
   تسريع تنزيل الملفات عبر الاتصالات المتعددة المجزأة وتنزيل مقاطع الفيديو من YouTube وBilibili والعديد من المواقع الأخرى (HLS وDASH وبث الويب).<br>
   تطبيق أصيل مبني باستخدام C++20 وWin32 دون عبء Electron الزائد — استهلاك ضئيل للذاكرة العشوائية وتشغيل هادئ خالٍ من العمليات الخلفية غير الضرورية.
 </p>
@@ -53,7 +53,7 @@
 
 ## نظرة عامة
 
-برنامج Radium هو مدير تنزيلات أصيل ومفتوح المصدر فائق الأداء مصمم خصيصاً لنظام Windows 11. صُمم ليكون بديلاً خفيفاً وحديثاً وخالياً تماماً من الإعلانات للبرامج التقليدية القديمة، حيث يجمع بين تنزيل الملفات المجزأ فائق السرعة والالتقاط المباشر لوسائط الفيديو والصوت من المتصفحات.
+برنامج Radium هو مدير تنزيلات أصيل ومفتوح المصدر فائق الأداء مصمم خصيصاً لنظام Windows 10 / 11. صُمم ليكون بديلاً خفيفاً وحديثاً وخالياً تماماً من الإعلانات للبرامج التقليدية القديمة، حيث يجمع بين تنزيل الملفات المجزأ فائق السرعة والالتقاط المباشر لوسائط الفيديو والصوت من المتصفحات.
 
 <table>
   <tr>
@@ -82,7 +82,7 @@
 | **Radium المحمول (الكامل)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | حزمة محمولة تتضمن أدوات البث N_m3u8DL-RE وFFmpeg |
 | **Radium المحمول (النواة الأساسية)** | x64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | الحزمة الأساسية (تتطلب أدوات البث بشكل منفصل) |
 | **مثبت Radium (النواة الأساسية)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | مثبت خفيف الوزن بدون أدوات البث المدمجة |
-| **مثبت Radium (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | مثبت أصلي لأجهزة Windows 11 بمعالج ARM |
+| **مثبت Radium (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | مثبت أصلي لأجهزة Windows 10 / 11 بمعالج ARM |
 | **Radium المحمول الكامل (ARM64)** | ARM64 | [أرشيف ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | حزمة محمولة كاملة مع أدوات البث لـ ARM64 |
 
 تتوفر بصمات التحقق SHA256 لملفات الإصدار المنشورة في [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt).
@@ -119,7 +119,7 @@
 
 ## المظهر الفاتح والداكن
 
-يقدم Radium واجهة بصرية حديثة ومنسجمة مع إرشادات التصميم لنظام Windows 11، مع دعم كامل للوضعين الفاتح والداكن:
+يقدم Radium واجهة بصرية حديثة ومنسجمة مع إرشادات التصميم لنظام Windows 10 / 11، مع دعم كامل للوضعين الفاتح والداكن:
 
 <div align="center">
 
@@ -129,7 +129,7 @@
 
 </div>
 
-- **التعرف التلقائي على النظام:** يتبع البرنامج افتراضياً تفضيلات الألوان المحددة للتطبيقات في Windows 11 (`AppsUseLightTheme`).
+- **التعرف التلقائي على النظام:** يتبع البرنامج افتراضياً تفضيلات الألوان المحددة للتطبيقات في Windows 10 / 11 (`AppsUseLightTheme`).
 - **التبديل اليدوي الحر:** يمكنك تثبيت المظهر المفضل (`light` أو `dark` أو `system`) في أي وقت من مركز الإعدادات.
 - **رسم سلس مانع للوميض:** يعتمد على تقنية التخزين المؤقت المزدوج عبر GDI وDirect2D لضمان حركة سلسة وتغيير لحجم النوافذ بدون وميض.
 
@@ -267,7 +267,7 @@ flowchart TD
 
 ## البناء من المصدر
 
-المتطلبات الأساسية: نظام **Windows 11 x64**، وبيئة **Visual Studio 2022 (MSVC 19.38+)** مع حزمة أدوات تطوير C++، و**CMake 3.25+**.
+المتطلبات الأساسية: نظام **Windows 10 / 11 x64**، وبيئة **Visual Studio 2022 (MSVC 19.38+)** مع حزمة أدوات تطوير C++، و**CMake 3.25+**.
 
 ```powershell
 # استنساخ المستودع
@@ -307,7 +307,7 @@ npm test
 
 ---
 <p align="center">
-  <sub>Radium Download Manager · مدير تنزيل أصيل وفائق الأداء لنظام Windows 11</sub>
+  <sub>Radium Download Manager · مدير تنزيل أصيل وفائق الأداء لنظام Windows 10 / 11</sub>
 </p>
 
 </div>

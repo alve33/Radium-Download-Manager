@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>radium</id>
+    <version>1.0.0</version>
+    <packageSourceUrl>https://github.com/alve33/Radium-Download-Manager/tree/main/installer/chocolatey</packageSourceUrl>
+    <owners>alve33</owners>
+    <title>Radium Download Manager</title>
+    <authors>Radium Contributors</authors>
+    <projectUrl>https://github.com/alve33/Radium-Download-Manager</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/alve33/Radium-Download-Manager/main/assets/branding/RDM_Logo.svg</iconUrl>
+    <licenseUrl>https://github.com/alve33/Radium-Download-Manager/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/alve33/Radium-Download-Manager</projectSourceUrl>
+    <docsUrl>https://github.com/alve33/Radium-Download-Manager/tree/main/docs</docsUrl>
+    <bugTrackerUrl>https://github.com/alve33/Radium-Download-Manager/issues</bugTrackerUrl>
+    <tags>radium download-manager downloader http hls dash bittorrent ftp win32</tags>
+    <summary>Fast, native Windows 10 / 11 download manager with multi-connection acceleration and HLS/DASH stream capture.</summary>
+    <description>Radium Download Manager is a lightweight, native C++20 and Win32 download manager for Windows 10 / 11.
+It combines an in-process HTTP/HTTPS segmented download engine with dynamic connection spawning and work-stealing range reuse, BitTorrent and FTP support, an out-of-process HLS/DASH stream pipeline (N_m3u8DL-RE and FFmpeg), and a Manifest V3 browser extension via Native Messaging.</description>
+    <releaseNotes>https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

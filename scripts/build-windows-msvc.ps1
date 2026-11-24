@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Radium Download Manager -- Reproducible Windows 11 x64 Portable Build, PE32+ Verification & Test Pipeline
+# Radium Download Manager -- Reproducible Windows 10 / 11 x64 Portable Build, PE32+ Verification & Test Pipeline
 # Detects MSVC / Windows SDK / CMake, compiles radium.exe (WIN32 GUI subsystem),
 # radium-nmh.exe (CUI subsystem), radium_unit_tests.exe, and radium_core_tests.exe, validates PE32+ x64 headers,
 # provisions stream workers, runs automated unit/extension/integration tests, and stages
@@ -34,7 +34,7 @@ if (Test-Path $versionFilePath) {
 }
 
 Write-Host "================================================================="
-Write-Host "   Radium Download Manager v$Version Windows 11 x64 Portable Pipeline "
+Write-Host "   Radium Download Manager v$Version Windows 10 / 11 x64 Portable Pipeline "
 Write-Host "================================================================="
 
 # -----------------------------------------------------------------------------
@@ -366,7 +366,7 @@ if (-not $SkipTests) {
 }
 
 Write-Host "`n================================================================="
-Write-Host "   Windows 11 x64 Portable Build & Verification Completed        "
+Write-Host "   Windows 10 / 11 x64 Portable Build & Verification Completed        "
 Write-Host "   Portable App : $PortableExe"
 Write-Host "   Native Host  : $DistDir\radium-nmh.exe                          "
 Write-Host "   Extension Dir: $RepoRoot\extension                            "

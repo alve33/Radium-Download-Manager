@@ -7,7 +7,7 @@
 
 ---
 
-## 1. Storage Locations on Windows 11
+## 1. Storage Locations on Windows 10 / 11
 
 ### Task removal consistency
 
@@ -24,7 +24,7 @@ Task removal is serialized against worker completion. A worker is asked to stop 
 
 ---
 
-## 2. SQLite 3 Schema Definition (`SCHEMA_VERSION = 1`)
+## 2. SQLite 3 Schema Definition (`SCHEMA_VERSION = 2`)
 
 ### Persisted output conflict preference
 
@@ -38,7 +38,7 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 -- 1. Download Queues Table
 CREATE TABLE IF NOT EXISTS queues (
@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     downloaded_bytes        INTEGER NOT NULL DEFAULT 0,
     range_supported         INTEGER NOT NULL DEFAULT 0,    -- 0 or 1
     max_connections         INTEGER NOT NULL DEFAULT 8 CHECK (max_connections BETWEEN 1 AND 32),
+    retry_count             INTEGER NOT NULL DEFAULT 0,    -- Persisted auto/manual retry counter
+    failure_notification_sent INTEGER NOT NULL DEFAULT 0,  -- 1 once a failure notification has been attempted (migrated to 1 for pre-existing FAILED rows)
     etag                    TEXT,                          -- Strong ETag validator for safe resume
     last_modified           TEXT,                          -- HTTP Last-Modified validator
     headers_json            TEXT NOT NULL DEFAULT '{}',    -- Non-sensitive headers (Referer, Origin, User-Agent)
@@ -146,4 +148,4 @@ To guarantee that a destination file (e.g., `C:\\Users\\Alice\\Downloads\\Video\
 2. During `VERIFYING`, `FileCommitter::CommitPartFile` checks if `movie.mp4` already exists:
    - **`Auto-Rename (Default)`:** Iterates `movie (1).mp4`, `movie (2).mp4` using `CREATE_NEW` / `ReplaceIfExists = FALSE` in `FILE_RENAME_INFO` (`SetFileInformationByHandle(..., FileRenameInfoEx, ...)` with `FILE_RENAME_FLAG_POSIX_SEMANTICS`) to avoid TOCTOU race conditions.
    - **`Overwrite`:** Sets `FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS`, atomically replacing the target entry in the NTFS Master File Table.
-3. Removes the Mark-of-the-Web (`Zone.Identifier` NTFS Alternate Data Stream) **only if disabled by enterprise policy**; by default, **writes `ZoneId=3` (`[ZoneTransfer]\r\nZoneId=3\r\n`) to `<final_file>:Zone.Identifier`** when downloading `.exe`, `.msi`, `.zip`, or `.docx` files from the internet so Windows Defender SmartScreen and Protected View function as expected by Windows 11 security standards!
+3. Removes the Mark-of-the-Web (`Zone.Identifier` NTFS Alternate Data Stream) **only if disabled by enterprise policy**; by default, **writes `ZoneId=3` (`[ZoneTransfer]\r\nZoneId=3\r\n`) to `<final_file>:Zone.Identifier`** when downloading `.exe`, `.msi`, `.zip`, or `.docx` files from the internet so Windows Defender SmartScreen and Protected View function as expected by Windows 10 / 11 security standards!

@@ -13,7 +13,7 @@
 
 ## Context
 
-Delivering OpenIDM to Windows 11 users requires coordinating four distinct artifacts:
+Delivering OpenIDM to Windows 10 / 11 users requires coordinating four distinct artifacts:
 1. The core native binaries (`openidm.exe` and `openidm-nmh.exe`).
 2. The stream toolchain binaries (`N_m3u8DL-RE.exe` and `ffmpeg.exe`).
 3. Native Messaging Host JSON manifests and Windows Registry keys for Chrome, Edge, Brave, and Firefox.

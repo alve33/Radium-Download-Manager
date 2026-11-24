@@ -27,7 +27,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Radium Open Source Contributors"
-            VALUE "FileDescription",  "Radium Download Manager — Native Windows 11 Desktop Application"
+            VALUE "FileDescription",  "Radium Download Manager — Native Windows 10 / 11 Desktop Application"
             VALUE "FileVersion",      "1.0.0.0"
             VALUE "InternalName",     "radium.exe"
             VALUE "LegalCopyright",   "Copyright (C) 2026 Sayed Alve and Radium Contributors. Licensed under Apache-2.0."

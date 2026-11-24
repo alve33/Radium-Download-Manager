@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <b>동영상 다운로드 기능을 내장한 빠르고 간결한 Windows 11 다운로드 매니저.</b><br>
+  <b>동영상 다운로드 기능을 내장한 빠르고 간결한 Windows 10 / 11 다운로드 매니저.</b><br>
   다중 연결 파일 다운로드를 가속화하고 YouTube, Bilibili 등 다양한 웹사이트의 동영상(HLS, DASH 및 웹 스트림)을 다운로드할 수 있습니다.<br>
   Electron이 없는 순수 C++20 및 Win32 네이티브 앱으로, 가벼운 메모리 점유율과 쾌적한 사용성을 보장합니다.
 </p>
@@ -59,7 +59,7 @@
 
 ## 개요
 
-Radium은 복잡하고 광고가 많은 기존 다운로드 프로그램을 대체하기 위해 설계된 가볍고 빠른 Windows 11 다운로드 관리자입니다. 초고속 다중 연결 분할 다운로드와 원클릭 브라우저 비디오 캡처 기능을 하나로 결합했습니다.
+Radium은 복잡하고 광고가 많은 기존 다운로드 프로그램을 대체하기 위해 설계된 가볍고 빠른 Windows 10 / 11 다운로드 관리자입니다. 초고속 다중 연결 분할 다운로드와 원클릭 브라우저 비디오 캡처 기능을 하나로 결합했습니다.
 
 <table>
   <tr>
@@ -94,7 +94,7 @@ Radium은 복잡하고 광고가 많은 기존 다운로드 프로그램을 대�
 | **Radium 포터블 풀 패키지** | x64 | [ZIP 압축](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | N_m3u8DL-RE 및 FFmpeg 도구가 포함된 무설치 포터블 패키지 |
 | **Radium 포터블 코어** | x64 | [ZIP 압축](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | 코어 패키지 (스트림 도구 별도 준비 필요) |
 | **Radium 코어 설치 프로그램** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | 외부 도구가 포함되지 않은 가벼운 인스톨러 |
-| **Radium ARM64 설치 프로그램** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | ARM 기반 Windows 11 기기를 위한 네이티브 설치 파일 |
+| **Radium ARM64 설치 프로그램** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | ARM 기반 Windows 10 / 11 기기를 위한 네이티브 설치 파일 |
 | **Radium ARM64 포터블 풀 패키지** | ARM64 | [ZIP 압축](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | ARM64용 스트림 도구가 포함된 포터블 패키지 |
 | **브라우저 확장 소스** | 크로스 브라우저 | [extension 소스](extension/) | Chrome, Edge, Brave, Firefox용 Manifest V3 확장 프로그램 |
 
@@ -179,7 +179,7 @@ SHA256 체크섬은 [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-M
 
 ## 라이트 및 다크 테마
 
-Radium은 Windows 11 디자인 가이드에 맞춰 라이트(Light)와 다크(Dark) 테마를 완벽하게 기본 지원합니다. 밝은 낮 환경이나 어두운 작업 공간 모두에서 표, 진행 표시줄, 설정 창까지 일관되고 깔끔하게 적응합니다.
+Radium은 Windows 10 / 11 디자인 가이드에 맞춰 라이트(Light)와 다크(Dark) 테마를 완벽하게 기본 지원합니다. 밝은 낮 환경이나 어두운 작업 공간 모두에서 표, 진행 표시줄, 설정 창까지 일관되고 깔끔하게 적응합니다.
 
 <table>
   <tr>
@@ -401,7 +401,7 @@ flowchart TD
 
 ## 소스코드에서 빌드하기
 
-Radium을 직접 컴파일하려면 **Windows 11**, **Visual Studio 2022**(C++ 데스크톱 개발 워크로드) 및 **CMake 3.25 이상**이 필요합니다:
+Radium을 직접 컴파일하려면 **Windows 10 / 11**, **Visual Studio 2022**(C++ 데스크톱 개발 워크로드) 및 **CMake 3.25 이상**이 필요합니다:
 
 ```powershell
 git clone https://github.com/alve33/Radium-Download-Manager.git

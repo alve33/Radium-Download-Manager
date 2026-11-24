@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <b>動画ダウンロード機能を内蔵した、高速でシンプルな Windows 11 向けダウンロードマネージャー。</b><br>
+  <b>動画ダウンロード機能を内蔵した、高速でシンプルな Windows 10 / 11 向けダウンロードマネージャー。</b><br>
   複数接続による高速ファイルダウンロードに加え、YouTube、Bilibili をはじめ多くの Web サイトから動画（HLS、DASH、Web ストリーム）をダウンロード可能。<br>
   Electron による余分なオーバーヘッドがなく、最小限のメモリ消費とバックグラウンド動作を誇るネイティブ C++20 &amp; Win32 アプリケーション。
 </p>
@@ -59,7 +59,7 @@
 
 ## 概要
 
-Radium は、広告が多く肥大化した従来ツールに代わる、軽量・高速な Windows 11 向けダウンロードマネージャーです。高速な複数接続ファイルダウンロードと、ワンクリックでのブラウザー動画キャプチャおよびストリーム結合を統合しています。
+Radium は、広告が多く肥大化した従来ツールに代わる、軽量・高速な Windows 10 / 11 向けダウンロードマネージャーです。高速な複数接続ファイルダウンロードと、ワンクリックでのブラウザー動画キャプチャおよびストリーム結合を統合しています。
 
 <table>
   <tr>
@@ -94,7 +94,7 @@ Radium は、広告が多く肥大化した従来ツールに代わる、軽量�
 | **Radium ポータブル フル版** | x64 | [ZIP アーカイブ](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | N_m3u8DL-RE と FFmpeg ワーカーを同梱したポータブル版 |
 | **Radium ポータブル コア版** | x64 | [ZIP アーカイブ](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | コアのみ（ストリームツールは別途準備が必要） |
 | **Radium コアインストーラー** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | ストリームツールを含まない軽量インストーラー |
-| **Radium インストーラー (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Windows 11 on ARM 向けネイティブインストーラー |
+| **Radium インストーラー (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Windows 10 / 11 on ARM 向けネイティブインストーラー |
 | **Radium ポータブル フル版 (ARM64)** | ARM64 | [ZIP アーカイブ](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | ARM64 向けストリームツール同梱のポータブル版 |
 | **ブラウザー拡張機能** | 各種ブラウザー | [拡張機能ソース](extension/) | Chrome、Brave、Edge、Firefox 向け Manifest V3 拡張機能 |
 
@@ -179,7 +179,7 @@ Radium は、広告が多く肥大化した従来ツールに代わる、軽量�
 
 ## ライトモードとダークモードのテーマ
 
-Radium は Windows 11 の外観に調和するよう設計されており、ライトテーマとダークテーマの双方をファーストクラスでサポートしています。昼間の明るい作業環境でも、夜間の暗い作業環境でも、一覧グリッドから進捗ゲージ、設定画面に至るまで美しく適応します。
+Radium は Windows 10 / 11 の外観に調和するよう設計されており、ライトテーマとダークテーマの双方をファーストクラスでサポートしています。昼間の明るい作業環境でも、夜間の暗い作業環境でも、一覧グリッドから進捗ゲージ、設定画面に至るまで美しく適応します。
 
 <table>
   <tr>
@@ -401,7 +401,7 @@ flowchart TD
 
 ## ソースコードからのビルド
 
-ソースコードからビルドするには、**Windows 11**、**Visual Studio 2022**（C++ によるデスクトップ開発）、および **CMake 3.25 以上** が必要です：
+ソースコードからビルドするには、**Windows 10 / 11**、**Visual Studio 2022**（C++ によるデスクトップ開発）、および **CMake 3.25 以上** が必要です：
 
 ```powershell
 git clone https://github.com/alve33/Radium-Download-Manager.git

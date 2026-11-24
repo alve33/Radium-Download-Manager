@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <b>快速、简洁的 Windows 11 下載管理器，內建强大的网页影片擷取功能。</b><br>
+  <b>快速、简洁的 Windows 10 / 11 下載管理器，內建强大的网页影片擷取功能。</b><br>
   加速多連線檔案下載，支援從 YouTube、Bilibili 等眾多網站下載影片（HLS、DASH 和 Web 媒體流）。<br>
   原生 C++20 &amp; Win32 建置，无任何 Electron 臃肿元件，占用极低記憶體，后台零干扰。
 </p>
@@ -59,7 +59,7 @@
 
 ## 快速概览
 
-Radium 是一款专为 Windows 11 打造的高效能、轻量化下載管理器，旨在彻底替代臃肿且充斥广告的传统工具。它将极速多連線文件下載与一键式瀏覽器影音探測及封装完美融为一体。
+Radium 是一款专为 Windows 10 / 11 打造的高效能、轻量化下載管理器，旨在彻底替代臃肿且充斥广告的传统工具。它将极速多連線文件下載与一键式瀏覽器影音探測及封装完美融为一体。
 
 <table>
   <tr>
@@ -94,7 +94,7 @@ Radium 是一款专为 Windows 11 打造的高效能、轻量化下載管理器�
 | **Radium 可攜式完整版** | x64 | [ZIP 封存](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | 免安装可攜式包，內建 N_m3u8DL-RE 与 FFmpeg 工具 |
 | **Radium 可攜式核心版** | x64 | [ZIP 封存](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | 核心轻量包（流媒体工具需单独設定） |
 | **Radium 核心安裝檔** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | 不含流媒体外部依赖的小体积安裝檔 |
-| **Radium ARM64 安裝檔** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | 专为 ARM 架构 Windows 11 设备原生编译 |
+| **Radium ARM64 安裝檔** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | 专为 ARM 架构 Windows 10 / 11 设备原生编译 |
 | **Radium ARM64 可攜式版** | ARM64 | [ZIP 封存](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | 包含 ARM64 流媒体工具的完整可攜式包 |
 | **瀏覽器擴充功能源码** | 跨瀏覽器 | [extension 目录](extension/) | 适用于 Chrome、Edge、Firefox 等瀏覽器的 MV3 擴充功能 |
 
@@ -179,7 +179,7 @@ Radium 是一款专为 Windows 11 打造的高效能、轻量化下載管理器�
 
 ## 浅色与深色主题
 
-Radium 深度贴合 Windows 11 设计语言，提供一流的浅色（Light）与深色（Dark）外观支援。无论白天处于光线充足的环境，还是深夜在暗光下作业，从表格、进度指示条到弹窗控件均能优雅呈现。
+Radium 深度贴合 Windows 10 / 11 设计语言，提供一流的浅色（Light）与深色（Dark）外观支援。无论白天处于光线充足的环境，还是深夜在暗光下作业，从表格、进度指示条到弹窗控件均能优雅呈现。
 
 <table>
   <tr>
@@ -401,7 +401,7 @@ flowchart TD
 
 ## 从源码建置
 
-如需自行编译 Radium，请准备 **Windows 11** 环境、**Visual Studio 2022**（包含 C++ 桌面开发工作负载）以及 **CMake 3.25 或更高版本**：
+如需自行编译 Radium，请准备 **Windows 10 / 11** 环境、**Visual Studio 2022**（包含 C++ 桌面开发工作负载）以及 **CMake 3.25 或更高版本**：
 
 ```powershell
 git clone https://github.com/alve33/Radium-Download-Manager.git

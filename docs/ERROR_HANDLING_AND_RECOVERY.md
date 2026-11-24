@@ -64,7 +64,7 @@ When all active tasks finish or pause, it restores normal power management via `
 - When Windows transitions to `NLM_CONNECTIVITY_DISCONNECTED` (e.g., Wi-Fi drop or VPN reconnect), active tasks enter a `WaitingForNetwork` sub-state (`retry_count` is frozen so a 2-minute Wi-Fi outage does not exhaust retry budgets) and automatically resume segment workers within `1 second` of connectivity restoration.
 
 ### 3.4 Graceful Application Shutdown (`WM_CLOSE` vs `WM_QUERYENDSESSION`)
-- Clicking the main window `[X]` button minimizes `openidm.exe` to the Windows 11 system tray (`ShowWindow(hwnd, SW_HIDE)`) by default so background downloads continue uninterrupted.
+- Clicking the main window `[X]` button minimizes `openidm.exe` to the Windows 10 / 11 system tray (`ShowWindow(hwnd, SW_HIDE)`) by default so background downloads continue uninterrupted.
 - Choosing **Exit** from the tray/File menu or receiving `WM_QUERYENDSESSION` / `WM_ENDSESSION` (Windows Logout / Shutdown / Restart):
   1. Signals all `WinHTTP` workers to stop reading new chunks.
   2. Terminates active `N_m3u8DL-RE.exe` Job Objects cleanly (retaining `tmp/<uuid>` segment caches so streams can resume on next login).

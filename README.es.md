@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <b>Gestor de descargas rápido y sencillo para Windows 11 con captura de vídeo integrada.</b><br>
+  <b>Gestor de descargas rápido y sencillo para Windows 10 / 11 con captura de vídeo integrada.</b><br>
   Acelera descargas multiconexión y descarga vídeos de YouTube, Bilibili y muchos otros sitios web (HLS, DASH y transmisiones web).<br>
   Aplicación nativa C++20 y Win32 ligera, sin sobrecarga de Electron, con mínimo consumo de RAM y silenciosa.
 </p>
@@ -59,7 +59,7 @@
 
 ## Resumen Rápido
 
-Radium es un gestor de descargas rápido y ligero para Windows 11 diseñado para sustituir alternativas pesadas y llenas de publicidad. Combina descargas segmentadas de alta velocidad con captura de vídeo en navegadores y multiplexación de transmisiones en un solo clic.
+Radium es un gestor de descargas rápido y ligero para Windows 10 / 11 diseñado para sustituir alternativas pesadas y llenas de publicidad. Combina descargas segmentadas de alta velocidad con captura de vídeo en navegadores y multiplexación de transmisiones en un solo clic.
 
 <table>
   <tr>
@@ -94,7 +94,7 @@ La versión publicada más reciente es **[v1.0.0](https://github.com/alve33/Radi
 | **Radium Portable Completo** | x64 | [Archivo ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | Paquete portable que incluye las herramientas N_m3u8DL-RE y FFmpeg |
 | **Radium Portable Básico** | x64 | [Archivo ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | Paquete básico (herramientas de transmisión requeridas por separado) |
 | **Instalador Básico** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | Instalador ligero sin herramientas de transmisión incluidas |
-| **Instalador ARM64** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Instalador nativo para dispositivos Windows 11 en ARM |
+| **Instalador ARM64** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Instalador nativo para dispositivos Windows 10 / 11 en ARM |
 | **Radium Portable Completo (ARM64)** | ARM64 | [Archivo ZIP](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | Paquete portable completo con herramientas para ARM64 |
 | **Extensión de Navegador** | Multi-navegador | [código de extensión](extension/) | Extensión Manifest V3 para Chrome, Brave, Edge y Firefox |
 
@@ -179,7 +179,7 @@ Las sumas de comprobación SHA256 están disponibles en [SHA256SUMS.txt](https:/
 
 ## Temas Claro y Oscuro
 
-Radium está diseñado para Windows 11 con compatibilidad completa para modos visuales claro y oscuro. Toda la interfaz se adapta de manera uniforme.
+Radium está diseñado para Windows 10 / 11 con compatibilidad completa para modos visuales claro y oscuro. Toda la interfaz se adapta de manera uniforme.
 
 <table>
   <tr>
@@ -347,7 +347,7 @@ flowchart TD
 
 ## Compilación desde el Código Fuente
 
-Requisitos: **Windows 11**, **Visual Studio 2022** (Desarrollo para el escritorio con C++) y **CMake 3.25+**:
+Requisitos: **Windows 10 / 11**, **Visual Studio 2022** (Desarrollo para el escritorio con C++) y **CMake 3.25+**:
 
 ```powershell
 git clone https://github.com/alve33/Radium-Download-Manager.git
