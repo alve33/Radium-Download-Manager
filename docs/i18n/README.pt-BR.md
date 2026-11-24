@@ -96,7 +96,7 @@ As somas de verificação SHA256 estão disponíveis em [SHA256SUMS.txt](https:/
 ## Recursos Principais
 
 <p align="center">
-  <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Janela de Novo Download do Radium" width="90%">
+  <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Janela de Novo Download do Radium" width="90%">
 </p>
 
 ### Download HTTP e HTTPS Segmentado
@@ -145,7 +145,7 @@ O Radium inclui suporte nativo a 12 idiomas, com troca imediata sem necessidade 
 
 | Janela Principal e Fila de Downloads | Central de Configurações e Rede |
 | :---: | :---: |
-| <img src="../../docs/images/readme/radium-main-window.png" alt="Janela Principal" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Configurações" width="460"> |
+| <img src="../../docs/images/readme/radium-main-window.png" alt="Janela Principal" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Configurações" width="460"> |
 
 </div>
 
@@ -294,11 +294,11 @@ O Radium é compatível com qualquer servidor HTTP/HTTPS aderente ao padrão RFC
 
 ## Como Contribuir
 
-Contribuições da comunidade são muito bem-vindas! Antes de submeter uma pull request, leia nosso guia [CONTRIBUTING.md](CONTRIBUTING.md) e consulte os princípios de arquitetura em [docs/INDEX.md](docs/INDEX.md).
+Contribuições da comunidade são muito bem-vindas! Antes de submeter uma pull request, leia nosso guia [CONTRIBUTING.md](../../CONTRIBUTING.md) e consulte os princípios de arquitetura em [docs/INDEX.md](../../docs/INDEX.md).
 
 ## Licença e Agradecimentos
 
-O Radium Download Manager é distribuído sob a licença **Apache-2.0**. Consulte o arquivo [LICENSE](LICENSE) para termos completos.
+O Radium Download Manager é distribuído sob a licença **Apache-2.0**. Consulte o arquivo [LICENSE](../../LICENSE) para termos completos.
 
 ### Componentes de Terceiros
 Radium utiliza [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0), [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL/GPL) e [SQLite 3](https://www.sqlite.org/) (Domínio público).

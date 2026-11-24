@@ -126,7 +126,7 @@ Radium 是一款专为 Windows 10 / 11 打造的高效能、轻量化下載管�
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Radium 新建下載對話方塊" width="100%">
+      <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Radium 新建下載對話方塊" width="100%">
       <br>
       <sub>智慧新建任务提示：支援预检探测、目标目录自动规划与磁碟空间保护。</sub>
       <h3>智慧请求探測与網路预检</h3>
@@ -141,7 +141,7 @@ Radium 是一款专为 Windows 10 / 11 打造的高效能、轻量化下載管�
       </ul>
     </td>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-add-torrent-dialog.jpg" alt="Radium 添加种子對話方塊" width="100%">
+      <img src="../../docs/images/readme/radium-add-torrent-dialog.png" alt="Radium 添加种子對話方塊" width="100%">
       <br>
       <sub>原生 Torrent 對話方塊：展示完整文件树结构、元資料資訊与分片校验。</sub>
       <h3>原生 BitTorrent v1 引擎</h3>
@@ -158,7 +158,7 @@ Radium 是一款专为 Windows 10 / 11 打造的高效能、轻量化下載管�
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Radium 設定中心" width="100%">
+      <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Radium 設定中心" width="100%">
       <br>
       <sub>全局設定中心：涵盖並行連線数、文件分类目录规则、代理路由以及瀏覽器集成状态。</sub>
       <h3>深度自定义与原生系统融合</h3>
@@ -242,19 +242,19 @@ Radium 为全球化而设计。国际化框架深度集成于 Win32 原生桌面
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Radium 新建下載對話方塊" width="100%">
+      <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Radium 新建下載對話方塊" width="100%">
       <br>
       <sub><b>预检探测視窗：</b> 伺服器分段支援验证、实时剩余存储测算与智慧归类。</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-add-torrent-dialog.jpg" alt="Radium 添加种子對話方塊" width="100%">
+      <img src="../../docs/images/readme/radium-add-torrent-dialog.png" alt="Radium 添加种子對話方塊" width="100%">
       <br>
       <sub><b>种子管理對話方塊：</b> 树状目录结构展开、文件过滤挑选与雜湊校验。</sub>
     </td>
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Radium 設定對話方塊" width="100%">
+      <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Radium 設定對話方塊" width="100%">
       <br>
       <sub><b>設定中心：</b> 原生文字多语言挑选、浅色/深色主题设定、連線数调控与代理網路路由。</sub>
     </td>
@@ -410,7 +410,7 @@ cmake -B build/win-x64 -A x64
 cmake --build build/win-x64 --config Release
 ```
 
-编译产物将生成在 `build/win-x64/Release/` 目录下。更多细节请参考 [`docs/DEVELOPMENT_SETUP.md`](docs/DEVELOPMENT_SETUP.md)。
+编译产物将生成在 `build/win-x64/Release/` 目录下。更多细节请参考 [`docs/DEVELOPMENT_SETUP.md`](../../docs/DEVELOPMENT_SETUP.md)。
 
 <br>
 
@@ -422,8 +422,8 @@ cmake --build build/win-x64 --config Release
 .\build\win-x64\Release\radium_unit_tests.exe
 ```
 
-- [功能矩阵](docs/FEATURE_MATRIX.md)
-- [测试矩阵](docs/TEST_MATRIX.md)
+- [功能矩阵](../../docs/FEATURE_MATRIX.md)
+- [测试矩阵](../../docs/TEST_MATRIX.md)
 - [Windows 发布工作流](https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml)
 
 <br>
@@ -434,16 +434,16 @@ Radium 仅在服务端正确响应 `206 Partial Content` 时启用多連線分�
 
 ## 参与贡献
 
-欢迎提交 Issue 报告缺陷或提出宝贵的 Pull Request。提交代码前请仔细阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)。
+欢迎提交 Issue 报告缺陷或提出宝贵的 Pull Request。提交代码前请仔细阅读 [CONTRIBUTING.md](../../CONTRIBUTING.md) 与 [AGENTS.md](../../AGENTS.md)。
 
 <br>
 
 ## 开源许可与致谢
 
-Radium Download Manager 遵循 **Apache License, Version 2.0** ([Apache-2.0](LICENSE)) 开源。
+Radium Download Manager 遵循 **Apache License, Version 2.0** ([Apache-2.0](../../LICENSE)) 开源。
 
 ### 第三方开源元件
-本專案使用 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT)、[FFmpeg](https://ffmpeg.org/) (LGPL)、[Microsoft WIL](https://github.com/microsoft/wil) (MIT)、[SQLite](https://www.sqlite.org/) (Public Domain) 與 [nlohmann/json](https://github.com/nlohmann/json) (MIT)。詳見 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 與 [`NOTICE`](NOTICE)。
+本專案使用 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT)、[FFmpeg](https://ffmpeg.org/) (LGPL)、[Microsoft WIL](https://github.com/microsoft/wil) (MIT)、[SQLite](https://www.sqlite.org/) (Public Domain) 與 [nlohmann/json](https://github.com/nlohmann/json) (MIT)。詳見 [`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md) 與 [`NOTICE`](../../NOTICE)。
 
 <br>
 

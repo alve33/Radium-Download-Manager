@@ -60,13 +60,13 @@ sequenceDiagram
 
 ## 3. Differentiating Stream Protocols & DRM Boundaries (`NFR-015`)
 
-| Stream Type | Manifest Format | Segment Containers | Encryption / DRM Status | OpenIDM Support Policy |
+| Stream Type | Manifest Format | Segment Containers | Encryption / DRM Status | Radium Support Policy |
 | :--- | :--- | :--- | :--- | :--- |
 | **Progressive HTTP Media** | None (Direct URL) | `.mp4`, `.webm`, `.mkv`, `.mp3` | Unencrypted (HTTPS transport) | **Supported:** Routed to in-process `WinHttpDownloadEngine` (not `N_m3u8DL-RE`). |
 | **Unencrypted HLS (VOD & Live)** | `.m3u8` (RFC 8216) | `.ts` (MPEG-2 TS), `.m4s` / `.mp4` (CMAF fMP4), `.aac`, `.vtt` | `#EXT-X-KEY:METHOD=NONE` or no key tag | **Supported:** Full variant selection, concurrent segment download, and FFmpeg muxing. |
 | **Standard HLS AES-128** | `.m3u8` | `.ts` or `.m4s` encrypted with AES-128-CBC | `#EXT-X-KEY:METHOD=AES-128,URI="https://..."` | **Supported (`FR-022`):** When the standard 16-byte key URI is accessible using the user's browser session cookies/headers (or user-provided key in Advanced Options), `N_m3u8DL-RE` decrypts segments in-memory using standard AES-128. |
 | **Unencrypted MPEG-DASH** | `.mpd` (ISO/IEC 23009-1) | `_init.mp4` + `.m4s` segments | No `<ContentProtection>` element | **Supported:** Full `AdaptationSet`/`Representation` selection, multi-Period filtering, and FFmpeg muxing. |
-| **DRM-Protected HLS / DASH (Widevine, PlayReady, FairPlay, CENC)** | `.m3u8` or `.mpd` | `.m4s` / `.ts` encrypted via `cenc`, `cbcs`, `SAMPLE-AES`, `SAMPLE-AES-CTR` | `<ContentProtection schemeIdUri="urn:uuid:edef8ba9-...">` (Widevine) or `9a04f079-...` (PlayReady) | **Strictly Unsupported (`NFR-015`):** OpenIDM will **never** bypass DRM, query CDM license servers for keys, or bundle `mp4decrypt`. Detected immediately during Layer 2 (`video.mediaKeys`) or Phase 1 (`meta.json` inspection) and rejected with `ERR_STREAM_DRM_PROTECTED`. |
+| **DRM-Protected HLS / DASH (Widevine, PlayReady, FairPlay, CENC)** | `.m3u8` or `.mpd` | `.m4s` / `.ts` encrypted via `cenc`, `cbcs`, `SAMPLE-AES`, `SAMPLE-AES-CTR` | `<ContentProtection schemeIdUri="urn:uuid:edef8ba9-...">` (Widevine) or `9a04f079-...` (PlayReady) | **Strictly Unsupported (`NFR-015`):** Radium will **never** bypass DRM, query CDM license servers for keys, or bundle `mp4decrypt`. Detected immediately during Layer 2 (`video.mediaKeys`) or Phase 1 (`meta.json` inspection) and rejected with `ERR_STREAM_DRM_PROTECTED`. |
 
 ---
 
@@ -140,7 +140,7 @@ As verified in the [N_m3u8DL-RE v0.6.0 documentation](https://github.com/nilaoda
    - If the user pauses a stream download, `Nm3u8dlReAdapter` terminates `N_m3u8DL-RE.exe` via the Job Object **without** deleting `--tmp-dir <task_uuid>`.
    - When the user resumes the stream download with the same `--tmp-dir` and `--save-name`, `N_m3u8DL-RE` automatically detects already-downloaded `.ts`/`.m4s` segment files in `--tmp-dir` and skips re-downloading completed segments!
 3. **Cancellation & Cleanup:**
-   - If the user cancels the task, `Nm3u8dlReAdapter` closes the Job Object handle (immediately killing `N_m3u8DL-RE.exe` and any child `ffmpeg.exe`), overwrites and deletes `job.rsp`, and recursively deletes `%LOCALAPPDATA%\\OpenIDM\\tmp\\<task_uuid>\\`.
+   - If the user cancels the task, `Nm3u8dlReAdapter` closes the Job Object handle (immediately killing `N_m3u8DL-RE.exe` and any child `ffmpeg.exe`), overwrites and deletes `job.rsp`, and recursively deletes `%LOCALAPPDATA%\\Radium Download Manager\\tmp\\<task_uuid>\\`.
 
 ---
 

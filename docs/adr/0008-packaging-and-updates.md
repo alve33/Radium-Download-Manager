@@ -13,8 +13,8 @@
 
 ## Context
 
-Delivering OpenIDM to Windows 10 / 11 users requires coordinating four distinct artifacts:
-1. The core native binaries (`openidm.exe` and `openidm-nmh.exe`).
+Delivering Radium to Windows 10 / 11 users requires coordinating four distinct artifacts:
+1. The core native binaries (`radium.exe` and `radium-nmh.exe`).
 2. The stream toolchain binaries (`N_m3u8DL-RE.exe` and `ffmpeg.exe`).
 3. Native Messaging Host JSON manifests and Windows Registry keys for Chrome, Edge, Brave, and Firefox.
 4. The Browser Extension (`.crx` / Web Store package for Chromium and `.xpi` / AMO package for Firefox).
@@ -23,26 +23,26 @@ We must also provide a secure update path, a clean uninstaller, and honest size 
 
 ## Decision
 
-1. **Installer Technology:** Use **Inno Setup 6** (`installer/openidm.iss`) with `PrivilegesRequiredOverridesAllowed=dialog` so users can choose **Per-User installation** (`%LOCALAPPDATA%\Programs\OpenIDM`, requiring zero UAC admin elevation) or **Machine-Wide installation** (`%ProgramFiles%\OpenIDM`).
+1. **Installer Technology:** Use **Inno Setup 6** (`installer/openidm.iss`) with `PrivilegesRequiredOverridesAllowed=dialog` so users can choose **Per-User installation** (`%LOCALAPPDATA%\Programs\Radium Download Manager`, requiring zero UAC admin elevation) or **Machine-Wide installation** (`%ProgramFiles%\Radium Download Manager`).
 2. **Two Packaging Flavors (Honest Size Trade-off):**
-   - **Full Offline Installer (`OpenIDM-Setup-x64-Full.exe`, Default Recommended):** Bundles `openidm.exe`, `openidm-nmh.exe`, `N_m3u8DL-RE.exe`, and a minimal mux-focused `ffmpeg.exe` build inside a single LZMA2-Ultra compressed installer (~`18–33 MB` compressed, ~`45–90 MB` installed). Works 100% offline out-of-the-box for both ordinary files and HLS/DASH streams.
-   - **Core-Only Installer (`OpenIDM-Setup-x64-Core.exe`):** Bundles only `openidm.exe` and `openidm-nmh.exe` (~`1.2 MB` compressed, ~`2.5 MB` installed). Ordinary HTTP/HTTPS downloads work immediately; if the user initiates a stream download and `N_m3u8DL-RE.exe` / `ffmpeg.exe` are not present in `%LOCALAPPDATA%\OpenIDM\tools\` or `PATH`, OpenIDM offers a one-click verified download of the pinned worker bundle (verified via SHA-256 + Ed25519 signature).
+   - **Full Offline Installer (`Radium-Setup-x64-Full.exe`, Default Recommended):** Bundles `radium.exe`, `radium-nmh.exe`, `N_m3u8DL-RE.exe`, and a minimal mux-focused `ffmpeg.exe` build inside a single LZMA2-Ultra compressed installer (~`18–33 MB` compressed, ~`45–90 MB` installed). Works 100% offline out-of-the-box for both ordinary files and HLS/DASH streams.
+   - **Core-Only Installer (`Radium-Setup-x64-Core.exe`):** Bundles only `radium.exe` and `radium-nmh.exe` (~`1.2 MB` compressed, ~`2.5 MB` installed). Ordinary HTTP/HTTPS downloads work immediately; if the user initiates a stream download and `N_m3u8DL-RE.exe` / `ffmpeg.exe` are not present in `%LOCALAPPDATA%\Radium Download Manager\tools\` or `PATH`, Radium offers a one-click verified download of the pinned worker bundle (verified via SHA-256 + Ed25519 signature).
 3. **Native Messaging Registration:**
-   - The installer generates `org.openidm.native.chromium.json` and `org.openidm.native.firefox.json` in the installation directory with the resolved absolute path to `openidm-nmh.exe` and writes the corresponding `HKCU\Software\...\NativeMessagingHosts\org.openidm.native` registry keys.
+   - The installer generates `org.openidm.native.chromium.json` and `org.openidm.native.firefox.json` in the installation directory with the resolved absolute path to `radium-nmh.exe` and writes the corresponding `HKCU\Software\...\NativeMessagingHosts\org.openidm.native` registry keys.
 4. **Update Architecture:**
-   - Opt-in background check fetches `https://releases.openidm.org/v1/manifest.json` (or GitHub Releases latest JSON) + `manifest.json.sig`.
-   - `openidm.exe` verifies the manifest signature against an embedded **Ed25519 public key**, verifies the downloaded installer's **SHA-256** digest, and verifies the installer's **Authenticode signature** (`WinVerifyTrust`) before launching the silent upgrade (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`).
+   - Opt-in background check fetches `https://releases.radium-dm.org/v1/manifest.json` (or GitHub Releases latest JSON) + `manifest.json.sig`.
+   - `radium.exe` verifies the manifest signature against an embedded **Ed25519 public key**, verifies the downloaded installer's **SHA-256** digest, and verifies the installer's **Authenticode signature** (`WinVerifyTrust`) before launching the silent upgrade (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`).
 5. **Clean Uninstallation:**
-   - Before removing files, the uninstaller signals any running `openidm.exe` instance via WM_CLOSE / mutex check and terminates any active `openidm-nmh.exe` instances, removes all `NativeMessagingHosts\org.openidm.native` registry keys, and asks the user whether to keep or delete `%LOCALAPPDATA%\OpenIDM` (`state.db` and logs).
+   - Before removing files, the uninstaller signals any running `radium.exe` instance via WM_CLOSE / mutex check and terminates any active `radium-nmh.exe` instances, removes all `NativeMessagingHosts\org.openidm.native` registry keys, and asks the user whether to keep or delete `%LOCALAPPDATA%\Radium Download Manager` (`state.db` and logs).
 
 ## Alternatives Considered
 
 1. **MSIX / Windows Store Package Only (`Rejected as Primary`):**
-   - *Why Rejected:* MSIX virtualizes the filesystem and registry inside an AppContainer, which complicates registering Native Messaging Hosts for non-Store browsers (portable Firefox, Brave) and requires paid trusted certificates even for local developer installation. Inno Setup `.exe` + WinGet manifest (`OpenIDM.OpenIDM`) provides frictionless installation for all browsers.
+   - *Why Rejected:* MSIX virtualizes the filesystem and registry inside an AppContainer, which complicates registering Native Messaging Hosts for non-Store browsers (portable Firefox, Brave) and requires paid trusted certificates even for local developer installation. Inno Setup `.exe` + WinGet manifest (`Radium.Radium`) provides frictionless installation for all browsers.
 2. **WiX Toolset MSI (`Rejected`):**
    - *Why Rejected:* Higher XML complexity for dual per-user/per-machine dialogs and weaker compression ratios than Inno Setup 6's solid LZMA2-Ultra compression.
 3. **Silent Auto-Install of Unpacked Browser Extensions via Registry Force-Install (`Rejected`):**
-   - *Why Rejected:* Modern Chrome and Edge block `HKCU\Software\Google\Chrome\Extensions` side-loading to prevent malware abuse. Instead, OpenIDM provides a clear "Install Browser Extension" dialog inside the app with direct links to Chrome Web Store, Microsoft Edge Add-ons, Firefox AMO, and local `.crx`/`.xpi` instructions.
+   - *Why Rejected:* Modern Chrome and Edge block `HKCU\Software\Google\Chrome\Extensions` side-loading to prevent malware abuse. Instead, Radium provides a clear "Install Browser Extension" dialog inside the app with direct links to Chrome Web Store, Microsoft Edge Add-ons, Firefox AMO, and local `.crx`/`.xpi` instructions.
 
 ## Rationale
 

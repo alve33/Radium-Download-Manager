@@ -126,7 +126,7 @@ SHA256 체크섬은 [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-M
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Radium 다운로드 추가 대화상자" width="100%">
+      <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Radium 다운로드 추가 대화상자" width="100%">
       <br>
       <sub>사전 헤더 분석, 저장 폴더 지정 및 여유 공간 계산을 지원하는 다운로드 추가 화면.</sub>
       <h3>지능형 가로채기 및 사전 검증</h3>
@@ -141,7 +141,7 @@ SHA256 체크섬은 [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-M
       </ul>
     </td>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-add-torrent-dialog.jpg" alt="Radium 토렌트 추가 대화상자" width="100%">
+      <img src="../../docs/images/readme/radium-add-torrent-dialog.png" alt="Radium 토렌트 추가 대화상자" width="100%">
       <br>
       <sub>선택적 파일 트리 계층 구조, 메타데이터 검사 및 조각 검증을 제공하는 토렌트 추가 화면.</sub>
       <h3>네이티브 BitTorrent v1 엔진</h3>
@@ -158,7 +158,7 @@ SHA256 체크섬은 [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-M
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Radium 설정 센터" width="100%">
+      <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Radium 설정 센터" width="100%">
       <br>
       <sub>종합 설정 센터: 연결 수 제어, 카테고리별 디렉터리 라우팅, 프록시 설정, 브라우저 연동 상태.</sub>
       <h3>심층 환경설정 및 시스템 네이티브 통합</h3>
@@ -242,19 +242,19 @@ Radium은 전 세계 사용자를 위해 설계되었습니다. 다국어 처리
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Radium 다운로드 추가 대화상자" width="100%">
+      <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Radium 다운로드 추가 대화상자" width="100%">
       <br>
       <sub><b>사전 분석 화면:</b> 서버 세그먼트 지원 검사, 디스크 용량 계산 및 자동 카테고리 지정.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-add-torrent-dialog.jpg" alt="Radium 토렌트 추가 대화상자" width="100%">
+      <img src="../../docs/images/readme/radium-add-torrent-dialog.png" alt="Radium 토렌트 추가 대화상자" width="100%">
       <br>
       <sub><b>토렌트 관리 화면:</b> 파일 트리 구조 탐색, 선택적 다운로드 및 조각 검증.</sub>
     </td>
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Radium 설정 센터" width="100%">
+      <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Radium 설정 센터" width="100%">
       <br>
       <sub><b>설정 센터:</b> 고유 문자 표기 다국어 선택, 라이트/다크 테마 환경설정, 연결 한도 및 프록시 구성.</sub>
     </td>
@@ -410,7 +410,7 @@ cmake -B build/win-x64 -A x64
 cmake --build build/win-x64 --config Release
 ```
 
-빌드된 실행 파일은 `build/win-x64/Release/`에 생성됩니다. 자세한 내용은 [`docs/DEVELOPMENT_SETUP.md`](docs/DEVELOPMENT_SETUP.md)를 참조하세요.
+빌드된 실행 파일은 `build/win-x64/Release/`에 생성됩니다. 자세한 내용은 [`docs/DEVELOPMENT_SETUP.md`](../../docs/DEVELOPMENT_SETUP.md)를 참조하세요.
 
 <br>
 
@@ -422,8 +422,8 @@ cmake --build build/win-x64 --config Release
 .\build\win-x64\Release\radium_unit_tests.exe
 ```
 
-- [기능 매트릭스](docs/FEATURE_MATRIX.md)
-- [테스트 매트릭스](docs/TEST_MATRIX.md)
+- [기능 매트릭스](../../docs/FEATURE_MATRIX.md)
+- [테스트 매트릭스](../../docs/TEST_MATRIX.md)
 - [Windows 릴리스 워크플로](https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml)
 
 <br>
@@ -434,16 +434,16 @@ Radium은 서버가 유효한 `206 Partial Content` 응답을 줄 때만 다중 
 
 ## 기여 안내
 
-버그 제보와 Pull Request를 언제나 환영합니다. [CONTRIBUTING.md](CONTRIBUTING.md) 및 [AGENTS.md](AGENTS.md)의 가이드를 확인해 주세요.
+버그 제보와 Pull Request를 언제나 환영합니다. [CONTRIBUTING.md](../../CONTRIBUTING.md) 및 [AGENTS.md](../../AGENTS.md)의 가이드를 확인해 주세요.
 
 <br>
 
 ## 라이선스 및 크레딧
 
-Radium Download Manager는 **Apache License, Version 2.0** ([Apache-2.0](LICENSE)) 하에 배포되는 오픈 소스 소프트웨어입니다.
+Radium Download Manager는 **Apache License, Version 2.0** ([Apache-2.0](../../LICENSE)) 하에 배포되는 오픈 소스 소프트웨어입니다.
 
 ### 서드파티 오픈소스 컴포넌트
-[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Public Domain), [nlohmann/json](https://github.com/nlohmann/json) (MIT)를 사용합니다. 자세한 내용은 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 및 [`NOTICE`](NOTICE)를 참조하세요.
+[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Public Domain), [nlohmann/json](https://github.com/nlohmann/json) (MIT)를 사용합니다. 자세한 내용은 [`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md) 및 [`NOTICE`](../../NOTICE)를 참조하세요.
 
 <br>
 

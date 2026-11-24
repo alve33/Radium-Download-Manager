@@ -9,7 +9,7 @@
 
 ## 1. Error Classification Philosophy
 
-Every failure in OpenIDM is mapped to a deterministic `ErrorCode` (`src/common/error_codes.hpp`) categorized into one of three recovery classes:
+Every failure in Radium is mapped to a deterministic `ErrorCode` (`src/common/error_codes.hpp`) categorized into one of three recovery classes:
 1. **Transient & Automatically Retryable (`AutoRetry`):** Temporary network drops, DNS blips, socket timeouts, HTTP `429 Too Many Requests`, `500`, `502`, `503`, `504`. Handled automatically per segment worker using exponential backoff with jitter without failing the task.
 2. **Resumable with User Action (`UserActionResumable`):** Expired signed URLs (`401`, `403`, `410`), missing session cookies, `ETag` mismatch on server update (`412`), or disk space exhaustion (`ERROR_DISK_FULL`). Preserves `.openidm.part` / `tmp/<uuid>` and guides the user to fix the condition (e.g., "Refresh Download Address" or free disk space) and click Resume.
 3. **Terminal / Non-Retryable (`Fatal`):** `404 Not Found`, DRM-protected streams (`ERR_STREAM_DRM_PROTECTED`), invalid/corrupted manifests, or unsupported protocols. Immediately marks the task as `FAILED` with a clear explanation.
@@ -33,12 +33,12 @@ For `prompt` policy, the controller checks the destination before starting suppo
 | **`ERR_HTTP_VALIDATOR_MISMATCH`** | On resume, server returns `412 Precondition Failed` or a different `ETag` / `Content-Length` than stored in `state.db` (`FR-005`). | `UserActionResumable` | None. Abort resume before writing to `.openidm.part`. | **Yes** (Held until user decides) | Prompt user: *"The file on the server has changed since this download was paused. Restart download from the beginning?"* |
 | **`ERR_HTTP_RANGE_NOT_SATISFIABLE`** | Server returns `416 Range Not Satisfiable`. | `Fatal` / `Restart` | Re-probe `Content-Length`; if local part matches, verify; otherwise prompt to restart. | Yes | Prompt user to restart from byte 0. |
 | **`ERR_STREAM_INVALID_MANIFEST`** | `N_m3u8DL-RE` probe exits non-zero or fails to parse `#EXTM3U` / `<MPD` (e.g., server returned an HTML login page instead of a manifest). | `UserActionResumable` | None. | No | Show the first 200 characters of the server response (redacted) and advise refreshing the video page in the browser. |
-| **`ERR_STREAM_DRM_PROTECTED`** | Layer 2 detects `video.mediaKeys !== null` or `meta.json` contains `SAMPLE-AES-CTR` / Widevine / PlayReady `cenc` encryption without user key (`NFR-015`). | `Fatal` | None. | No | Display clear notice: *"This stream is protected by Digital Rights Management (DRM). OpenIDM does not bypass DRM protection."* |
+| **`ERR_STREAM_DRM_PROTECTED`** | Layer 2 detects `video.mediaKeys !== null` or `meta.json` contains `SAMPLE-AES-CTR` / Widevine / PlayReady `cenc` encryption without user key (`NFR-015`). | `Fatal` | None. | No | Display clear notice: *"This stream is protected by Digital Rights Management (DRM). Radium does not bypass DRM protection."* |
 | **`ERR_STREAM_WORKER_CRASH`** | `N_m3u8DL-RE.exe` or `ffmpeg.exe` exits with unhandled exception or non-zero exit code during download/mux. | `UserActionResumable` | Retry once from existing `--tmp-dir` segment cache; if second attempt fails, transition to `FAILED`. | **Yes** (`--tmp-dir` segments kept) | Allow user to click **Retry** (which reuses already-downloaded segments in `tmp/<uuid>`) or inspect the Task Log tab. |
 | **`ERR_DEPENDENCY_MISSING`** | `N_m3u8DL-RE.exe` or `ffmpeg.exe` is missing or fails SHA-256 integrity check when starting a stream task (e.g., Core-only installer). | `UserActionResumable` | None. | **Yes** | Open the built-in **"Download Verified Stream Components"** dialog (`ADR-0008`) or let user browse to `ffmpeg.exe`. |
 | **`ERR_DISK_FULL`** | `SetFileInformationByHandle` (`FileEndOfFileInfo`) or `WriteFile` returns `ERROR_DISK_FULL` (`112`) or `ERROR_HANDLE_DISK_FULL` (`39`). | `UserActionResumable` | Pause all active tasks writing to that volume immediately. | **Yes** | Notify user of required free space (`total_bytes - downloaded_bytes`) and allow resuming or changing destination drive. |
 | **`ERR_TORRENT_EMPTY`** | A browser-offered `.torrent` URL returns an empty body. | `Fatal` | None. | No | Remove the queued offer and explain that the server returned no metainfo. |
-| **`ERR_TORRENT_STORAGE`** | The app cannot create or persist the retrieved metainfo file under `%LOCALAPPDATA%\\OpenIDM\\tmp\\torrents`. | `UserActionResumable` | None. | No | Remove the queued offer and report the local storage failure. |
+| **`ERR_TORRENT_STORAGE`** | The app cannot create or persist the retrieved metainfo file under `%LOCALAPPDATA%\\Radium Download Manager\\tmp\\torrents`. | `UserActionResumable` | None. | No | Remove the queued offer and report the local storage failure. |
 | **`ERR_STORAGE_PART_CORRUPTED`** | `.openidm.part` is missing, truncated below `max(current_offset)`, or final SHA-256 verification fails. | `UserActionResumable` | None. | Kept as `.corrupt` if checksum failed | Offer one-click **"Restart Download"** (for HTTP files, or re-verify segments). |
 | **`ERR_FILE_DELETE_FAILED`** | Explicit permanent deletion fails because an output path is unsafe, cannot be inspected, or cannot be removed. | `UserActionResumable` | None. | Yes; task record remains available | Explain the filesystem error and allow retry after closing the file, correcting its attributes, or selecting the correct output task. |
 | **`ERR_PART_DELETE_FAILED`** | Task-owned partial data cannot be cleaned during removal. | `UserActionResumable` | None. | Task record remains available | Explain the filesystem error; retry removal after resolving the lock or permission issue. |
@@ -60,13 +60,13 @@ When all active tasks finish or pause, it restores normal power management via `
 - **`PBT_APMRESUMEAUTOMATIC`:** Upon wake, stalled `WinHTTP` connections are automatically reset at their persisted `current_offset` without incrementing the fatal error counter.
 
 ### 3.3 Handling Network Changes (`INetworkListManagerEvents`)
-- `openidm.exe` subscribes to Windows Network List Manager COM events (`INetworkListManagerEvents::ConnectivityChanged`) or monitors `ERROR_WINHTTP_NAME_NOT_RESOLVED` / `ERROR_WINHTTP_CANNOT_CONNECT`.
+- `radium.exe` subscribes to Windows Network List Manager COM events (`INetworkListManagerEvents::ConnectivityChanged`) or monitors `ERROR_WINHTTP_NAME_NOT_RESOLVED` / `ERROR_WINHTTP_CANNOT_CONNECT`.
 - When Windows transitions to `NLM_CONNECTIVITY_DISCONNECTED` (e.g., Wi-Fi drop or VPN reconnect), active tasks enter a `WaitingForNetwork` sub-state (`retry_count` is frozen so a 2-minute Wi-Fi outage does not exhaust retry budgets) and automatically resume segment workers within `1 second` of connectivity restoration.
 
 ### 3.4 Graceful Application Shutdown (`WM_CLOSE` vs `WM_QUERYENDSESSION`)
-- Clicking the main window `[X]` button minimizes `openidm.exe` to the Windows 10 / 11 system tray (`ShowWindow(hwnd, SW_HIDE)`) by default so background downloads continue uninterrupted.
+- Clicking the main window `[X]` button minimizes `radium.exe` to the Windows 10 / 11 system tray (`ShowWindow(hwnd, SW_HIDE)`) by default so background downloads continue uninterrupted.
 - Choosing **Exit** from the tray/File menu or receiving `WM_QUERYENDSESSION` / `WM_ENDSESSION` (Windows Logout / Shutdown / Restart):
   1. Signals all `WinHTTP` workers to stop reading new chunks.
   2. Terminates active `N_m3u8DL-RE.exe` Job Objects cleanly (retaining `tmp/<uuid>` segment caches so streams can resume on next login).
   3. Commits final segment `current_offset` values to `state.db` and executes `sqlite3_wal_checkpoint_v2(..., SQLITE_CHECKPOINT_TRUNCATE)`.
-  4. Completes shutdown in **`< 500 ms`** so Windows never displays `"OpenIDM is preventing Windows from shutting down"`.
+  4. Completes shutdown in **`< 500 ms`** so Windows never displays `"Radium is preventing Windows from shutting down"`.

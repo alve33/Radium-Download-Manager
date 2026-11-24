@@ -15,6 +15,7 @@
 5. **[PROJECT_BRIEF.md](PROJECT_BRIEF.md)** — High-level product scope, goals, and target audience.
 6. **[DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)** — Step-by-step developer environment setup for Windows 10 / 11 MSVC and CMake.
 7. **[SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)** — Process boundaries, IPC topologies, component design, and storage architecture.
+8. **[TECHNOLOGY_STACK.md](TECHNOLOGY_STACK.md)** — Approved compilers, Windows 11 OS APIs, third-party dependencies, and tooling choices.
 
 ---
 

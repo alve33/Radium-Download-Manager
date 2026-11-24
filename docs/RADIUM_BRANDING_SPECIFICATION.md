@@ -10,13 +10,13 @@
 
 | Attribute | Specification | Permitted Usage | Prohibited Usage |
 | :--- | :--- | :--- | :--- |
-| **Official Full Name** | **Radium Download Manager** | Main window title bar, installer welcome & finish pages, Add/Remove Programs display name, documentation titles, browser extension manifest name. | Never use "Flux" or "OpenIDM" as the current product name. |
+| **Official Full Name** | **Radium Download Manager** | Main window title bar, installer welcome & finish pages, Add/Remove Programs display name, documentation titles, browser extension manifest name. | Never use "Flux" or "Radium" as the current product name. |
 | **Short Brand Name** | **Radium** | System tray icon tooltip, extension badge, in-page download button ("Download with Radium"), toolbar buttons, dialog prompts, CLI banner. | Never use alone in legal notices or copyright declarations. |
 | **Abbreviation** | **RDM** | Compact UI labels, compact logos, release tags where short codes are required. | Do not use ambiguous abbreviations. |
 | **Executable Names** | `radium.exe`<br>`radium-nmh.exe` | Binary filenames on disk, Task Manager process list, start menu shortcuts, registry launch paths. | Do not rely on deprecated executable names in new distributions. |
 | **Native Host Identifier** | Primary: `com.radium.downloadmanager`<br>Compatibility: `com.flux.downloadmanager`, `org.openidm.native` | Browser native messaging registrations in Windows Registry and host JSON manifests. | Do not break existing browser extension registrations. |
 | **Named Pipe Identifier** | `\\.\pipe\Radium_IPC_<UserSID>`<br>(POSIX: `/tmp/radium_ipc_<uid>.sock`) | ACL-restricted Windows Named Pipe endpoint for NMH-to-GUI communication. Overridden in order: `RADIUM_IPC_SOCKET` > `FLUX_IPC_SOCKET` > `OPENIDM_IPC_SOCKET`. | Do not expose raw internal pipe paths to untrusted clients. |
-| **Application Data Path** | `%LOCALAPPDATA%\Radium Download Manager\` | Default directory for `state.db`, `radium.log`, `settings.json`, and temporary files. Automatically migrates legacy state from `%LOCALAPPDATA%\Flux Download Manager`, `%LOCALAPPDATA%\Flux`, or `%LOCALAPPDATA%\OpenIDM`. | Never scatter files across user documents or system directories. |
+| **Application Data Path** | `%LOCALAPPDATA%\Radium Download Manager\` | Default directory for `state.db`, `radium.log`, `settings.json`, and temporary files. Automatically migrates legacy state from `%LOCALAPPDATA%\Flux Download Manager`, `%LOCALAPPDATA%\Flux`, or `%LOCALAPPDATA%\Radium Download Manager`. | Never scatter files across user documents or system directories. |
 | **Default Download Path** | `%USERPROFILE%\Downloads` (Standard Windows Downloads folder via `SHGetKnownFolderPath(FOLDERID_Downloads)`) | Default destination folder for completed user downloads, overridable via `RADIUM_DOWNLOAD_DIR`. Does not append `\Radium` subfolder by default. | Do not download directly into root C:\ or temp folders. |
 
 ---
@@ -110,7 +110,7 @@ To preserve user data across product migrations:
 2. If `%LOCALAPPDATA%\Radium Download Manager\state.db` does not exist, the startup sequence checks legacy locations:
    - `%LOCALAPPDATA%\Flux Download Manager\state.db`
    - `%LOCALAPPDATA%\Flux\state.db`
-   - `%LOCALAPPDATA%\OpenIDM\state.db`
+   - `%LOCALAPPDATA%\Radium Download Manager\state.db`
 3. If legacy data exists:
    - Create `%LOCALAPPDATA%\Radium Download Manager\`.
    - Copy `state.db`, `state.db-wal`, and settings cleanly into the new directory.

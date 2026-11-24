@@ -53,7 +53,7 @@ To ensure engineering discipline and prevent scope creep, development is strictl
   - Pause, resume, and "Refresh Download Address" for expired signed URLs (`403 Forbidden` / `410 Gone`).
   - Crash-safe SQLite (`WAL` mode) segment checkpointing and atomic final file commit.
 - **Browser Extension (Chrome, Edge, Brave) & Native Messaging IPC:**
-  - Native Messaging Host (`openidm-nmh.exe`) bridging browser `stdio` to `\\.\pipe\OpenIDM_IPC_<UserSID>`.
+  - Native Messaging Host (`radium-nmh.exe`) bridging browser `stdio` to `\\.\pipe\Radium_IPC_<UserSID>`.
   - Automatic capture of large file downloads (`chrome.downloads.onDeterminingFilename` / `onCreated`) with user-configurable file-type and minimum-size filters.
   - Passive `webRequest` detection of progressive videos (`.mp4`, `.webm`) and streaming manifests (`.m3u8`, `.mpd`).
   - Non-intrusive Shadow DOM floating "Download Video" button anchored to `<video>` elements.
@@ -65,17 +65,17 @@ To ensure engineering discipline and prevent scope creep, development is strictl
 - **Firefox Extension Port & Cross-Browser Polish:** Full Firefox Manifest V3 port leveraging Firefox's persistent `webRequest` capabilities.
 - **Advanced Queue & Scheduler Engine:** Main/secondary queues, time-window scheduling (start at `02:00`, stop at `06:00`), global and per-task speed limiters, and post-queue actions (sleep/shutdown).
 - **Opt-In Page-Context ("Deep Search") Instrumentation:** `MAIN`-world XHR/fetch/MSE manifest discovery for sites that obfuscate manifest URLs, plus live stream recording controls (`--live-real-time-merge`).
-- **Windows ARM64 Native Build & WinGet Packaging:** Native `arm64` compilation of `openidm.exe` and `openidm-nmh.exe` paired with `win-arm64` builds of `N_m3u8DL-RE` and `ffmpeg`.
+- **Windows ARM64 Native Build & WinGet Packaging:** Native `arm64` compilation of `radium.exe` and `radium-nmh.exe` paired with `win-arm64` builds of `N_m3u8DL-RE` and `ffmpeg`.
 
 ---
 
 ## 5. Explicit Non-Goals
 
-OpenIDM will **never** implement the following:
-1. **DRM Circumvention:** OpenIDM will not decrypt Widevine, PlayReady, FairPlay, or WisePlay protected streams, will not bundle or invoke CDM key extraction tools, and will not bypass cryptographic content protection (`cenc:pssh` / `SAMPLE-AES-CTR`).
-2. **Proprietary Site-Specific Extractor Scraping:** OpenIDM is a general HTTP and standard streaming (HLS/DASH/MSS) download manager with browser-assisted media capture—not a replacement for `yt-dlp`'s 1,800+ site-specific Python scrapers. (Future plugin hooks for external extractors are out of scope for MVP.)
+Radium will **never** implement the following:
+1. **DRM Circumvention:** Radium will not decrypt Widevine, PlayReady, FairPlay, or WisePlay protected streams, will not bundle or invoke CDM key extraction tools, and will not bypass cryptographic content protection (`cenc:pssh` / `SAMPLE-AES-CTR`).
+2. **Proprietary Site-Specific Extractor Scraping:** Radium is a general HTTP and standard streaming (HLS/DASH/MSS) download manager with browser-assisted media capture—not a replacement for `yt-dlp`'s 1,800+ site-specific Python scrapers. (Future plugin hooks for external extractors are out of scope for MVP.)
 3. **BitTorrent / Peer-to-Peer Protocols:** P2P torrent downloading (`libtorrent` / `aria2` BitTorrent mode) adds significant attack surface, firewall complexity, and binary bloat, and is explicitly excluded.
-4. **In-Browser Video Transcoding or RAM Buffering:** Unlike Cat Catch's standalone mode, OpenIDM will never buffer full M3U8/MPD segment arrays inside the browser extension or run `ffmpeg.wasm` in browser memory.
+4. **In-Browser Video Transcoding or RAM Buffering:** Unlike Cat Catch's standalone mode, Radium will never buffer full M3U8/MPD segment arrays inside the browser extension or run `ffmpeg.wasm` in browser memory.
 5. **Cross-Platform Desktop GUI in MVP:** Linux and macOS desktop GUIs are non-goals; the desktop architecture is purpose-built for Windows 10 / 11 `x64` (and later `ARM64`).
 
 ---
@@ -84,5 +84,5 @@ OpenIDM will **never** implement the following:
 
 The project achieves its engineering goals when:
 1. **Correctness:** 100% of test matrix downloads (multi-gigabyte HTTP range transfers, interrupted resumes, single-stream non-range transfers, VOD HLS `.m3u8`, and VOD DASH `.mpd`) produce byte-verified or container-verified (`ffprobe`) output files ([TEST_STRATEGY.md](TEST_STRATEGY.md)).
-2. **Resource Efficiency:** The installed core desktop binary (`openidm.exe` + `openidm-nmh.exe`) is under `3 MB`, starts in `< 100 ms`, and consumes `< 15 MB` private working set when idle in the system tray ([PERFORMANCE_AND_SIZE_BUDGET.md](PERFORMANCE_AND_SIZE_BUDGET.md)).
+2. **Resource Efficiency:** The installed core desktop binary (`radium.exe` + `radium-nmh.exe`) is under `3 MB`, starts in `< 100 ms`, and consumes `< 15 MB` private working set when idle in the system tray ([PERFORMANCE_AND_SIZE_BUDGET.md](PERFORMANCE_AND_SIZE_BUDGET.md)).
 3. **Security:** Zero network ports are opened by default; all IPC is restricted by OS user SID DACLs; all untrusted filenames and manifest parameters are sanitized against path traversal and argument injection ([SECURITY_THREAT_MODEL.md](SECURITY_THREAT_MODEL.md)).

@@ -50,7 +50,7 @@ Injected with `"all_frames": true`, `"run_at": "document_idle"`:
 1. Observes `<video>` and `<audio>` elements via `MutationObserver` and document-level capturing listeners for `loadedmetadata`, `play`, and `playing`.
 2. Checks `video.mediaKeys !== null` or `encrypted` event firing on the `<video>` element to immediately flag DRM-protected players before the user even clicks download!
 3. Sends `REPORT_PLAYER_STATE` (`tabId`, `frameId`, `videoRect`, `currentSrc`, `isEncrypted`, `documentTitle`) to the Service Worker.
-4. Renders the **Closed Shadow DOM Video Overlay Button** (`<openidm-overlay-host>`) anchored to the top-right corner of the `<video>` bounding box when hovered.
+4. Renders the **Closed Shadow DOM Video Overlay Button** (`<radium-overlay-host>`) anchored to the top-right corner of the `<video>` bounding box when hovered.
 5. A user click on that button passes the selected YouTube quality and requests immediate task start. YouTube format prewarming starts on top-level navigation and is retried when player metadata arrives if the earlier native-host request failed.
 
 ### 3.3 Layer 3: Opt-In Page-Context Instrumentation ("Deep Search" — `FR-017`)
@@ -59,7 +59,7 @@ Inspired by Cat Catch's `catch-script/catch.js` ([Cat Catch Deep Search Docs](ht
 2. Wraps `window.fetch` and `XMLHttpRequest.prototype.open/send`:
    - Clones responses whose text begins with `#EXTM3U` (HLS) or `<MPD` (DASH) even when the server returns `Content-Type: text/plain` or `application/octet-stream` on an obfuscated URL path.
    - Emits a structured `CustomEvent` containing `{ url, manifestType, manifestBodyText }` to the isolated content script, which forwards it to the Service Worker.
-   - Caching `manifestBodyText` solves the **one-time-use manifest URL problem (`RISK-004`)**: `openidm.exe` can save `manifestBodyText` to disk and pass `--base-url <url>` to `N_m3u8DL-RE.exe` without re-requesting the expired manifest URL!
+   - Caching `manifestBodyText` solves the **one-time-use manifest URL problem (`RISK-004`)**: `radium.exe` can save `manifestBodyText` to disk and pass `--base-url <url>` to `N_m3u8DL-RE.exe` without re-requesting the expired manifest URL!
 
 ---
 

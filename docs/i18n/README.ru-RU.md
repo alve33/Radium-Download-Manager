@@ -96,7 +96,7 @@ Radium — это современный высокопроизводитель�
 ## Ключевые возможности
 
 <p align="center">
-  <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Диалог добавления загрузки в Radium" width="90%">
+  <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Диалог добавления загрузки в Radium" width="90%">
 </p>
 
 ### Сегментированная загрузка HTTP и HTTPS
@@ -145,7 +145,7 @@ Radium поддерживает 12 распространенных мировы
 
 | Главное окно со списком загрузок | Центр настроек и сетевые параметры |
 | :---: | :---: |
-| <img src="../../docs/images/readme/radium-main-window.png" alt="Главное окно" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Настройки" width="460"> |
+| <img src="../../docs/images/readme/radium-main-window.png" alt="Главное окно" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Настройки" width="460"> |
 
 </div>
 
@@ -294,11 +294,11 @@ Radium работает с любыми серверами, поддержива
 
 ## Участие в разработке
 
-Мы рады любому вкладу в развитие проекта! Перед отправкой pull request, пожалуйста, ознакомьтесь с [CONTRIBUTING.md](CONTRIBUTING.md) и изучите архитектурную документацию в [docs/INDEX.md](docs/INDEX.md).
+Мы рады любому вкладу в развитие проекта! Перед отправкой pull request, пожалуйста, ознакомьтесь с [CONTRIBUTING.md](../../CONTRIBUTING.md) и изучите архитектурную документацию в [docs/INDEX.md](../../docs/INDEX.md).
 
 ## Лицензия и благодарности
 
-Radium Download Manager распространяется под лицензией **Apache-2.0**. Полные условия представлены в файле [LICENSE](LICENSE).
+Radium Download Manager распространяется под лицензией **Apache-2.0**. Полные условия представлены в файле [LICENSE](../../LICENSE).
 
 ### Сторонние компоненты
 Radium использует [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0), [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL/GPL) и [SQLite 3](https://www.sqlite.org/) (Public Domain).

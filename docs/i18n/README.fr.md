@@ -96,7 +96,7 @@ Les sommes de contrôle SHA256 sont disponibles dans [SHA256SUMS.txt](https://gi
 ## Fonctionnalités clés
 
 <p align="center">
-  <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Fenêtre de nouveau téléchargement de Radium" width="90%">
+  <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Fenêtre de nouveau téléchargement de Radium" width="90%">
 </p>
 
 ### Téléchargement HTTP & HTTPS segmenté
@@ -145,7 +145,7 @@ Radium propose un catalogue linguistique complet couvrant 12 langues internation
 
 | Fenêtre principale et liste des tâches | Centre de configuration et paramètres réseau |
 | :---: | :---: |
-| <img src="../../docs/images/readme/radium-main-window.png" alt="Fenêtre principale" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Paramètres" width="460"> |
+| <img src="../../docs/images/readme/radium-main-window.png" alt="Fenêtre principale" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Paramètres" width="460"> |
 
 </div>
 
@@ -294,11 +294,11 @@ Radium prend en charge tout serveur HTTP/HTTPS conforme à la norme RFC 7233 (`2
 
 ## Contribuer
 
-Les contributions au projet sont les bienvenues ! Veuillez consulter notre guide [CONTRIBUTING.md](CONTRIBUTING.md) et vous référer aux principes d'architecture décrits dans [docs/INDEX.md](docs/INDEX.md) avant d'ouvrir une pull request.
+Les contributions au projet sont les bienvenues ! Veuillez consulter notre guide [CONTRIBUTING.md](../../CONTRIBUTING.md) et vous référer aux principes d'architecture décrits dans [docs/INDEX.md](../../docs/INDEX.md) avant d'ouvrir une pull request.
 
 ## Licence et Crédits
 
-Radium Download Manager est distribué sous la **licence Apache-2.0**. Pour plus de précisions, reportez-vous au fichier [LICENSE](LICENSE).
+Radium Download Manager est distribué sous la **licence Apache-2.0**. Pour plus de précisions, reportez-vous au fichier [LICENSE](../../LICENSE).
 
 ### Composants tiers
 Radium s'appuie sur [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0), [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL/GPL) et [SQLite 3](https://www.sqlite.org/) (Domaine public).

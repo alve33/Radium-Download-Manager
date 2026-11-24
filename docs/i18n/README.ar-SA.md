@@ -98,7 +98,7 @@
 ## الميزات الرئيسية
 
 <p align="center">
-  <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="نافذة إضافة تنزيل جديد في Radium" width="90%">
+  <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="نافذة إضافة تنزيل جديد في Radium" width="90%">
 </p>
 
 ### تنزيل HTTP وHTTPS المجزأ
@@ -147,7 +147,7 @@
 
 | النافذة الرئيسية وقائمة التنزيلات | مركز الإعدادات وخيارات الشبكة |
 | :---: | :---: |
-| <img src="../../docs/images/readme/radium-main-window.png" alt="النافذة الرئيسية" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="مركز الإعدادات" width="460"> |
+| <img src="../../docs/images/readme/radium-main-window.png" alt="النافذة الرئيسية" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.png" alt="مركز الإعدادات" width="460"> |
 
 </div>
 
@@ -296,11 +296,11 @@ npm test
 
 ## المساهمة في المشروع
 
-نرحب بجميع المساهمات والمقترحات! يرجى مراجعة ملف إرشادات المساهمة [CONTRIBUTING.md](CONTRIBUTING.md) وقراءة التوجيهات المعمارية في [docs/INDEX.md](docs/INDEX.md) قبل تقديم طلبات السحب (Pull Requests).
+نرحب بجميع المساهمات والمقترحات! يرجى مراجعة ملف إرشادات المساهمة [CONTRIBUTING.md](../../CONTRIBUTING.md) وقراءة التوجيهات المعمارية في [docs/INDEX.md](../../docs/INDEX.md) قبل تقديم طلبات السحب (Pull Requests).
 
 ## الترخيص والشكر والتقدير
 
-يخضع برنامج Radium Download Manager لترخيص **Apache-2.0**. لمزيد من التفاصيل، راجع ملف [LICENSE](LICENSE).
+يخضع برنامج Radium Download Manager لترخيص **Apache-2.0**. لمزيد من التفاصيل، راجع ملف [LICENSE](../../LICENSE).
 
 ### المكونات الخارجية
 يستخدم Radium كلاً من [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0) و[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT) و[FFmpeg](https://ffmpeg.org/) (LGPL/GPL) و[SQLite 3](https://www.sqlite.org/) (Public Domain).

@@ -13,8 +13,8 @@
 
 ## Context
 
-The OpenIDM browser extension (running in Chrome, Edge, Brave, and Firefox) must communicate bi-directionally with the OpenIDM desktop application (`openidm.exe`) to:
-1. Check whether `openidm.exe` is running and negotiate protocol versions.
+The Radium browser extension (running in Chrome, Edge, Brave, and Firefox) must communicate bi-directionally with the Radium desktop application (`radium.exe`) to:
+1. Check whether `radium.exe` is running and negotiate protocol versions.
 2. Forward intercepted file downloads (`URL`, `Referer`, `Cookie`, `User-Agent`, suggested filename).
 3. Push or query detected streaming manifests (`.m3u8`, `.mpd`) and trigger the desktop Track Selection dialog when the user clicks the in-page "Download Video" button.
 
@@ -24,12 +24,12 @@ Upstream projects use risky or fragile mechanisms:
 
 ## Decision
 
-1. **Primary Transport:** Use the standard **Browser Native Messaging API** (`chrome.runtime.connectNative("org.openidm.native")` / `browser.runtime.connectNative("org.openidm.native")`) connected to `openidm-nmh.exe`, which bridges messages over a **per-user ACL-protected Windows Named Pipe** (`\\.\pipe\OpenIDM_IPC_<UserSID>`) to `openidm.exe`.
+1. **Primary Transport:** Use the standard **Browser Native Messaging API** (`chrome.runtime.connectNative("org.openidm.native")` / `browser.runtime.connectNative("org.openidm.native")`) connected to `radium-nmh.exe`, which bridges messages over a **per-user ACL-protected Windows Named Pipe** (`\\.\pipe\Radium_IPC_<UserSID>`) to `radium.exe`.
 2. **Protocol Framing:** Length-prefixed JSON-RPC 2.0 (`uint32_le` byte length followed by UTF-8 JSON payload, capped at `1 MiB` per message).
 3. **Explicitly Prohibited Mechanisms:**
-   - **Never** register a custom URL protocol (`openidm://` or `m3u8dl://`) that passes webpage strings onto a command line.
+   - **Never** register a custom URL protocol (`radium://` or `m3u8dl://`) that passes webpage strings onto a command line.
    - **Never** run an unauthenticated localhost HTTP or WebSocket server.
-4. **Opt-In Fallback for Restricted Environments:** Only if a user runs OpenIDM in an environment where registry keys (`HKCU\Software\...\NativeMessagingHosts`) are blocked by enterprise Group Policy, provide an **off-by-default Authenticated Loopback Fallback** (`127.0.0.1` only, ephemeral port, requiring a 256-bit cryptographic Bearer secret generated via `BCryptGenRandom` and manually pasted by the user into Extension Options, plus strict `Origin: chrome-extension://<id>` validation).
+4. **Opt-In Fallback for Restricted Environments:** Only if a user runs Radium in an environment where registry keys (`HKCU\Software\...\NativeMessagingHosts`) are blocked by enterprise Group Policy, provide an **off-by-default Authenticated Loopback Fallback** (`127.0.0.1` only, ephemeral port, requiring a 256-bit cryptographic Bearer secret generated via `BCryptGenRandom` and manually pasted by the user into Extension Options, plus strict `Origin: chrome-extension://<id>` validation).
 
 ## Alternatives Considered
 
@@ -38,13 +38,13 @@ Upstream projects use risky or fragile mechanisms:
 2. **Custom Windows URL Protocol (`m3u8dl://` — Used by Cat Catch) (`Rejected`):**
    - *Security Flaw:* One-way only (no response back to the browser), triggers repetitive browser confirmation popups (`Always allow site to open m3u8dl links?`), truncates long URLs/cookies at shell length limits, and is notoriously vulnerable to command-line argument injection (CVE class found in numerous protocol handlers).
 3. **Direct Browser-to-Named-Pipe Connection (`Not Possible`):**
-   - Browser Web/Extension sandboxes cannot open `\\.\pipe\*` directly without a Native Messaging Host executable (`openidm-nmh.exe`).
+   - Browser Web/Extension sandboxes cannot open `\\.\pipe\*` directly without a Native Messaging Host executable (`radium-nmh.exe`).
 
 ## Rationale
 
-- **OS-Enforced Authentication:** Browser Native Messaging verifies the extension ID (`allowed_origins`: `chrome-extension://<id>/` for Chromium; `allowed_extensions`: `["extension@openidm.org"]` for Firefox) before spawning `openidm-nmh.exe`. Arbitrary webpages cannot talk to `openidm-nmh.exe`.
-- **Multi-User Isolation:** The Named Pipe `\\.\pipe\OpenIDM_IPC_<UserSID>` uses an explicit Win32 DACL (`SECURITY_ATTRIBUTES`) granting access solely to the current user's logon SID (`TokenUser`) and `SYSTEM`, plus `FILE_FLAG_FIRST_PIPE_INSTANCE` to prevent pipe-squatting on multi-user Windows systems (`NFR-008`).
-- **Auto-Wake Capability:** If the user closed `openidm.exe`, clicking "Download Video" in the browser causes the browser to spawn `openidm-nmh.exe`, which automatically starts `openidm.exe --background` and completes the RPC seamlessly.
+- **OS-Enforced Authentication:** Browser Native Messaging verifies the extension ID (`allowed_origins`: `chrome-extension://<id>/` for Chromium; `allowed_extensions`: `["extension@radium-dm.org"]` for Firefox) before spawning `radium-nmh.exe`. Arbitrary webpages cannot talk to `radium-nmh.exe`.
+- **Multi-User Isolation:** The Named Pipe `\\.\pipe\Radium_IPC_<UserSID>` uses an explicit Win32 DACL (`SECURITY_ATTRIBUTES`) granting access solely to the current user's logon SID (`TokenUser`) and `SYSTEM`, plus `FILE_FLAG_FIRST_PIPE_INSTANCE` to prevent pipe-squatting on multi-user Windows systems (`NFR-008`).
+- **Auto-Wake Capability:** If the user closed `radium.exe`, clicking "Download Video" in the browser causes the browser to spawn `radium-nmh.exe`, which automatically starts `radium.exe --background` and completes the RPC seamlessly.
 
 ## Consequences
 

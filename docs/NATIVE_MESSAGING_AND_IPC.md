@@ -77,7 +77,7 @@ Registered at `HKCU\\Software\\Mozilla\\NativeMessagingHosts\\com.radium.downloa
   "type": "stdio",
   "allowed_extensions": [
     "radium@downloadmanager.com",
-    "extension@openidm.org"
+    "extension@radium-dm.org"
   ]
 }
 ```

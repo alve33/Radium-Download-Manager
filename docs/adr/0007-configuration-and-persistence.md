@@ -13,7 +13,7 @@
 
 ## Context
 
-OpenIDM must persist:
+Radium must persist:
 1. **Task Metadata & Lifecycle State:** URL, final destination path, file size, `ETag`/`Last-Modified` validators, category, queue ID, creation/completion timestamps, and error status across thousands of historical tasks.
 2. **High-Frequency Segment Progress:** For every active segmented HTTP download (up to 32 segments per task), the exact `start_offset`, `current_offset`, and `end_offset` must be checkpointed frequently so a power outage, BSOD, or `TerminateProcess` loses minimal downloaded bytes and never corrupts the state file.
 3. **Transient Authentication Headers:** Resuming a paused download from an authenticated session requires retaining the `Referer`, `User-Agent`, and (while the task is incomplete) `Cookie` or `Authorization` headers, without storing session cookies in plaintext on disk.
@@ -21,7 +21,7 @@ OpenIDM must persist:
 
 ## Decision
 
-1. **Primary Storage Engine:** Use an embedded **SQLite 3** database (`%LOCALAPPDATA%\OpenIDM\state.db`) compiled from the official amalgamation (`sqlite3.c`) directly into `openidm.exe`.
+1. **Primary Storage Engine:** Use an embedded **SQLite 3** database (`%LOCALAPPDATA%\Radium Download Manager\state.db`) compiled from the official amalgamation (`sqlite3.c`) directly into `radium.exe`.
 2. **Concurrency & Crash-Safety Configuration:**
    - Open `state.db` on a dedicated serializer thread with:
      ```sql
@@ -37,7 +37,7 @@ OpenIDM must persist:
    - **Automatic Ephemeral Wipe:** As soon as a task transitions to `Completed` (or is deleted), set `encrypted_auth_blob = NULL` and overwrite any temporary `@headers.rsp` / `cookies.txt` files before unlinking.
 4. **Partial & Temporary File Layout:**
    - Ordinary HTTP downloads write directly to `<destination_dir>\<filename>.openidm.part` (pre-allocated via `SetFileInformationByHandle` `FileEndOfFileInfo`) so the final atomic rename (`FileRenameInfoEx`) is an instant same-volume metadata operation.
-   - Stream downloads use an isolated per-task directory `%LOCALAPPDATA%\OpenIDM\tmp\<task_uuid>\` (created with a restrictive per-user DACL) for `N_m3u8DL-RE` segment assembly and response files, moving only the final muxed `.mp4`/`.mkv` to `<destination_dir>`.
+   - Stream downloads use an isolated per-task directory `%LOCALAPPDATA%\Radium Download Manager\tmp\<task_uuid>\` (created with a restrictive per-user DACL) for `N_m3u8DL-RE` segment assembly and response files, moving only the final muxed `.mp4`/`.mkv` to `<destination_dir>`.
 
 ## Alternatives Considered
 

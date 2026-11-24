@@ -6,7 +6,7 @@ The current desktop UI is custom Win32/GDI rather than Qt. Localization uses an 
 
 **Document Status:** Proposed & Accepted Stack Specification  
 **Last Reviewed:** 2026-10-16  
-**Scope:** Comparative evaluation of the 7 candidate desktop frameworks required by Section 4 of the Master Prompt, and the approved stack for all OpenIDM components.  
+**Scope:** Comparative evaluation of the 7 candidate desktop frameworks required by Section 4 of the Master Prompt, and the approved stack for all Radium components.  
 **Related Documents:** [adr/0001-desktop-framework.md](adr/0001-desktop-framework.md), [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md), [PERFORMANCE_AND_SIZE_BUDGET.md](PERFORMANCE_AND_SIZE_BUDGET.md), [WINDOWS_BUILD_AND_PACKAGING.md](WINDOWS_BUILD_AND_PACKAGING.md)
 
 ---
@@ -15,10 +15,10 @@ The current desktop UI is custom Win32/GDI rather than Qt. Localization uses an 
 
 | Layer | Selected Technology | Rationale Summary |
 | :--- | :--- | :--- |
-| **Desktop Application (`openidm.exe`)** | **C++20 (MSVC 2022) + Native Win32 API (`ComCtl32` v6, `UXTheme`, `Direct2D`)** | `< 2.5 MB` binary, `< 80 ms` startup, `8–15 MB` idle tray RAM, zero external runtime, direct access to `WinHTTP`, IOCP, Named Pipes, DPAPI, and Job Objects. |
-| **Native Messaging Host (`openidm-nmh.exe`)** | **C++20 + Win32 Console (`stdin`/`stdout` + Named Pipe Client)** | `< 300 KB` standalone executable; launches in `< 10 ms` when invoked by the browser. |
+| **Desktop Application (`radium.exe`)** | **C++20 (MSVC 2022) + Native Win32 API (`ComCtl32` v6, `UXTheme`, `Direct2D`)** | `< 2.5 MB` binary, `< 80 ms` startup, `8–15 MB` idle tray RAM, zero external runtime, direct access to `WinHTTP`, IOCP, Named Pipes, DPAPI, and Job Objects. |
+| **Native Messaging Host (`radium-nmh.exe`)** | **C++20 + Win32 Console (`stdin`/`stdout` + Named Pipe Client)** | `< 300 KB` standalone executable; launches in `< 10 ms` when invoked by the browser. |
 | **HTTP Networking Engine** | **Windows `WinHTTP` API (Asynchronous Mode) + I/O Completion Ports (IOCP)** | Built into Windows 11; supports HTTP/1.1, HTTP/2, OS Schannel TLS 1.3, automatic WPAD/PAC system proxy resolution, and zero-copy buffer management without bundling OpenSSL or `libcurl`. |
-| **Stream Download Engine** | **`N_m3u8DL-RE.exe` (C# .NET NativeAOT Subprocess) + `ffmpeg.exe`** | Reuses the mature MIT-licensed HLS/DASH/MSS engine via a clean CLI/JSON boundary without embedding a .NET runtime inside `openidm.exe`. |
+| **Stream Download Engine** | **`N_m3u8DL-RE.exe` (C# .NET NativeAOT Subprocess) + `ffmpeg.exe`** | Reuses the mature MIT-licensed HLS/DASH/MSS engine via a clean CLI/JSON boundary without embedding a .NET runtime inside `radium.exe`. |
 | **Local Persistence** | **Embedded SQLite 3 (`sqlite3.c` Amalgamation in `WAL` mode)** | Public Domain, ~900 KB compiled size, ACID crash safety for sub-second byte-range offset checkpointing. |
 | **Credential Protection** | **Windows DPAPI (`CryptProtectData` / `CryptUnprotectData`)** | OS-enforced encryption bound to the current Windows user logon session (`CRYPTPROTECT_UI_FORBIDDEN`). |
 | **JSON Serialization** | **`nlohmann/json` (or `yyjson`)** | Battle-tested MIT library for Native Messaging JSON-RPC 2.0 and `N_m3u8DL-RE` `meta.json` parsing. |
@@ -62,16 +62,16 @@ As required by Section 4 of the Master Prompt, our engineering analysis strictly
 
 | Component Category | Binaries Included | Uncompressed Disk Size (x64) | LZMA2 Compressed Installer Impact | Runtime Memory Impact |
 | :--- | :--- | :--- | :--- | :--- |
-| **1. Core OpenIDM Desktop & IPC** | `openidm.exe` (includes SQLite3, WinHTTP engine, Win32 UI) + `openidm-nmh.exe` | **~2.2 MB** | **~0.9 MB** | **8 – 15 MB** (always resident when running in tray) |
+| **1. Core Radium Desktop & IPC** | `radium.exe` (includes SQLite3, WinHTTP engine, Win32 UI) + `radium-nmh.exe` | **~2.2 MB** | **~0.9 MB** | **8 – 15 MB** (always resident when running in tray) |
 | **2. Stream Downloader Worker** | `N_m3u8DL-RE.exe` (.NET 8/9 NativeAOT single-file release) | **~14.5 MB** | **~5.8 MB** | **0 MB** when idle; **25 – 60 MB** only while actively downloading an HLS/DASH stream |
 | **3. Media Container Muxer** | `ffmpeg.exe` (minimal GPL/LGPL build compiled with `--disable-doc --disable-ffplay --disable-ffprobe --disable-filters` except concat/muxer/bsf) or standard essentials build | **~28 MB** (minimal mux-only build) to **~75 MB** (full build) | **~11 MB** (minimal) to **~26 MB** (full) | **0 MB** when idle; **20 – 50 MB** for 1–5 seconds only during final container muxing |
-| **4. Browser Extension Package** | `openidm-extension.crx` / `.xpi` (installed via browser store or developer mode) | **~180 KB** | **~65 KB** | Managed by browser (`~10–20 MB` when Service Worker is awake; `0 MB` when suspended) |
+| **4. Browser Extension Package** | `radium-extension.crx` / `.xpi` (installed via browser store or developer mode) | **~180 KB** | **~65 KB** | Managed by browser (`~10–20 MB` when Service Worker is awake; `0 MB` when suspended) |
 
 ### Why Win32 Still Matters Even When `ffmpeg.exe` and `N_m3u8DL-RE.exe` Are Bundled
 A superficial analysis might argue: *"Since `ffmpeg.exe` + `N_m3u8DL-RE.exe` take 42–90 MB on disk, why not use Flutter, Qt, or WebView2 for the main GUI?"*  
 That argument confuses **dormant disk footprint** with **resident 24/7 memory and startup latency**:
 1. `N_m3u8DL-RE.exe` and `ffmpeg.exe` are **short-lived worker subprocesses**. When the user is not actively downloading an HLS/DASH stream, they consume **0 bytes of RAM** and **0 CPU cycles**.
-2. By contrast, `openidm.exe` runs **continuously in the Windows 11 system tray** from boot to shutdown so it can respond within `< 50 ms` whenever the browser intercepts a download or detects a video.
+2. By contrast, `radium.exe` runs **continuously in the Windows 11 system tray** from boot to shutdown so it can respond within `< 50 ms` whenever the browser intercepts a download or detects a video.
 3. Choosing Native C++20 + Win32 keeps the always-on resident process at **8–15 MB RAM** and instantaneous (`< 20 ms`) dialog pop-up latency—matching the responsiveness that made classic IDM famous—whereas Flutter, WinUI 3, or WebView2 would permanently pin **50–150 MB of RAM** just to keep a tray icon alive.
 
 ---
@@ -79,6 +79,6 @@ That argument confuses **dormant disk footprint** with **resident 24/7 memory an
 ## 4. Why `N_m3u8DL-RE` Is Integrated as a Worker Process Rather Than Linked In-Process
 
 Even if C# were chosen for the desktop UI, `N_m3u8DL-RE` ([nilaoda/N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE)) is architected as a command-line application tightly coupled to `System.CommandLine` and `Spectre.Console` live terminal rendering, rather than a multi-instance, thread-safe NuGet library. Running `N_m3u8DL-RE.exe` as an isolated child process per stream task provides:
-1. **Fault Isolation:** A malformed manifest or unhandled exception in `N_m3u8DL-RE` or `ffmpeg` cannot crash the main `openidm.exe` process or interrupt other concurrent downloads.
+1. **Fault Isolation:** A malformed manifest or unhandled exception in `N_m3u8DL-RE` or `ffmpeg` cannot crash the main `radium.exe` process or interrupt other concurrent downloads.
 2. **Deterministic Cancellation:** Assigning each `N_m3u8DL-RE.exe` invocation to a dedicated Windows Job Object (`CreateJobObjectW`) guarantees that canceling a task immediately kills both `N_m3u8DL-RE.exe` and any child `ffmpeg.exe` processes it spawned.
-3. **Independent Upgradability:** When upstream `N_m3u8DL-RE` releases a fix for a new HLS/DASH edge case, `N_m3u8DL-RE.exe` can be updated and validated against our CLI contract tests without recompiling `openidm.exe`.
+3. **Independent Upgradability:** When upstream `N_m3u8DL-RE` releases a fix for a new HLS/DASH edge case, `N_m3u8DL-RE.exe` can be updated and validated against our CLI contract tests without recompiling `radium.exe`.

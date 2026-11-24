@@ -13,7 +13,7 @@
 
 ## Context
 
-OpenIDM requires two specialized download engines:
+Radium requires two specialized download engines:
 1. **Ordinary File Download Engine:** For single-file HTTP/HTTPS transfers (`.zip`, `.iso`, `.exe`, progressive `.mp4`), requiring dynamic connection spawning, work-stealing byte-range splitting, stall reset, and crash-safe resume (capabilities demonstrated in [Brisk](https://github.com/BrisklyDev/brisk)).
 2. **Adaptive Stream Download Engine:** For HLS (`.m3u8`), DASH (`.mpd`), and MSS (`.ism`) manifests requiring variant parsing, track selection, concurrent segment downloading, and container muxing (capabilities demonstrated in [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE)).
 
@@ -22,7 +22,7 @@ We must decide how to integrate or implement these engines within our C++20/Win3
 ## Decision
 
 1. **Ordinary File Engine (`IFileDownloadEngine` -> `WinHttpDownloadEngine`):**
-   - Implement **natively in C++20 inside `openidm.exe`** on top of the Windows `WinHTTP` asynchronous API and Windows I/O Completion Ports (IOCP).
+   - Implement **natively in C++20 inside `radium.exe`** on top of the Windows `WinHTTP` asynchronous API and Windows I/O Completion Ports (IOCP).
    - **Adapt Brisk's core algorithms cleanly without embedding Dart/Flutter:**
      - *Dynamic Connection Spawning:* Start with 1 connection (`Segment 0` covering `[0, total_size - 1]`). Once `206 Partial Content` is verified and throughput is flowing, progressively spawn additional workers up to `max_connections` (default `8`).
      - *Dynamic Connection Reuse (Work-Stealing Split):* Whenever a worker completes its assigned byte range, find the active segment with the largest remaining byte count (`remaining >= 2 * min_split_size`, where `min_split_size = 1 MiB`), atomically truncate that active worker's `end_offset` to the midpoint `M`, and assign `[M + 1, old_end]` to the idle worker.

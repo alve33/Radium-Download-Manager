@@ -126,7 +126,7 @@ Las sumas de comprobación SHA256 están disponibles en [SHA256SUMS.txt](https:/
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Diálogo de Nueva Descarga de Radium" width="100%">
+      <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Diálogo de Nueva Descarga de Radium" width="100%">
       <br>
       <sub>Diálogo instantáneo con sondeo previo de encabezados, selección de carpeta y comprobación de espacio en disco.</sub>
       <h3>Intercepción Inteligente y Sondeo Previo</h3>
@@ -141,7 +141,7 @@ Las sumas de comprobación SHA256 están disponibles en [SHA256SUMS.txt](https:/
       </ul>
     </td>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-add-torrent-dialog.jpg" alt="Diálogo de Añadir Torrent de Radium" width="100%">
+      <img src="../../docs/images/readme/radium-add-torrent-dialog.png" alt="Diálogo de Añadir Torrent de Radium" width="100%">
       <br>
       <sub>Diálogo nativo con árbol jerárquico de archivos, inspección de metadatos y verificación de piezas.</sub>
       <h3>Motor Nativo BitTorrent v1</h3>
@@ -158,7 +158,7 @@ Las sumas de comprobación SHA256 están disponibles en [SHA256SUMS.txt](https:/
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Centro de Configuración de Radium" width="100%">
+      <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Centro de Configuración de Radium" width="100%">
       <br>
       <sub>Centro de Configuración: Límites de conexión, enrutamiento por categorías, proxy y estado de integración.</sub>
       <h3>Configuración Profunda e Integración Nativa</h3>
@@ -242,19 +242,19 @@ Radium está pensado para una audiencia global. La internacionalización está i
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Diálogo de Nueva Descarga de Radium" width="100%">
+      <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Diálogo de Nueva Descarga de Radium" width="100%">
       <br>
       <sub><b>Sondeo Previo:</b> Verificación de soporte de rangos, cálculo de espacio en disco y asignación automática.</sub>
     </td>
     <td width="50%" valign="top">
-      <img src="../../docs/images/readme/radium-add-torrent-dialog.jpg" alt="Diálogo de Añadir Torrent de Radium" width="100%">
+      <img src="../../docs/images/readme/radium-add-torrent-dialog.png" alt="Diálogo de Añadir Torrent de Radium" width="100%">
       <br>
       <sub><b>Gestión BitTorrent:</b> Selección selectiva en árbol de carpetas, metadatos y verificación de piezas.</sub>
     </td>
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Centro de Configuración de Radium" width="100%">
+      <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Centro de Configuración de Radium" width="100%">
       <br>
       <sub><b>Centro de Configuración:</b> Selección de idiomas en su grafía nativa, ajustes visuales claro/oscuro, límites y red.</sub>
     </td>
@@ -364,8 +364,8 @@ cmake --build build/win-x64 --config Release
 .\build\win-x64\Release\radium_unit_tests.exe
 ```
 
-- [Matriz de características](docs/FEATURE_MATRIX.md)
-- [Matriz de pruebas](docs/TEST_MATRIX.md)
+- [Matriz de características](../../docs/FEATURE_MATRIX.md)
+- [Matriz de pruebas](../../docs/TEST_MATRIX.md)
 - [Flujo de trabajo de versiones de Windows](https://github.com/alve33/Radium-Download-Manager/actions/workflows/windows-release.yml)
 
 <br>
@@ -380,15 +380,15 @@ Radium utiliza descargas segmentadas únicamente después de que el servidor con
 
 ## Contribuir
 
-Los informes de errores y las solicitudes de extracción (Pull Requests) son bienvenidos. Lea [CONTRIBUTING.md](CONTRIBUTING.md) y siga las directrices en [AGENTS.md](AGENTS.md).
+Los informes de errores y las solicitudes de extracción (Pull Requests) son bienvenidos. Lea [CONTRIBUTING.md](../../CONTRIBUTING.md) y siga las directrices en [AGENTS.md](../../AGENTS.md).
 
 <br>
 
 ## Licencia y Créditos
 
-Radium Download Manager es software de código abierto publicado bajo la **Licencia Apache, Versión 2.0** ([Apache-2.0](LICENSE)).
+Radium Download Manager es software de código abierto publicado bajo la **Licencia Apache, Versión 2.0** ([Apache-2.0](../../LICENSE)).
 
-Radium utiliza [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Dominio Público) y [nlohmann/json](https://github.com/nlohmann/json) (MIT). Consulta [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) y [`NOTICE`](NOTICE).
+Radium utiliza [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Dominio Público) y [nlohmann/json](https://github.com/nlohmann/json) (MIT). Consulta [`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md) y [`NOTICE`](../../NOTICE).
 
 <br>
 

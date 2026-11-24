@@ -31,7 +31,7 @@ Radium dynamically resolves all operational directories and worker binaries at r
 1. **Executable Directory (`PathSanitizer::GetExecutableDir()`):**
    - Resolves the directory containing `radium.exe` via `GetModuleFileNameW(nullptr, ...)`.
 2. **Application Data Directory (`PathSanitizer::GetDefaultAppDataDir()`):**
-   - Resolves `%LOCALAPPDATA%\Radium Download Manager` on Windows 11 (`state.db`, `state.db-wal`, `radium.log`, `tmp\`). Automatically migrates legacy state from `%LOCALAPPDATA%\Flux Download Manager` or `%LOCALAPPDATA%\OpenIDM` if legacy state exists.
+   - Resolves `%LOCALAPPDATA%\Radium Download Manager` on Windows 11 (`state.db`, `state.db-wal`, `radium.log`, `tmp\`). Automatically migrates legacy state from `%LOCALAPPDATA%\Flux Download Manager` or `%LOCALAPPDATA%\Radium Download Manager` if legacy state exists.
 3. **Default Downloads Directory (`PathSanitizer::GetDefaultDownloadsDir()`):**
    - Resolves standard Windows Downloads folder via `SHGetKnownFolderPath(FOLDERID_Downloads)` or `%USERPROFILE%\Downloads` (customizable in Settings and persisted in `state.db`). Preserves existing folders if present.
 4. **Stream Worker Binary Discovery (`PathSanitizer::FindWorkerBinary()`):**
@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package-release-zip.ps1 -Versio
   - Primary: `Software\Google\Chrome\NativeMessagingHosts\com.radium.downloadmanager`, `Software\Microsoft\Edge\NativeMessagingHosts\com.radium.downloadmanager`, `Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.radium.downloadmanager`, `Software\Mozilla\NativeMessagingHosts\com.radium.downloadmanager`.
   - Plus legacy aliases (`com.flux.downloadmanager`, `org.openidm.native`) for backward compatibility with existing installations.
 - **Upgrade & Uninstall Safety:**
-  - Uses `AppMutex=Local\Radium_SingleInstance,Local\Flux_SingleInstance,Local\OpenIDM_SingleInstance` to ensure clean shutdown before binary replacement.
+  - Uses `AppMutex=Local\Radium_SingleInstance,Local\Flux_SingleInstance,Local\Radium_SingleInstance` to ensure clean shutdown before binary replacement.
   - Cleanly preserves `%LOCALAPPDATA%\Radium Download Manager\state.db` and user download directories during uninstall and upgrades.
 
 

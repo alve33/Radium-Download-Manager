@@ -13,7 +13,7 @@
 
 ## Context
 
-To compete with IDM's automatic video download panel, OpenIDM must reliably discover videos playing on modern websites and attach a convenient "Download Video" button to the active video player. Modern web video delivery falls into four categories:
+To compete with IDM's automatic video download panel, Radium must reliably discover videos playing on modern websites and attach a convenient "Download Video" button to the active video player. Modern web video delivery falls into four categories:
 1. **Progressive HTTP Media:** Direct `<video src="https://.../video.mp4">` or byte-range `.mp4`/`.webm` requests.
 2. **Adaptive Streaming via MSE (`hls.js`, `dash.js`, Shaka Player):** The `<video>` element's `src` is a synthetic `blob:https://...` URL backed by a `MediaSource` object, while the actual `.m3u8` (HLS) or `.mpd` (DASH) manifest and `.ts`/`.m4s` segments are fetched via `fetch()` or `XMLHttpRequest`.
 3. **Obfuscated / Dynamic Manifests:** Sites that fetch `.m3u8` or `.mpd` content from URLs without `.m3u8`/`.mpd` extensions and return generic `text/plain` or `application/octet-stream` headers, or expire the manifest URL immediately after the first read.
@@ -41,7 +41,7 @@ We adopt a **Three-Layer Browser Detection Architecture** paired with a **Strict
 
 ### 2. Strict Boundary Between Discovery and Downloading
 - **The Browser Extension NEVER downloads segments, parses full segment lists, or muxes media.**
-- Its responsibility ends at producing a normalized `MediaCandidateDescriptor` (containing the manifest/media URL, optional cached manifest text, captured request headers, tab/frame metadata, and confidence score) and sending it over Native Messaging IPC to `openidm.exe`.
+- Its responsibility ends at producing a normalized `MediaCandidateDescriptor` (containing the manifest/media URL, optional cached manifest text, captured request headers, tab/frame metadata, and confidence score) and sending it over Native Messaging IPC to `radium.exe`.
 - **All manifest probing (`N_m3u8DL-RE --skip-download --write-meta-json`), track selection UI, multi-threaded downloading, and FFmpeg muxing execute natively on the desktop.**
 
 ## Alternatives Considered
@@ -60,9 +60,9 @@ Separating passive network/DOM discovery in the browser from heavy stream proces
 ## Consequences
 
 - **Positive:** Lightweight extension (`< 15 KB` content script), zero browser tab crashes, full support for multi-gigabyte 4K HLS/DASH streams, and clean handling of cross-origin video iframes.
-- **Negative:** Requires `openidm.exe` to be installed for stream downloading (the extension is a companion to `openidm.exe`, not a standalone in-browser downloader).
+- **Negative:** Requires `radium.exe` to be installed for stream downloading (the extension is a companion to `radium.exe`, not a standalone in-browser downloader).
 
 ## Risks & Mitigations
 
 - **Risk (`RISK-004`):** One-time-use manifest URLs fail when re-fetched by `N_m3u8DL-RE.exe`.
-- **Mitigation:** Support passing the captured manifest body text from Layer 3 to `openidm.exe`, which writes it to `<task_tmp>/manifest.m3u8` and invokes `N_m3u8DL-RE` with `--base-url <original_manifest_url>`.
+- **Mitigation:** Support passing the captured manifest body text from Layer 3 to `radium.exe`, which writes it to `<task_tmp>/manifest.m3u8` and invokes `N_m3u8DL-RE` with `--base-url <original_manifest_url>`.

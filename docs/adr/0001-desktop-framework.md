@@ -13,7 +13,7 @@
 
 ## Context
 
-OpenIDM targets Windows 11 `x64` (with future `ARM64` support) as a direct open-source competitor to Internet Download Manager (IDM). Unlike standard productivity apps that run only while the user interacts with a document, a download manager is a **resident background system utility**:
+Radium targets Windows 11 `x64` (with future `ARM64` support) as a direct open-source competitor to Internet Download Manager (IDM). Unlike standard productivity apps that run only while the user interacts with a document, a download manager is a **resident background system utility**:
 1. It launches at Windows login and stays minimized in the Windows 11 Notification Area (system tray) 24/7, waiting for browser download interception or media detection events via Native Messaging IPC.
 2. When triggered by a browser click, its "Add Download" or "Select Video Stream" dialog must appear instantaneously (`< 50 ms` perceived latency).
 3. During active multi-connection downloads at `1 Gbps+`, it must update per-segment byte progress bars at 15–30 Hz while writing hundreds of megabytes per second to disk with minimal CPU and memory overhead.
@@ -30,7 +30,7 @@ We evaluated seven candidate technology stacks (documented quantitatively in [..
 
 ## Decision
 
-We select **ISO C++20 (compiled with MSVC 2022) and the Native Windows Win32 API** (`ComCtl32.dll` Common Controls v6, `UXTheme` Dark Mode, and `Direct2D`/`GDI+` for custom segment progress bar rendering) for `openidm.exe` and `openidm-nmh.exe`.
+We select **ISO C++20 (compiled with MSVC 2022) and the Native Windows Win32 API** (`ComCtl32.dll` Common Controls v6, `UXTheme` Dark Mode, and `Direct2D`/`GDI+` for custom segment progress bar rendering) for `radium.exe` and `radium-nmh.exe`.
 
 To prevent the maintainability pitfalls of legacy C-style Win32 code, we enforce:
 - A modern C++20 RAII windowing layer (`src/ui/WindowBase.hpp`) using `CreateWindowExW` + `GWLP_USERDATA` `this`-pointer routing and Microsoft WIL (`wil::unique_hwnd`, `wil::unique_handle`).
@@ -60,7 +60,7 @@ To prevent the maintainability pitfalls of legacy C-style Win32 code, we enforce
 
 ## Rationale
 
-Why direct Win32 C++20 outweighs the extra UI implementation effort for OpenIDM:
+Why direct Win32 C++20 outweighs the extra UI implementation effort for Radium:
 1. **Bounded UI Surface Area:** A download manager does not require hundreds of complex free-form screens. Its entire UI consists of **5 well-defined views**:
    - Main Window (Menu, Toolbar, Category TreeView, Virtual ListView `LVS_OWNERDATA`, Splitter, Bottom Details/Log Pane, Status Bar).
    - Add Download / Confirm Intercept Dialog.

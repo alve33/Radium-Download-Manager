@@ -11,12 +11,12 @@
 
 1. **DRM-Protected Streams (Widevine, PlayReady, FairPlay, WisePlay, CENC `SAMPLE-AES-CTR`):**
    - **Limitation:** Streams encrypted with commercial DRM systems require hardware/browser Content Decryption Modules (CDMs) and license server key exchange.
-   - **Behavior:** OpenIDM strictly refuses to bypass DRM (`NFR-015`). When a `<video>` element has `mediaKeys !== null` or `N_m3u8DL-RE`'s `meta.json` reports DRM encryption without an open standard key, OpenIDM rejects the task immediately with `ERR_STREAM_DRM_PROTECTED` (*"Stream uses unsupported DRM protection. OpenIDM does not circumvent DRM."*).
+   - **Behavior:** Radium strictly refuses to bypass DRM (`NFR-015`). When a `<video>` element has `mediaKeys !== null` or `N_m3u8DL-RE`'s `meta.json` reports DRM encryption without an open standard key, Radium rejects the task immediately with `ERR_STREAM_DRM_PROTECTED` (*"Stream uses unsupported DRM protection. Radium does not circumvent DRM."*).
 2. **Proprietary Non-Manifest MSE `blob:` Streams & WebRTC Video Calls:**
-   - **Limitation:** Standard MSE players (`hls.js`, `dash.js`) fetch `.m3u8` or `.mpd` manifests over HTTP, which OpenIDM captures and downloads at full speed. However, if a website feeds raw video frames into a `MediaSource` `SourceBuffer` over a custom encrypted WebSocket or WebRTC `RTCPeerConnection` without any `.m3u8`/`.mpd` manifest, `N_m3u8DL-RE` cannot download the stream from a URL.
+   - **Limitation:** Standard MSE players (`hls.js`, `dash.js`) fetch `.m3u8` or `.mpd` manifests over HTTP, which Radium captures and downloads at full speed. However, if a website feeds raw video frames into a `MediaSource` `SourceBuffer` over a custom encrypted WebSocket or WebRTC `RTCPeerConnection` without any `.m3u8`/`.mpd` manifest, `N_m3u8DL-RE` cannot download the stream from a URL.
    - **Behavior:** `blob:` URLs themselves are never sent to `openidm` as downloadable file URLs because `blob:` handles exist only inside the browser renderer's memory.
 3. **Sites Requiring Custom JavaScript Challenge Solving per Segment (e.g., YouTube Signature Cipher / PO Token):**
-   - **Limitation:** OpenIDM is a general HTTP/HTTPS and standard HLS/DASH/MSS download manager, not a site-specific scraper engine like `yt-dlp`. Sites that dynamically sign or throttle every individual segment via proprietary JS VM challenges are not supported natively.
+   - **Limitation:** Radium is a general HTTP/HTTPS and standard HLS/DASH/MSS download manager, not a site-specific scraper engine like `yt-dlp`. Sites that dynamically sign or throttle every individual segment via proprietary JS VM challenges are not supported natively.
 4. **BitTorrent Scope Boundaries (BEP 3, DHT, and incoming upload support):**
    - **Supported Implementation:** Flux implements core BEP 3 peer wire protocol framing, compact IPv4/IPv6 tracker communication, bounded DHT peer discovery, incoming TCP peer handshakes on port 6881, verified-piece bitfields, requested-block upload accounting, 16 KB piece/block scheduling with SHA-1 integrity verification, and multi-file disk layout mapping (`multi_file_storage.hpp`, `piece_manager.hpp`, `peer_wire_protocol.hpp`, `tracker_client.hpp`).
    - **Limitations:** Peer Exchange (PEX / BEP 11), micro Transport Protocol (uTP), and BitTorrent v2 (BEP 52 merkle trees) remain unsupported. Selective multi-file torrents advertise and upload only pieces whose complete ranges are selected; unselected ranges are never fabricated or served.
@@ -34,7 +34,7 @@
 1. **Browser Internal & Store Pages:**
    - Chrome, Edge, Brave, and Firefox block all extension content scripts and network hooks on privileged internal pages (`chrome://`, `edge://`, `about:`, `view-source:`) and official extension store domains (`chromewebstore.google.com`, `microsoftedge.microsoft.com`, `addons.mozilla.org`).
 2. **Cross-Origin Sandboxed Iframes Without `allow-scripts`:**
-   - While OpenIDM's passive `webRequest` sniffer (`Layer 1`) still detects media and manifests inside all iframes and surfaces them in the extension toolbar popup, the in-page floating Shadow DOM button (`Layer 2`) cannot render inside an `<iframe>` if the host page sets a restrictive `sandbox` attribute that blocks script execution.
+   - While Radium's passive `webRequest` sniffer (`Layer 1`) still detects media and manifests inside all iframes and surfaces them in the extension toolbar popup, the in-page floating Shadow DOM button (`Layer 2`) cannot render inside an `<iframe>` if the host page sets a restrictive `sandbox` attribute that blocks script execution.
 3. **Pause/Resume on Non-Range HTTP Servers (`FR-002`):**
    - When an HTTP server omits `Accept-Ranges: bytes` or responds `200 OK` to a `Range` request, pausing the download cannot preserve progress; resuming restarts cleanly from byte `0` after clearing stale segment state.
 4. **Client-Side Generated Files (`blob:`, `data:` URLs, ChatGPT Exports):**
@@ -48,7 +48,7 @@
 1. **Linux Container Build vs. Windows 11 Native `.exe` Compilation:**
    - The automated build and verification container runs Debian 12 Linux `x86_64` (`g++ 12.2.0`, `node 18.20.4`, `python3 3.11.2`, `ffmpeg 5.1.9`) without a Windows cross-compiler (`mingw-w64` or `MSVC`).
    - All Win32 API implementations (`WinHTTP`, `CreateFileW` + `OVERLAPPED`, `CreateJobObjectW` + `CreateProcessW`, Named Pipes, DPAPI/BCrypt, and the Win32 `RegisterClassExW`/`CreateWindowExW` GDI double-buffered GUI in `src/ui/win32_main_window.cpp`) are implemented in `#ifdef _WIN32` blocks and verified by source inspection, while the shared C++20 core, UI view-model, native `N_m3u8DL-RE` worker, and extension are verified by execution (`26 / 26` test suites passing).
-   - Producing signed PE32+ `.exe` binaries (`openidm.exe`, `openidm-nmh.exe`, `N_m3u8DL-RE.exe`) and compiling the Inno Setup installer (`OpenIDM-Setup-x64-0.2.0.exe`) requires running `.\scripts\build-windows-msvc.ps1` on a Windows 11 `x64` workstation with Visual Studio 2022 and Inno Setup 6 (`ISCC.exe`).
+   - Producing signed PE32+ `.exe` binaries (`radium.exe`, `radium-nmh.exe`, `N_m3u8DL-RE.exe`) and compiling the Inno Setup installer (`Radium-Setup-x64-0.2.0.exe`) requires running `.\scripts\build-windows-msvc.ps1` on a Windows 11 `x64` workstation with Visual Studio 2022 and Inno Setup 6 (`ISCC.exe`).
 
 ### Brave unpacked extension install state (2026-10-23)
 

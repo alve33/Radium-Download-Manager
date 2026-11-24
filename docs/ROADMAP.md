@@ -11,7 +11,7 @@
 
 ```mermaid
 gantt
-    title OpenIDM Implementation Roadmap (Milestones M0 - M5)
+    title Radium Implementation Roadmap (Milestones M0 - M5)
     dateFormat  YYYY-MM-DD
     section Foundation
     M0: Architecture & Engineering Docs (Completed) :done, m0, 2026-10-16, 1d
@@ -35,7 +35,7 @@ gantt
 ---
 
 ### Milestone 1 (`M1` — Recommended First Implementation Milestone): Core Win32 Shell, SQLite Persistence & Ordinary HTTP Segmented Engine
-- **Goals:** Build a rock-solid standalone Windows 11 download manager (`openidm.exe`) capable of multi-connection HTTP/HTTPS segmented downloading, pause/resume, crash recovery, and basic queue management before adding browser or stream complexity.
+- **Goals:** Build a rock-solid standalone Windows 11 download manager (`radium.exe`) capable of multi-connection HTTP/HTTPS segmented downloading, pause/resume, crash recovery, and basic queue management before adding browser or stream complexity.
 - **Requirements Covered:** `FR-001`, `FR-002`, `FR-003`, `FR-004`, `FR-005`, `FR-011`, `FR-023`, `FR-024`, `FR-026`, `NFR-001`–`NFR-006`, `NFR-009`–`NFR-011`, `NFR-014`.
 - **Deliverables:**
   1. Initialize Git repository, `CMakeLists.txt`, `vcpkg.json` (`sqlite3`, `nlohmann-json`, `wil`, `gtest`), and `src/app/openidm.manifest` (`PerMonitorV2`, Common Controls v6).
@@ -51,11 +51,11 @@ gantt
 ---
 
 ### Milestone 2 (`M2`): Native Messaging IPC Bridge & Chromium Browser Extension
-- **Goals:** Connect Chrome, Edge, and Brave to `openidm.exe` via `openidm-nmh.exe` and the Named Pipe IPC server; enable automatic ordinary file interception and passive media/manifest discovery with the in-page Shadow DOM video button.
+- **Goals:** Connect Chrome, Edge, and Brave to `radium.exe` via `radium-nmh.exe` and the Named Pipe IPC server; enable automatic ordinary file interception and passive media/manifest discovery with the in-page Shadow DOM video button.
 - **Requirements Covered:** `FR-006`, `FR-008`, `FR-009`, `FR-010`, `FR-014`, `FR-015`, `FR-016`, `NFR-007`, `NFR-008`, `NFR-013` (Chromium).
 - **Deliverables:**
-  1. Implement `src/ipc/NamedPipeServer` (`\\.\pipe\OpenIDM_IPC_<UserSID>` with per-user DACL and `FILE_FLAG_FIRST_PIPE_INSTANCE`).
-  2. Implement `src/nmh/main.cpp` (`openidm-nmh.exe` stateless `stdio <-> Named Pipe` proxy with auto-wake of `openidm.exe --background`).
+  1. Implement `src/ipc/NamedPipeServer` (`\\.\pipe\Radium_IPC_<UserSID>` with per-user DACL and `FILE_FLAG_FIRST_PIPE_INSTANCE`).
+  2. Implement `src/nmh/main.cpp` (`radium-nmh.exe` stateless `stdio <-> Named Pipe` proxy with auto-wake of `radium.exe --background`).
   3. Implement `extension/` in TypeScript: `DownloadInterceptor.ts`, `MediaSniffer.ts` (`webRequest`), `ManifestDeduplicator.ts`, `SessionStateStore.ts` (`chrome.storage.session`), `VideoOverlay.ts` (closed Shadow DOM button), and `Popup` UI.
   4. Implement "Refresh Download Address" (`FR-006`) workflow from browser to paused task.
 - **Dependencies:** Completion of `M1`; Node.js 20+ toolchain.

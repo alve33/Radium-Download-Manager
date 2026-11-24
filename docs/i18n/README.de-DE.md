@@ -96,7 +96,7 @@ SHA256-Prüfsummen für alle veröffentlichten Dateien finden Sie in [SHA256SUMS
 ## Hauptmerkmale
 
 <p align="center">
-  <img src="../../docs/images/readme/radium-new-download-dialog.jpg" alt="Radium Neuer Download Dialog" width="90%">
+  <img src="../../docs/images/readme/radium-new-download-dialog.png" alt="Radium Neuer Download Dialog" width="90%">
 </p>
 
 ### HTTP & HTTPS Segmentierung
@@ -145,7 +145,7 @@ Radium enthält einen integrierten Sprachkatalog für 12 Weltsprachen, der zur L
 
 | Hauptfenster & Download-Liste | Einstellungszentrum & Netzwerkkonfiguration |
 | :---: | :---: |
-| <img src="../../docs/images/readme/radium-main-window.png" alt="Hauptfenster" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.jpg" alt="Einstellungen" width="460"> |
+| <img src="../../docs/images/readme/radium-main-window.png" alt="Hauptfenster" width="460"> | <img src="../../docs/images/readme/radium-settings-dialog.png" alt="Einstellungen" width="460"> |
 
 </div>
 
@@ -294,11 +294,11 @@ Radium unterstützt Standard-Webserver mit RFC 7233-Unterstützung (`206 Partial
 
 ## Mitwirken
 
-Beiträge zur Weiterentwicklung sind herzlich willkommen! Bitte lesen Sie vor dem Erstellen von Pull Requests unsere [CONTRIBUTING.md](CONTRIBUTING.md) und beachten Sie die Architekturrichtlinien in [docs/INDEX.md](docs/INDEX.md).
+Beiträge zur Weiterentwicklung sind herzlich willkommen! Bitte lesen Sie vor dem Erstellen von Pull Requests unsere [CONTRIBUTING.md](../../CONTRIBUTING.md) und beachten Sie die Architekturrichtlinien in [docs/INDEX.md](../../docs/INDEX.md).
 
 ## Lizenz und Danksagungen
 
-Radium Download Manager steht unter der **Apache-2.0-Lizenz**. Einzelheiten finden Sie in der Datei [LICENSE](LICENSE).
+Radium Download Manager steht unter der **Apache-2.0-Lizenz**. Einzelheiten finden Sie in der Datei [LICENSE](../../LICENSE).
 
 ### Drittanbieter-Komponenten
 Radium nutzt [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0), [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL/GPL) und [SQLite 3](https://www.sqlite.org/) (Public Domain).
