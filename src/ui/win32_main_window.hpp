@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Radium Download Manager — Windows 11 Cosmic Dark Desktop Interface, Hit-Testing,
+// Radium Download Manager — Windows 10 / 11 Cosmic Dark Desktop Interface, Hit-Testing,
 // Interaction Controller, Cosmic Starfield & Professional Settings Center
 #pragma once
 
@@ -102,7 +102,8 @@ enum class HitTargetType {
     kRowInlineAction,
     kDetailsActionButton,
     kSidebarLanguageButton,
-    kSidebarSettingsButton
+    kSidebarSettingsButton,
+    kToolsMenuButton
 };
 
 struct HitTestResult {
@@ -173,6 +174,7 @@ struct WindowLayoutGeometry {
     RectI filter_dropdown_rect;
     RectI add_download_button_rect;
     RectI theme_button_rect;
+    RectI tools_button_rect;
     RectI settings_button_rect;
     RectI search_sliders_rect;
     RectI status_toggle_off_rect;
@@ -308,6 +310,9 @@ struct AddDownloadDialogInput {
     std::string audio_filter{"best"};
     std::string subtitle_filter{"all"};
     std::string output_format{"mp4"};
+    bool embed_subtitles{false};
+    std::string download_sections;
+    bool force_keyframes_at_cuts{false};
     uint64_t total_bytes{0};
     bool range_supported{false};
     bool range_probed{false};
@@ -328,7 +333,10 @@ struct AboutDialogView {
     std::string app_name{"Radium Download Manager"};
     std::string version{RADIUM_VERSION_STRING};
     std::string license{"Apache-2.0"};
-    std::string target_platform{"Windows 11 x64 (Native Win32 + Direct2D/GDI)"};
+    std::string target_platform{"Windows 10 / 11 x64 (Native Win32 + Direct2D/GDI)"};
+    std::string developer_name{"Sayed Alve"};
+    std::string developer_github_url{"https://github.com/alve33"};
+    std::string repository_url{"https://github.com/alve33/Radium-Download-Manager"};
     std::vector<std::string> upstream_attributions;
 };
 
@@ -377,6 +385,9 @@ struct SettingsCenterViewModel {
     RectI restore_defaults_rect;
     RectI cancel_button_rect;
     RectI apply_button_rect;
+    int scroll_offset{0};
+    int max_scroll{0};
+    int content_total_height{0};
 };
 
 class DesktopView {
@@ -501,6 +512,8 @@ public:
     bool IsSettingsCenterOpen() const { return m_settings_center_open; }
     void SelectSettingsCategory(SettingsCategory category);
     SettingsCategory GetSelectedSettingsCategory() const { return m_settings_category; }
+    int GetSettingsScrollOffset() const { return m_settings_scroll_offset; }
+    void ScrollSettingsBy(int delta_px);
     static std::string SettingsCategoryToLabel(SettingsCategory category);
     void SetSettingsSearchQuery(std::string query);
     const std::string& GetSettingsSearchQuery() const { return m_settings_search_query; }
@@ -601,6 +614,7 @@ private:
 
     bool m_settings_center_open{false};
     SettingsCategory m_settings_category{SettingsCategory::kGeneral};
+    int m_settings_scroll_offset{0};
     std::string m_settings_search_query;
     AppSettings m_draft_settings;
     std::string m_settings_validation_key;

@@ -327,4 +327,214 @@ Result<std::vector<GrabbedItem>> SiteGrabber::Crawl(
     return Result<std::vector<GrabbedItem>>::Ok(std::move(results));
 }
 
+std::optional<std::string> SiteGrabber::ExtractVolumeKey(std::string_view filename) {
+    if (filename.empty()) return std::nullopt;
+    std::string lower(filename);
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    auto is_all_digits = [](std::string_view s) {
+        if (s.empty()) return false;
+        for (char c : s) if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+        return true;
+    };
+
+    // 1. movie.part1.rar / movie.part01.rar
+    if (lower.ends_with(".rar")) {
+        std::string_view stem = std::string_view(filename).substr(0, filename.size() - 4);
+        std::string_view lstem = std::string_view(lower).substr(0, lower.size() - 4);
+        size_t dot = lstem.rfind('.');
+        if (dot != std::string_view::npos) {
+            std::string_view part_seg = lstem.substr(dot + 1);
+            if (part_seg.rfind("part", 0) == 0 && is_all_digits(part_seg.substr(4))) {
+                if (dot > 0) return std::string(stem.substr(0, dot));
+            }
+        }
+    }
+
+    // 2. data.001, data.002, ... (3+ digit split volumes)
+    size_t last_dot = lower.rfind('.');
+    if (last_dot != std::string_view::npos && last_dot > 0) {
+        std::string_view ext = std::string_view(lower).substr(last_dot + 1);
+        if (ext.size() >= 3 && ext.size() <= 4 && is_all_digits(ext)) {
+            return std::string(filename.substr(0, last_dot));
+        }
+        // 3. archive.r00..r99 or archive.z01..z99
+        if (ext.size() == 3 && (ext[0] == 'r' || ext[0] == 'z') && is_all_digits(ext.substr(1))) {
+            return std::string(filename.substr(0, last_dot));
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::vector<GrabbedGroup> SiteGrabber::GroupGrabbedItems(const std::vector<GrabbedItem>& items) {
+    std::map<std::string, GrabbedGroup> by_key;
+    std::vector<std::string> order;
+    for (const auto& item : items) {
+        std::string key;
+        std::string display;
+        bool is_vol = false;
+        if (auto vol = ExtractVolumeKey(item.file_name)) {
+            std::string lvol = *vol;
+            for (char& c : lvol) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            std::string host;
+            auto pu = brisk::HttpClient::ParseUrl(item.url);
+            if (pu.ok()) {
+                host = pu.value->host;
+                for (char& c : host) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            key = "vol:" + host + "|" + lvol;
+            display = *vol;
+            is_vol = true;
+        } else if (!item.page_url.empty()) {
+            auto pu = brisk::HttpClient::ParseUrl(item.page_url);
+            if (pu.ok()) {
+                std::string host = pu.value->host;
+                for (char& c : host) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                key = "page:" + host + pu.value->path_and_query;
+                display = host;
+            }
+        }
+        if (key.empty()) {
+            key = "various";
+            display = "Various files";
+        }
+        auto it = by_key.find(key);
+        if (it == by_key.end()) {
+            GrabbedGroup g;
+            g.group_name = display;
+            g.is_split_volume = is_vol;
+            g.items.push_back(item);
+            by_key.emplace(key, std::move(g));
+            order.push_back(key);
+        } else {
+            it->second.items.push_back(item);
+        }
+    }
+    std::vector<GrabbedGroup> out;
+    out.reserve(order.size());
+    for (const auto& k : order) {
+        out.push_back(std::move(by_key[k]));
+    }
+    return out;
+}
+
+std::vector<std::string> SiteGrabber::ExpandBatchUrlTemplate(std::string_view tmpl, size_t max_urls) {
+    auto trim = [](std::string s) {
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+        while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+        return s;
+    };
+
+    auto expand_range = [&](const std::string& spec) -> std::optional<std::vector<std::string>> {
+        size_t colon = spec.find(':');
+        if (colon != std::string::npos && spec.find(':', colon + 1) != std::string::npos) return std::nullopt;
+        std::string range_part = (colon == std::string::npos) ? spec : spec.substr(0, colon);
+        int step = 1;
+        if (colon != std::string::npos) {
+            try {
+                step = std::stoi(trim(spec.substr(colon + 1)));
+            } catch (...) {
+                return std::nullopt;
+            }
+            if (step < 1) return std::nullopt;
+        }
+        size_t dash = range_part.find('-');
+        if (dash == std::string::npos) return std::nullopt;
+        std::string start = trim(range_part.substr(0, dash));
+        std::string end = trim(range_part.substr(dash + 1));
+        if (start.empty() || end.empty()) return std::nullopt;
+
+        auto all_digits = [](const std::string& s) {
+            for (char c : s) if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+            return true;
+        };
+        if (all_digits(start) && all_digits(end)) {
+            size_t width = (start.size() > 1 && start[0] == '0') ? start.size() : 0;
+            long long s_val = 0, e_val = 0;
+            try {
+                s_val = std::stoll(start);
+                e_val = std::stoll(end);
+            } catch (...) {
+                return std::nullopt;
+            }
+            if (s_val > e_val) return std::nullopt;
+            std::vector<std::string> vals;
+            for (long long v = s_val; v <= e_val && vals.size() < max_urls; v += step) {
+                std::string num = std::to_string(v);
+                if (width > num.size()) num.insert(0, width - num.size(), '0');
+                vals.push_back(std::move(num));
+            }
+            return vals;
+        }
+        if (start.size() == 1 && end.size() == 1 &&
+            std::isalpha(static_cast<unsigned char>(start[0])) &&
+            std::isalpha(static_cast<unsigned char>(end[0]))) {
+            bool s_low = std::islower(static_cast<unsigned char>(start[0])) != 0;
+            bool e_low = std::islower(static_cast<unsigned char>(end[0])) != 0;
+            if (s_low != e_low || start[0] > end[0]) return std::nullopt;
+            std::vector<std::string> vals;
+            for (char c = start[0]; c <= end[0] && vals.size() < max_urls; c = static_cast<char>(c + step)) {
+                vals.emplace_back(1, c);
+            }
+            return vals;
+        }
+        return std::nullopt;
+    };
+
+    std::vector<std::vector<std::string>> segments;
+    size_t i = 0;
+    std::string lit;
+    while (i < tmpl.size()) {
+        if (tmpl[i] == '[' || tmpl[i] == '{') {
+            char close_ch = (tmpl[i] == '[') ? ']' : '}';
+            size_t close_pos = tmpl.find(close_ch, i + 1);
+            if (close_pos != std::string_view::npos) {
+                std::string inner(tmpl.substr(i + 1, close_pos - (i + 1)));
+                if (tmpl[i] == '{') {
+                    std::vector<std::string> list_vals;
+                    size_t p = 0;
+                    while (p <= inner.size()) {
+                        size_t comma = inner.find(',', p);
+                        std::string item = trim(comma == std::string::npos ? inner.substr(p) : inner.substr(p, comma - p));
+                        if (!item.empty()) list_vals.push_back(std::move(item));
+                        if (comma == std::string::npos) break;
+                        p = comma + 1;
+                    }
+                    if (!list_vals.empty()) {
+                        if (!lit.empty()) { segments.push_back({std::move(lit)}); lit.clear(); }
+                        segments.push_back(std::move(list_vals));
+                        i = close_pos + 1;
+                        continue;
+                    }
+                } else {
+                    if (auto r = expand_range(inner)) {
+                        if (!lit.empty()) { segments.push_back({std::move(lit)}); lit.clear(); }
+                        segments.push_back(std::move(*r));
+                        i = close_pos + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        lit.push_back(tmpl[i]);
+        ++i;
+    }
+    if (!lit.empty()) segments.push_back({std::move(lit)});
+    if (segments.empty()) return {};
+
+    std::vector<std::string> current = {""};
+    for (const auto& seg : segments) {
+        std::vector<std::string> next;
+        for (const auto& prefix : current) {
+            for (const auto& part : seg) {
+                next.push_back(prefix + part);
+                if (next.size() >= max_urls) return next;
+            }
+        }
+        current = std::move(next);
+    }
+    return current;
+}
+
 } // namespace openidm::crawler

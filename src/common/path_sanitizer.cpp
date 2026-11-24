@@ -987,31 +987,27 @@ bool PathSanitizer::IsWebpageWatchUrl(std::string_view url) {
         return true;
     }
 
-    // Generic video page path and query parameter heuristics
+    // Generic video page path heuristics (avoid broad substring matches like "v=" or "/v/"
+    // that false-positive on presigned download URLs such as Azure SAS "?sv=2021-06-08" or API paths)
     if (path.find("/watch") != std::string::npos ||
         path.find("/video/") != std::string::npos ||
         path.find("/videos/") != std::string::npos ||
         path.find("/video-") != std::string::npos ||
-        path.find("/v/") != std::string::npos ||
         path.find("/reel/") != std::string::npos ||
         path.find("/reels/") != std::string::npos ||
         path.find("/shorts/") != std::string::npos ||
         path.find("/clip/") != std::string::npos ||
         path.find("/clips/") != std::string::npos ||
         path.find("/embed/") != std::string::npos ||
-        path.find("/play/") != std::string::npos ||
-        path.find("/player/") != std::string::npos ||
         path.find("/hd-") != std::string::npos ||
         lower.find("viewkey=") != std::string::npos ||
         lower.find("view_video") != std::string::npos ||
-        lower.find("v=") != std::string::npos ||
         (path.find("/video") != std::string::npos && path.size() > 6)) {
         return true;
     }
 
-    // Generic HTML pages without direct media format
-    if (path.ends_with(".html") || path.ends_with(".htm") || path.ends_with(".php") ||
-        path.ends_with(".asp") || path.ends_with(".aspx")) {
+    // Generic static HTML pages without direct media format
+    if (path.ends_with(".html") || path.ends_with(".htm")) {
         return true;
     }
     return false;

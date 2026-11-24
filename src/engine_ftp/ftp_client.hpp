@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — High-Performance Native WinSock2 FTP Engine
-// Implements RFC 959 (FTP), RFC 2428 (IPv6/EPSV), and RFC 3659 (REST/SIZE).
-// FTPS is explicitly rejected (ERR_FTPS_UNSUPPORTED) to prevent unencrypted plaintext transmission.
+// OpenIDM / Flux — High-Performance Native WinSock2 FTP & FTPS Engine
+// Implements RFC 959 (FTP), RFC 2428 (IPv6/EPSV), RFC 3659 (REST/SIZE),
+// RFC 4217 (Explicit/Implicit FTPS via Schannel/OpenSSL), and SOCKS5/HTTP CONNECT proxy.
 #pragma once
 
 #include <atomic>
@@ -43,16 +43,26 @@ struct FtpProgress {
 
 using FtpProgressCallback = std::function<void(const FtpProgress&)>;
 
+struct FtpProxyOptions {
+    std::string mode{"direct"}; // "direct", "socks5", "http"
+    std::string host;
+    uint16_t port{0};
+    std::string username;
+    std::string password;
+    bool try_explicit_tls{false}; // If true on ftp://, try AUTH TLS before falling back
+};
+
 class FtpClient {
 public:
     FtpClient() = default;
     ~FtpClient() = default;
 
-    // Probes remote FTP server for existence, file size, and range/REST capability
+    // Probes remote FTP/FTPS server for existence, file size, and range/REST capability
     static Result<uint64_t> ProbeFileSize(
         const FtpUrl& url,
         int timeout_ms = 5000,
-        bool allow_loopback = false);
+        bool allow_loopback = false,
+        const FtpProxyOptions& proxy_opts = {});
 
     // Downloads the remote file to target_part_path with EPSV/PASV negotiation, resume validation,
     // progress reporting, dual rate limiting, and cancellation
@@ -67,7 +77,8 @@ public:
         std::shared_ptr<brisk::TokenBucketLimiter> global_limiter = nullptr,
         std::atomic<uint64_t>* global_speed_limit_bps = nullptr,
         int timeout_ms = 10000,
-        bool allow_loopback = false);
+        bool allow_loopback = false,
+        const FtpProxyOptions& proxy_opts = {});
 };
 
 } // namespace openidm::ftp

@@ -1707,6 +1707,37 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
     jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
 
+    // Named per-job stop event so live-stream workers can exit gracefully and finish RunFfmpegMux
+    std::wstring w_task_id;
+    if (!task.task_id.empty()) {
+        int n = MultiByteToWideChar(CP_UTF8, 0, task.task_id.data(), static_cast<int>(task.task_id.size()), nullptr, 0);
+        if (n > 0) {
+            w_task_id.resize(static_cast<size_t>(n));
+            MultiByteToWideChar(CP_UTF8, 0, task.task_id.data(), static_cast<int>(task.task_id.size()), w_task_id.data(), n);
+        }
+    }
+    const std::wstring stop_event_name =
+        L"Local\\RadiumStop_" + w_task_id + L"_" + std::to_wstring(GetCurrentProcessId());
+    HANDLE hStopEvent = CreateEventW(nullptr, TRUE, FALSE, stop_event_name.c_str());
+
+    // Build thread-safe child environment block with RADIUM_LIVE_STOP_EVENT
+    std::vector<wchar_t> child_env;
+    if (LPWCH parent_env = GetEnvironmentStringsW()) {
+        const wchar_t* p = parent_env;
+        while (*p != L'\0') {
+            size_t len = wcslen(p) + 1;
+            if (_wcsnicmp(p, L"RADIUM_LIVE_STOP_EVENT=", 23) != 0) {
+                child_env.insert(child_env.end(), p, p + len);
+            }
+            p += len;
+        }
+        FreeEnvironmentStringsW(parent_env);
+    }
+    const std::wstring env_entry = L"RADIUM_LIVE_STOP_EVENT=" + stop_event_name;
+    child_env.insert(child_env.end(), env_entry.begin(), env_entry.end());
+    child_env.push_back(L'\0');
+    child_env.push_back(L'\0');
+
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
@@ -1720,7 +1751,10 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
                        L"\"@" + rsp_res.value->wstring() + L"\"";
 
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) {
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
+                        CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                        child_env.data(), nullptr, &si, &pi)) {
+        if (hStopEvent) CloseHandle(hStopEvent);
         CloseHandle(hReadPipe);
         CloseHandle(hWritePipe);
         CloseHandle(hJob);
@@ -1733,12 +1767,25 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
     std::string line_buf;
     char rbuf[4096];
     bool child_exited = false;
+    bool stop_signaled = false;
+    auto stop_signaled_at = std::chrono::steady_clock::time_point{};
     while (!child_exited) {
-        if (pause_requested.load() || cancel_requested.load()) {
-            TerminateJobObject(hJob, 1);
-            WaitForSingleObject(pi.hProcess, 3000);
-            child_exited = true;
-            break;
+        if (!stop_signaled && (pause_requested.load() || cancel_requested.load())) {
+            stop_signaled = true;
+            stop_signaled_at = std::chrono::steady_clock::now();
+            if (hStopEvent) {
+                SetEvent(hStopEvent);
+            }
+        }
+        if (stop_signaled) {
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - stop_signaled_at).count();
+            if (elapsed_ms >= 5000) {
+                TerminateJobObject(hJob, 1);
+                WaitForSingleObject(pi.hProcess, 1000);
+                child_exited = true;
+                break;
+            }
         }
         DWORD avail = 0;
         if (PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
@@ -1755,6 +1802,10 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
         } else if (WaitForSingleObject(pi.hProcess, 25) == WAIT_OBJECT_0) {
             child_exited = true;
         }
+    }
+    if (hStopEvent) {
+        CloseHandle(hStopEvent);
+        hStopEvent = nullptr;
     }
     DWORD rem_avail = 0;
     while (PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &rem_avail, nullptr) && rem_avail > 0) {
@@ -2177,13 +2228,15 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
         try {
             auto root = json::Parse(task.stream_options.cached_manifest_body);
             if (root.is_object()) {
-                if (root["selectedItag"].as_int64(0) > 0) {
-                    selected_itag = static_cast<int>(root["selectedItag"].as_int64(0));
-                } else if (root["itag"].as_int64(0) > 0) {
-                    selected_itag = static_cast<int>(root["itag"].as_int64(0));
-                }
-                if (root["resolution"].is_string() && !root["resolution"].as_string().empty() && root["resolution"].as_string() != "Auto") {
-                    selected_resolution = root["resolution"].as_string();
+                if (target_height == 0) {
+                    if (root["selectedItag"].as_int64(0) > 0) {
+                        selected_itag = static_cast<int>(root["selectedItag"].as_int64(0));
+                    } else if (root["itag"].as_int64(0) > 0) {
+                        selected_itag = static_cast<int>(root["itag"].as_int64(0));
+                    }
+                    if (root["resolution"].is_string() && !root["resolution"].as_string().empty() && root["resolution"].as_string() != "Auto") {
+                        selected_resolution = root["resolution"].as_string();
+                    }
                 }
 
                 if (root["qualities"].is_array() && !req_filter.empty() && req_filter != "best") {
@@ -2216,11 +2269,9 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     }
                 }
 
-                // The extension can have a usable direct URL for a different
-                // quality even when the requested entry still needs signature
-                // deciphering. Prefer that cached URL over a cold yt-dlp run;
-                // keep the requested format whenever it was directly usable.
-                if ((video_url.empty() || requires_cipher) && root["qualities"].is_array()) {
+                // Only reuse a cached direct URL if it matches the requested quality (never silently
+                // downgrade an explicit 2160p/1440p/1080p selection to a lower-quality progressive URL).
+                if ((video_url.empty() || requires_cipher) && root["qualities"].is_array() && target_height == 0) {
                     const json::Value* fallback_quality = nullptr;
                     int fallback_height = 0;
                     bool fallback_is_over_target = false;
@@ -3407,7 +3458,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
 
         std::string out_tmpl = (task_tmp_dir / ("output.%(ext)s")).string();
         std::string ytdlp_fmt = BuildYtDlpFormatSelector(req_filter, target_height, wants_audio_only, fmt);
-        if (selected_itag > 0) {
+        if (selected_itag > 0 && (target_height == 0 || selected_height == 0 || selected_height + 30 >= target_height)) {
             if (wants_audio_only) {
                 ytdlp_fmt = std::to_string(selected_itag) + "/" + ytdlp_fmt;
             } else {
@@ -3453,6 +3504,22 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             "--merge-output-format", fmt,
             "-o", out_tmpl
         };
+        if (task.stream_options.embed_subtitles) {
+            yt_args.push_back("--write-subs");
+            yt_args.push_back("--write-auto-subs");
+            yt_args.push_back("--sub-langs");
+            yt_args.push_back(task.stream_options.subtitle_filter.empty() ? "all" : task.stream_options.subtitle_filter);
+            yt_args.push_back("--sub-format");
+            yt_args.push_back("srt/vtt/best");
+            yt_args.push_back("--embed-subs");
+        }
+        if (!task.stream_options.download_sections.empty()) {
+            yt_args.push_back("--download-sections");
+            yt_args.push_back(task.stream_options.download_sections);
+            if (task.stream_options.force_keyframes_at_cuts) {
+                yt_args.push_back("--force-keyframes-at-cuts");
+            }
+        }
         if (speed_limit_bps > 0) {
             uint64_t rate_k = std::max<uint64_t>(1, speed_limit_bps / 1024);
             yt_args.push_back("--limit-rate");
@@ -3789,8 +3856,16 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                 OPENIDM_LOG_INFO("Nm3u8dlAdapter", "Launching yt-dlp: " + to_utf8(wcmd));
                 diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                     task.task_id, "yt-dlp process creation starts", "Spawning worker: " + to_utf8(ytdlp_bin.filename().wstring()));
+                HANDLE hYtJob = CreateJobObjectW(nullptr, nullptr);
+                if (hYtJob) {
+                    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli{};
+                    jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                    SetInformationJobObject(hYtJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+                }
                 PROCESS_INFORMATION pi{};
-                if (CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+                if (CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) {
+                    if (hYtJob) AssignProcessToJobObject(hYtJob, pi.hProcess);
+                    ResumeThread(pi.hThread);
                     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                         task.task_id, "yt-dlp process ready", "Worker PID=" + std::to_string(pi.dwProcessId));
                     CloseHandle(hWritePipe);
@@ -3799,7 +3874,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     DWORD got = 0;
                     while (ReadFile(hReadPipe, rbuf, sizeof(rbuf), &got, nullptr) && got > 0) {
                         if (cancel_requested.load() || pause_requested.load()) {
-                            TerminateProcess(pi.hProcess, 1);
+                            if (hYtJob) TerminateJobObject(hYtJob, 1);
+                            else TerminateProcess(pi.hProcess, 1);
                             break;
                         }
                         line_buf.append(rbuf, got);
@@ -3813,7 +3889,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     DWORD wcode = 1;
                     GetExitCodeProcess(pi.hProcess, &wcode);
                     if (wcode == STILL_ACTIVE) {
-                        TerminateProcess(pi.hProcess, 1);
+                        if (hYtJob) TerminateJobObject(hYtJob, 1);
+                        else TerminateProcess(pi.hProcess, 1);
                         wcode = 259;
                     }
                     exit_code = static_cast<int>(wcode);
@@ -3822,6 +3899,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                 } else {
                     CloseHandle(hWritePipe);
                 }
+                if (hYtJob) CloseHandle(hYtJob);
                 CloseHandle(hReadPipe);
             }
 #endif
@@ -4006,9 +4084,18 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                 actual_resolution = std::to_string(quality_res.value->probed_width) + "x" +
                                     std::to_string(quality_res.value->probed_height);
                 if (target_height > 0 && quality_res.value->probed_height + 30 < target_height) {
-                    OPENIDM_LOG_WARN("Nm3u8dlAdapter", "yt-dlp delivered " + actual_resolution +
-                                     " for requested " + std::to_string(target_height) +
-                                     "p; keeping validated output");
+                    OPENIDM_LOG_ERROR("Nm3u8dlAdapter", "yt-dlp delivered " + actual_resolution +
+                                      " for requested " + std::to_string(target_height) +
+                                      "p; rejecting silent quality downgrade");
+                    std::filesystem::remove(actual_output, ec);
+                    std::filesystem::remove_all(task_tmp_dir, ec);
+                    task.state = TaskState::kFailed;
+                    task.error_code = "ERR_QUALITY_UNAVAILABLE";
+                    task.error_message = "Requested " + std::to_string(target_height) +
+                        "p quality is unavailable for this video (highest delivered: " + actual_resolution +
+                        "). Please select another format.";
+                    task.status_detail = task.error_message;
+                    return Result<std::filesystem::path>::Err(task.error_code, task.error_message, false, true);
                 }
             }
 

@@ -15,6 +15,160 @@
     const trackedYtMediaUrls = new Map();
     let lastInspectedYtVideoId = "";
 
+    // MSE 32-byte mdat tail attribution (ported from GD3 mse-probe.ts / mp4.ts)
+    const MDAT_TAIL_LENGTH = 32;
+    const MP4_HEAD_LIMIT = 256 * 1024;
+    const MIN_TRUNCATED_MDAT_BYTES = 4096;
+    const HEADS_CAP = 16;
+    const PER_URL_HEADS_CAP = 2;
+    const SEGMENT_BOX_TYPES = new Set(["ftyp", "styp", "sidx", "moov", "moof", "mdat", "emsg", "prft", "free", "skip", "pdin"]);
+    const recentMp4Heads = [];
+    let mseCounter = 0;
+
+    function parseMp4Boxes(view, from, to) {
+      const boxes = [];
+      let offset = from;
+      while (offset + 8 <= to) {
+        let size = view.getUint32(offset);
+        const type = String.fromCharCode(
+          view.getUint8(offset + 4), view.getUint8(offset + 5), view.getUint8(offset + 6), view.getUint8(offset + 7)
+        );
+        let header = 8;
+        if (size === 1) {
+          if (offset + 16 > to) break;
+          size = Number(view.getBigUint64(offset + 8));
+          header = 16;
+        } else if (size === 0) {
+          size = to - offset;
+        }
+        if (size < header) break;
+        boxes.push({ type, start: offset + header, end: offset + size });
+        offset += size;
+      }
+      return boxes;
+    }
+
+    function isMp4Head(bytes) {
+      return bytes && bytes.length >= 8 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70;
+    }
+
+    function isMp4Segment(bytes) {
+      if (!bytes || bytes.length < 8) return false;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const size = view.getUint32(0);
+      if (size !== 0 && size !== 1 && size < 8) return false;
+      if (size === 1 && bytes.length >= 16 && Number(view.getBigUint64(8)) < 16) return false;
+      const type = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+      return SEGMENT_BOX_TYPES.has(type);
+    }
+
+    function hasMp4Mdat(bytes) {
+      if (!isMp4Segment(bytes)) return false;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return parseMp4Boxes(view, 0, view.byteLength).some(b => b.type === "mdat" && b.end > b.start);
+    }
+
+    function isMp4InitSegment(bytes) {
+      if (!bytes || bytes.length < 8) return false;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return parseMp4Boxes(view, 0, view.byteLength).some(b => b.type === "moov");
+    }
+
+    function parseMdatTail(bytes, length) {
+      if (!bytes || bytes.length < 8) return undefined;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const mdat = parseMp4Boxes(view, 0, view.byteLength).find(b => b.type === "mdat");
+      if (!mdat) return undefined;
+      const end = Math.min(mdat.end, bytes.length, MP4_HEAD_LIMIT);
+      const minSpan = end < mdat.end ? Math.max(length, MIN_TRUNCATED_MDAT_BYTES) : length;
+      if (end - mdat.start < minSpan) return undefined;
+      return bytes.subarray(end - length, end);
+    }
+
+    function isDistinctiveMdatTail(tail) {
+      return tail && new Set(tail).size >= MDAT_TAIL_LENGTH / 2;
+    }
+
+    function hasByteSequence(haystack, needle) {
+      if (!haystack || !needle || needle.length === 0 || haystack.length < needle.length) return false;
+      for (let i = haystack.indexOf(needle[0]); i >= 0 && i + needle.length <= haystack.length; i = haystack.indexOf(needle[0], i + 1)) {
+        let j = 1;
+        while (j < needle.length && haystack[i + j] === needle[j]) j += 1;
+        if (j === needle.length) return true;
+      }
+      return false;
+    }
+
+    function addMp4Head(url, bytes, hasMoov) {
+      if (!url || !/^https?:/i.test(url)) return null;
+      let sameUrlCount = 0;
+      let oldestIdx = -1;
+      for (let i = 0; i < recentMp4Heads.length; i += 1) {
+        if (recentMp4Heads[i].url === url) {
+          sameUrlCount += 1;
+          if (oldestIdx < 0) oldestIdx = i;
+        }
+      }
+      if (sameUrlCount >= PER_URL_HEADS_CAP && oldestIdx >= 0) {
+        recentMp4Heads.splice(oldestIdx, 1);
+      }
+      const head = { url, bytes, hasMoov };
+      recentMp4Heads.push(head);
+      if (recentMp4Heads.length > HEADS_CAP) recentMp4Heads.shift();
+      return head;
+    }
+
+    function concatUint8Arrays(chunks) {
+      if (chunks.length === 1) return chunks[0];
+      let total = 0;
+      for (const c of chunks) total += c.length;
+      const out = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) { out.set(c, off); off += c.length; }
+      return out;
+    }
+
+    async function probeFetchResponseForMse(response, url) {
+      if (!url || !/^https?:/i.test(url) || !response || typeof response.clone !== "function") return;
+      const contentType = ((response.headers && response.headers.get("content-type")) || "").toLowerCase();
+      if (/^(application\/(json|ld\+json|javascript|x-javascript|wasm|x-www-form-urlencoded|grpc)|text\/|image\/|font\/)/i.test(contentType)) return;
+      const cl = parseInt((response.headers && response.headers.get("content-length")) || "", 10);
+      if (cl > 2000000 && !/^(video|audio)\/|octet-stream/i.test(contentType)) return;
+      let reader;
+      try {
+        const cloned = response.clone();
+        reader = cloned.body && typeof cloned.body.getReader === "function" ? cloned.body.getReader() : null;
+      } catch (_) { return; }
+      if (!reader) return;
+      const isRangeSlice = response.status === 206 || /[?&](bytestart|byteend)=/i.test(url);
+      const chunks = [];
+      let size = 0;
+      let mp4Head = null;
+      try {
+        while (size < MP4_HEAD_LIMIT) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          chunks.push(value);
+          size += value.length;
+          const current = concatUint8Arrays(chunks);
+          if (current.length < 8) continue;
+          if (!isMp4Head(current) && !(isRangeSlice && isMp4Segment(current))) break;
+          if (hasMp4Mdat(current)) {
+            const hasMoov = isMp4InitSegment(current);
+            if (mp4Head) {
+              mp4Head.bytes = current;
+              mp4Head.hasMoov = hasMoov;
+            } else {
+              mp4Head = addMp4Head(url, current, hasMoov);
+            }
+          }
+        }
+      } catch (_) {
+      } finally {
+        try { reader.cancel().catch(() => {}); } catch (_) {}
+      }
+    }
+
     function makeCorrelationId(prefix) {
       return `${prefix || "catch"}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     }
@@ -925,6 +1079,8 @@
                   }).catch(() => {});
                 }
               } catch (_) {}
+            } else if (!response.bodyUsed) {
+              probeFetchResponseForMse(response, finalUrl).catch(() => {});
             }
           } catch (_) {}
           return response;
@@ -959,6 +1115,11 @@
                   if (typeof this.responseText === "string") {
                     inspectManifestText(url, this.responseText, win.location ? win.location.href : "");
                   }
+                }
+              } else if (rType === "arraybuffer" && this.response instanceof ArrayBuffer && this.response.byteLength >= 8) {
+                const head = new Uint8Array(this.response, 0, Math.min(this.response.byteLength, MP4_HEAD_LIMIT));
+                if ((isMp4Head(head) || isMp4Segment(head)) && hasMp4Mdat(head)) {
+                  addMp4Head(url, head, isMp4InitSegment(head));
                 }
               }
             } catch (_) {}
@@ -997,6 +1158,60 @@
               size: 0,
               createdAt: Date.now()
             });
+            if (!obj.__radiumMseHooked && typeof obj.addSourceBuffer === "function") {
+              obj.__radiumMseHooked = true;
+              mseCounter += 1;
+              const msId = "ms-" + mseCounter;
+              const origAddSourceBuffer = obj.addSourceBuffer;
+              obj.addSourceBuffer = function (mimeType) {
+                const sb = origAddSourceBuffer.call(this, mimeType);
+                try {
+                  const origAppendBuffer = sb.appendBuffer;
+                  let sourceUrls = [];
+                  let isProgressiveLocked = false;
+                  sb.appendBuffer = function (data) {
+                    try {
+                      const bytes = data instanceof ArrayBuffer
+                        ? new Uint8Array(data)
+                        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+                      if (isMp4InitSegment(bytes)) {
+                        if (sourceUrls.length > 0) {
+                          postToExtension({ action: "catCatchMseBufferMatched", mediaSourceId: msId, mimeType, urls: [] });
+                        }
+                        sourceUrls = [];
+                        isProgressiveLocked = false;
+                      }
+                      const tail = !isProgressiveLocked ? parseMdatTail(bytes, MDAT_TAIL_LENGTH) : undefined;
+                      if (tail && isDistinctiveMdatTail(tail)) {
+                        const matches = recentMp4Heads.filter(h => hasByteSequence(h.bytes, tail));
+                        const found = [...new Set(matches.map(h => h.url))];
+                        if (found.length > 0) {
+                          const narrowed = sourceUrls.length === 0 ? found : sourceUrls.filter(u => found.includes(u));
+                          const next = narrowed.length > 0 ? narrowed : (matches.every(h => !h.hasMoov) ? found : []);
+                          if (next.length > 0 && (next.length !== sourceUrls.length || next.some((u, i) => u !== sourceUrls[i]))) {
+                            sourceUrls = next;
+                            isProgressiveLocked = next.length === 1 && matches.some(h => h.url === next[0] && h.hasMoov);
+                            postToExtension({ action: "catCatchMseBufferMatched", mediaSourceId: msId, mimeType, urls: sourceUrls });
+                            if (sourceUrls.length === 1) {
+                              sendMedia({
+                                streamType: "DIRECT",
+                                sourceType: "DIRECT_PROGRESSIVE",
+                                ext: "mp4",
+                                url: sourceUrls[0],
+                                pageTitle: win.document ? win.document.title : "",
+                                referer: win.location ? win.location.href : ""
+                              });
+                            }
+                          }
+                        }
+                      }
+                    } catch (_) {}
+                    return origAppendBuffer.call(this, data);
+                  };
+                } catch (_) {}
+                return sb;
+              };
+            }
             scanPerformanceResources();
             scanPageForYouTubeData();
           } else if (isBlobLike) {

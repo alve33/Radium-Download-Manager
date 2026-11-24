@@ -16,11 +16,16 @@ uint64_t SchedulerElapsedUs(std::chrono::steady_clock::time_point start,
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
 }
 
+static bool RangeTraceEnabled() {
+    static const bool enabled = (std::getenv("RADIUM_HTTP_RANGE_TRACE") != nullptr);
+    return enabled;
+}
+
 class SchedulerTimedLock {
 public:
     SchedulerTimedLock(std::mutex& mutex, const char* lock_name, const char* operation)
         : m_lock(mutex, std::defer_lock), m_lock_name(lock_name), m_operation(operation),
-          m_enabled(std::getenv("RADIUM_HTTP_RANGE_TRACE") != nullptr) {
+          m_enabled(RangeTraceEnabled()) {
         const auto wait_start = m_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         m_lock.lock();
         if (m_enabled) {
@@ -185,9 +190,29 @@ std::shared_ptr<LiveSegment> SegmentScheduler::AcquireNextOrStealSegment(bool al
             uint64_t end = seg->end_offset.load();
             if (curr <= end) {
                 seg->active_worker.store(true);
+                seg->receiving.store(false);
+                seg->assigned_at = std::chrono::steady_clock::now();
+                seg->owner_generation.fetch_add(1, std::memory_order_acq_rel);
                 return seg;
             } else {
                 seg->completed.store(true);
+            }
+        }
+    }
+
+    // 1b. TTFB Preemption (MDM planner.rs port): if an active segment has not received
+    //     any bytes after m_preempt_after_ms, a free worker takes it over.
+    if (m_preempt_after_ms > 0) {
+        const auto now_tp = std::chrono::steady_clock::now();
+        for (auto& seg : m_segments) {
+            if (!seg->completed.load() && seg->active_worker.load() && !seg->receiving.load() &&
+                seg->assigned_at.time_since_epoch().count() > 0) {
+                const auto waited_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_tp - seg->assigned_at).count();
+                if (waited_ms >= m_preempt_after_ms && seg->current_offset.load() <= seg->end_offset.load()) {
+                    seg->assigned_at = now_tp;
+                    seg->owner_generation.fetch_add(1, std::memory_order_acq_rel);
+                    return seg;
+                }
             }
         }
     }
@@ -300,8 +325,11 @@ std::shared_ptr<LiveSegment> SegmentScheduler::AcquireNextOrStealSegment(bool al
     auto stolen = std::make_shared<LiveSegment>(
         m_next_segment_id++, split_start, split_start, old_end, false);
     stolen->active_worker.store(true);
+    stolen->receiving.store(false);
+    stolen->assigned_at = std::chrono::steady_clock::now();
+    stolen->owner_generation.store(1, std::memory_order_relaxed);
     m_segments.push_back(stolen);
-    if (std::getenv("RADIUM_HTTP_RANGE_TRACE") != nullptr) {
+    if (RangeTraceEnabled()) {
         const auto event_tick_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         OPENIDM_LOG_INFO("HttpRangeTrace", "HTTP_RUNTIME_TRACE {\"event\":\"range_split\",\"parent_segment\":" +
@@ -408,32 +436,58 @@ bool SegmentScheduler::HasIncompleteUnassignedSegment() const {
 
 bool SegmentScheduler::CanSplitAnySegment() const {
     SchedulerTimedLock lock(m_mutex, "scheduler_state", "CanSplitAnySegment");
-    uint64_t min_separation = (std::max<uint64_t>)(m_min_split_bytes, 262144ULL);
-    // Pass 1: check for non-pending candidates
+    uint32_t active_count = 0;
     for (const auto& s : m_segments) {
-        if (s->completed.load(std::memory_order_relaxed) || s->split_pending.load(std::memory_order_relaxed)) continue;
-        uint64_t curr = s->current_offset.load(std::memory_order_relaxed);
-        uint64_t end = s->end_offset.load(std::memory_order_relaxed);
-        if (end > curr) {
-            uint64_t rem = end - curr + 1;
-            if (rem >= 2 * min_separation) {
-                return true;
-            }
+        if (s->active_worker.load(std::memory_order_relaxed) && !s->completed.load(std::memory_order_relaxed)) {
+            ++active_count;
         }
     }
-    // Pass 2: check for large pending candidates
+    if (active_count >= m_max_connections) {
+        return false;
+    }
+    uint64_t floor_bytes = (active_count + 1 < m_max_connections) ? 65536ULL : 131072ULL;
+    uint64_t min_separation = (std::max<uint64_t>)(m_min_split_bytes, floor_bytes);
+    const uint64_t pending_threshold = (active_count + 1 < m_max_connections)
+        ? (2 * min_separation)
+        : (8 * min_separation);
+
     for (const auto& s : m_segments) {
         if (s->completed.load(std::memory_order_relaxed)) continue;
         uint64_t curr = s->current_offset.load(std::memory_order_relaxed);
         uint64_t end = s->end_offset.load(std::memory_order_relaxed);
         if (end > curr) {
             uint64_t rem = end - curr + 1;
-            if (rem >= 8 * min_separation) {
+            uint64_t needed = s->split_pending.load(std::memory_order_relaxed)
+                ? pending_threshold
+                : (2 * min_separation);
+            if (rem >= needed) {
                 return true;
             }
         }
     }
     return false;
+}
+
+void SegmentScheduler::NotifyAll() {
+    m_cv.notify_all();
+}
+
+void SegmentScheduler::WaitForWork(int timeout_ms, const std::function<bool()>& stop_pred) const {
+    std::unique_lock<std::mutex> lk(m_mutex);
+    m_cv.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&]() {
+        if (stop_pred && stop_pred()) return true;
+        for (const auto& s : m_segments) {
+            if (!s->completed.load(std::memory_order_relaxed) && !s->active_worker.load(std::memory_order_relaxed)) {
+                return true;
+            }
+        }
+        return false;
+    });
+}
+
+void SegmentScheduler::SetPreemptAfterMs(int64_t ms) {
+    SchedulerTimedLock lock(m_mutex, "scheduler_state", "SetPreemptAfterMs");
+    m_preempt_after_ms = ms;
 }
 
 uint32_t SegmentScheduler::GetMaxConnections() const {

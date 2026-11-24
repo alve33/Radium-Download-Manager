@@ -44,7 +44,7 @@ public:
     Result<int> RecoverInterruptedTasks(uint64_t rollback_margin_bytes = 65536);
 
     Result<void> SetSetting(const std::string& key, const std::string& value_json);
-    Result<std::string> GetSetting(const std::string& key, const std::string& default_json = "{}");
+    Result<std::string> GetSetting(const std::string& key, const std::string& default_json = "{}") const;
 
     Result<void> UpsertQueue(const QueueConfig& queue);
     Result<std::vector<QueueConfig>> ListQueues();

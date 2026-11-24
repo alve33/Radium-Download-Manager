@@ -16,12 +16,17 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#else
+#include <openssl/evp.h>
 #endif
 
 namespace openidm::engine_stream {
@@ -465,7 +470,10 @@ bool VideoExtractionManager::IsSupportedVideoSiteUrl(const std::string& url) {
         return true;
     }
     std::string platform = IdentifyPlatform(url);
-    return platform != "unknown" && platform != "generic" && platform != "direct_media";
+    return platform == "youtube" || platform == "bilibili" || platform == "facebook" ||
+           platform == "vimeo" || platform == "dailymotion" || platform == "twitch" ||
+           platform == "reddit" || platform == "twitter" || platform == "instagram" ||
+           platform == "tiktok" || platform == "streamable" || platform == "peertube";
 }
 
 std::string VideoExtractionManager::StripCdnRangeTrapParams(const std::string& url) {
@@ -1605,6 +1613,339 @@ Result<ExtractionMetadata> VideoExtractionManager::ParseYtDlpJson(
     return Result<ExtractionMetadata>::Ok(std::move(meta));
 }
 
+namespace {
+
+static std::string ResolveHlsUrl(const std::string& base_url, const std::string& ref) {
+    if (ref.empty()) return "";
+    if (ref.rfind("http://", 0) == 0 || ref.rfind("https://", 0) == 0) return ref;
+    auto scheme_pos = base_url.find("://");
+    if (scheme_pos == std::string::npos) return ref;
+    auto host_start = scheme_pos + 3;
+    auto path_start = base_url.find('/', host_start);
+    std::string origin = (path_start == std::string::npos) ? base_url : base_url.substr(0, path_start);
+    if (ref.front() == '/') {
+        if (ref.size() >= 2 && ref[1] == '/') {
+            return base_url.substr(0, scheme_pos + 1) + ref;
+        }
+        return origin + ref;
+    }
+    auto qpos = base_url.find('?');
+    std::string clean_base = (qpos == std::string::npos) ? base_url : base_url.substr(0, qpos);
+    auto last_slash = clean_base.rfind('/');
+    if (last_slash == std::string::npos || last_slash < host_start) {
+        return origin + "/" + ref;
+    }
+    return clean_base.substr(0, last_slash + 1) + ref;
+}
+
+static std::map<std::string, std::string> ParseM3u8Attributes(const std::string& line) {
+    std::map<std::string, std::string> attrs;
+    auto colon = line.find(':');
+    if (colon == std::string::npos || line.size() > 16384) return attrs;
+    std::string s = line.substr(colon + 1);
+    size_t i = 0;
+    size_t count = 0;
+    while (i < s.size() && count < 64) {
+        while (i < s.size() && (s[i] == ',' || s[i] == ' ' || s[i] == '\t')) ++i;
+        if (i >= s.size()) break;
+        auto eq = s.find('=', i);
+        if (eq == std::string::npos) break;
+        std::string key = s.substr(i, eq - i);
+        i = eq + 1;
+        std::string val;
+        if (i < s.size() && s[i] == '"') {
+            ++i;
+            auto endq = s.find('"', i);
+            if (endq == std::string::npos) break;
+            val = s.substr(i, endq - i);
+            i = endq + 1;
+        } else {
+            auto comma = s.find(',', i);
+            if (comma == std::string::npos) {
+                val = s.substr(i);
+                i = s.size();
+            } else {
+                val = s.substr(i, comma - i);
+                i = comma + 1;
+            }
+        }
+        attrs[key] = val;
+        ++count;
+    }
+    return attrs;
+}
+
+static uint32_t ReadBe32(const uint8_t* p) {
+    return (static_cast<uint32_t>(p[0]) << 24) |
+           (static_cast<uint32_t>(p[1]) << 16) |
+           (static_cast<uint32_t>(p[2]) << 8) |
+           static_cast<uint32_t>(p[3]);
+}
+
+static uint64_t ReadBe64(const uint8_t* p) {
+    return (static_cast<uint64_t>(ReadBe32(p)) << 32) | ReadBe32(p + 4);
+}
+
+} // namespace
+
+Result<ExtractionMetadata> VideoExtractionManager::ParseHlsMasterPlaylist(
+    const std::string& playlist_text,
+    const std::string& master_url) {
+    if (playlist_text.rfind("#EXTM3U", 0) != 0 ||
+        playlist_text.find("#EXT-X-STREAM-INF:") == std::string::npos ||
+        playlist_text.find("<title") != std::string::npos ||
+        playlist_text.find("og:title") != std::string::npos) {
+        return Result<ExtractionMetadata>::Err("ERR_HLS_NOT_MASTER", "Not a standalone HLS master playlist");
+    }
+
+    std::istringstream iss(playlist_text);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) lines.push_back(std::move(line));
+        if (lines.size() > 100000) {
+            return Result<ExtractionMetadata>::Err("ERR_HLS_TOO_LARGE", "Playlist exceeds line budget");
+        }
+    }
+
+    for (const auto& l : lines) {
+        if (l.rfind("#EXT-X-SESSION-KEY:", 0) == 0) {
+            return Result<ExtractionMetadata>::Err("ERR_STREAM_DRM_PROTECTED", "DRM session key in HLS master");
+        }
+        if (l.rfind("#EXT-X-KEY:", 0) == 0 && l.find("METHOD=NONE") == std::string::npos) {
+            return Result<ExtractionMetadata>::Err("ERR_STREAM_DRM_PROTECTED", "Encrypted HLS playlist");
+        }
+    }
+
+    ExtractionMetadata meta;
+    meta.input_url = master_url;
+    meta.webpage_url = master_url;
+    meta.platform_id = "generic";
+    meta.extractor_name = "InProcessHlsMasterParser";
+    meta.extracted_at_epoch_s = CurrentEpochSeconds();
+
+    // Title from URL stem
+    {
+        auto q = master_url.find('?');
+        std::string clean = (q == std::string::npos) ? master_url : master_url.substr(0, q);
+        auto slash = clean.rfind('/');
+        std::string last = (slash == std::string::npos) ? clean : clean.substr(slash + 1);
+        auto dot = last.rfind('.');
+        meta.title = (dot != std::string::npos && dot > 0) ? last.substr(0, dot) : (last.empty() ? "hls_stream" : last);
+    }
+
+    std::map<std::string, bool> audio_group_has_uri;
+    for (const auto& l : lines) {
+        if (l.rfind("#EXT-X-MEDIA:", 0) != 0) continue;
+        auto attrs = ParseM3u8Attributes(l);
+        const std::string& type = attrs["TYPE"];
+        const std::string& group = attrs["GROUP-ID"];
+        const std::string& name = attrs["NAME"];
+        const std::string& uri = attrs["URI"];
+        const std::string& lang = attrs["LANGUAGE"];
+        if (type == "VIDEO" && !uri.empty()) {
+            return Result<ExtractionMetadata>::Err("ERR_HLS_MULTIVIEW", "Alternative video renditions deferred to yt-dlp");
+        }
+        if (type == "SUBTITLES" && !uri.empty()) {
+            SubtitleTrack sub;
+            sub.language_code = lang.empty() ? "und" : lang;
+            sub.language_name = name.empty() ? sub.language_code : name;
+            sub.url = ResolveHlsUrl(master_url, uri);
+            sub.ext = "vtt";
+            meta.subtitles.push_back(std::move(sub));
+        } else if (type == "AUDIO" && !uri.empty()) {
+            audio_group_has_uri[group] = true;
+            ExtractedFormat af;
+            af.format_id = group + "-" + name;
+            af.quality_label = "Audio Only";
+            af.vcodec = "none";
+            af.acodec = "mp4a";
+            af.container = "mp4";
+            af.protocol = "m3u8_native";
+            af.has_video = false;
+            af.has_audio = true;
+            af.video_url = ResolveHlsUrl(master_url, uri);
+            meta.formats.push_back(std::move(af));
+        }
+    }
+
+    std::map<std::string, std::string> pending_inf;
+    bool has_pending = false;
+    for (const auto& l : lines) {
+        if (l.rfind("#EXT-X-STREAM-INF:", 0) == 0) {
+            pending_inf = ParseM3u8Attributes(l);
+            has_pending = true;
+            continue;
+        }
+        if (l[0] == '#') continue;
+        if (!has_pending) continue;
+        has_pending = false;
+        if (pending_inf.count("PROGRESSIVE-URI")) {
+            return Result<ExtractionMetadata>::Err("ERR_HLS_PROGRESSIVE", "Progressive twin deferred to yt-dlp");
+        }
+        ExtractedFormat vf;
+        vf.protocol = "m3u8_native";
+        vf.container = "mp4";
+        vf.video_url = ResolveHlsUrl(master_url, l);
+        uint64_t bw = 0;
+        if (pending_inf.count("AVERAGE-BANDWIDTH")) {
+            try { bw = std::stoull(pending_inf["AVERAGE-BANDWIDTH"]); } catch (...) {}
+        }
+        if (bw == 0 && pending_inf.count("BANDWIDTH")) {
+            try { bw = std::stoull(pending_inf["BANDWIDTH"]); } catch (...) {}
+        }
+        vf.tbr_kbps = bw / 1000ULL;
+        if (pending_inf.count("RESOLUTION")) {
+            auto x = pending_inf["RESOLUTION"].find('x');
+            if (x != std::string::npos) {
+                try {
+                    vf.width = static_cast<uint32_t>(std::stoul(pending_inf["RESOLUTION"].substr(0, x)));
+                    vf.height = static_cast<uint32_t>(std::stoul(pending_inf["RESOLUTION"].substr(x + 1)));
+                } catch (...) {}
+            }
+        }
+        if (pending_inf.count("FRAME-RATE")) {
+            try { vf.fps = std::stod(pending_inf["FRAME-RATE"]); } catch (...) {}
+        }
+        vf.has_video = (vf.width > 0 || vf.height > 0);
+        vf.quality_label = vf.height > 0 ? (std::to_string(vf.height) + "p") : "Stream";
+        vf.format_id = vf.height > 0 ? (std::to_string(vf.height) + "p-" + std::to_string(vf.tbr_kbps)) : std::to_string(vf.tbr_kbps);
+        const std::string& audio_grp = pending_inf["AUDIO"];
+        vf.has_audio = !(!audio_grp.empty() && audio_group_has_uri[audio_grp]);
+        vf.acodec = vf.has_audio ? "mp4a" : "none";
+        vf.vcodec = vf.has_video ? "avc1" : "none";
+        meta.formats.push_back(std::move(vf));
+        if (meta.formats.size() >= 200) break;
+    }
+
+    if (meta.formats.empty()) {
+        return Result<ExtractionMetadata>::Err("ERR_HLS_EMPTY", "No variants found in HLS master playlist");
+    }
+    return Result<ExtractionMetadata>::Ok(std::move(meta));
+}
+
+bool VideoExtractionManager::FindContainerIndexRange(
+    const std::vector<uint8_t>& head,
+    uint64_t file_size,
+    uint64_t& out_offset,
+    uint64_t& out_length) {
+    out_offset = 0;
+    out_length = 0;
+    if (head.size() < 8) return false;
+    constexpr uint64_t kMaxMoovSize = 16ULL << 20;
+
+    // WebM / Matroska EBML header (0x1A 0x45 0xDF 0xA3)
+    if (head[0] == 0x1A && head[1] == 0x45 && head[2] == 0xDF && head[3] == 0xA3) {
+        if (file_size > head.size()) {
+            out_offset = head.size();
+            out_length = std::min<uint64_t>(256ULL * 1024ULL, file_size - head.size());
+            return true;
+        }
+        return false;
+    }
+
+    uint64_t total = (file_size > 0) ? file_size : head.size();
+    uint64_t pos = 0;
+    bool has_moov = false;
+    uint64_t moov_pos = 0, moov_size = 0;
+    uint64_t mdat_end = 0;
+
+    while (pos + 8 <= head.size()) {
+        uint64_t sz = ReadBe32(head.data() + pos);
+        std::string box_type(reinterpret_cast<const char*>(head.data() + pos + 4), 4);
+        uint64_t hdr_len = 8;
+        if (sz == 1) {
+            if (pos + 16 > head.size()) break;
+            sz = ReadBe64(head.data() + pos + 8);
+            hdr_len = 16;
+        } else if (sz == 0) {
+            sz = (total > pos) ? (total - pos) : hdr_len;
+        }
+        if (sz < hdr_len) break;
+        uint64_t box_end = pos + sz;
+        if (box_type == "moov") {
+            has_moov = true;
+            moov_pos = pos;
+            moov_size = sz;
+        } else if (box_type == "mdat" && !has_moov) {
+            mdat_end = box_end;
+        }
+        if (box_end > head.size()) break;
+        pos = box_end;
+    }
+
+    if (has_moov) {
+        uint64_t moov_end = moov_pos + moov_size;
+        if (moov_end <= head.size()) return false; // Already in head
+        if (moov_size > kMaxMoovSize || (file_size > 0 && moov_end > file_size)) return false;
+        out_offset = (mdat_end == 0) ? head.size() : moov_pos;
+        out_length = (mdat_end == 0) ? (moov_end - head.size()) : moov_size;
+        return out_length > 0;
+    }
+    if (mdat_end > 0 && file_size > mdat_end && (file_size - mdat_end) <= kMaxMoovSize) {
+        out_offset = mdat_end;
+        out_length = file_size - mdat_end;
+        return true;
+    }
+    return false;
+}
+
+std::optional<VideoExtractionManager::ContainerIndex> VideoExtractionManager::ParseContainerIndex(
+    const std::vector<uint8_t>& data) {
+    if (data.size() < 8) return std::nullopt;
+    if (data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3) {
+        ContainerIndex idx;
+        idx.format = "webm";
+        idx.init_end = std::min<uint64_t>(data.size(), 4096);
+        return idx;
+    }
+    uint64_t pos = 0;
+    while (pos + 8 <= data.size()) {
+        uint64_t sz = ReadBe32(data.data() + pos);
+        std::string box_type(reinterpret_cast<const char*>(data.data() + pos + 4), 4);
+        uint64_t hdr_len = 8;
+        if (sz == 1) {
+            if (pos + 16 > data.size()) break;
+            sz = ReadBe64(data.data() + pos + 8);
+            hdr_len = 16;
+        } else if (sz == 0) {
+            sz = data.size() - pos;
+        }
+        if (sz < hdr_len || pos + sz > data.size()) break;
+        if (box_type == "moov") {
+            ContainerIndex idx;
+            idx.format = "mp4";
+            idx.init_end = pos + sz;
+            // Scan mvhd for timescale & duration
+            uint64_t cpos = pos + hdr_len;
+            uint64_t cend = pos + sz;
+            while (cpos + 8 <= cend) {
+                uint64_t csz = ReadBe32(data.data() + cpos);
+                std::string ctype(reinterpret_cast<const char*>(data.data() + cpos + 4), 4);
+                if (csz < 8 || cpos + csz > cend) break;
+                if (ctype == "mvhd" && csz >= 28) {
+                    uint8_t version = data[cpos + 8];
+                    if (version == 0 && cpos + 28 <= cend) {
+                        uint32_t ts = ReadBe32(data.data() + cpos + 20);
+                        uint32_t dur = ReadBe32(data.data() + cpos + 24);
+                        if (ts > 0) idx.duration_sec = static_cast<double>(dur) / static_cast<double>(ts);
+                    } else if (version == 1 && cpos + 40 <= cend) {
+                        uint32_t ts = ReadBe32(data.data() + cpos + 28);
+                        uint64_t dur = ReadBe64(data.data() + cpos + 32);
+                        if (ts > 0) idx.duration_sec = static_cast<double>(dur) / static_cast<double>(ts);
+                    }
+                    break;
+                }
+                cpos += csz;
+            }
+            return idx;
+        }
+        pos += sz;
+    }
+    return std::nullopt;
+}
+
 // ============================================================================
 // Concrete Modular Extractors
 // ============================================================================
@@ -1612,6 +1953,64 @@ Result<ExtractionMetadata> VideoExtractionManager::ParseYtDlpJson(
 namespace {
 
 Result<ExtractionMetadata> RunYtDlpMetadataProbe(const ExtractionRequest& req) {
+    std::string normalized_url = VideoExtractionManager::NormalizeExtractorUrl(req.url);
+    auto site_headers = VideoExtractionManager::BuildSiteHeaders(normalized_url, req.page_url, req.headers);
+
+    // Fast in-process HLS master playlist probe (MDM manifest.rs port): avoids yt-dlp subprocess lag for VOD .m3u8
+    {
+        std::string low_url = ToLowerAscii(normalized_url);
+        auto qpos = low_url.find('?');
+        std::string path_only = (qpos == std::string::npos) ? low_url : low_url.substr(0, qpos);
+        if (path_only.size() >= 5 && path_only.rfind(".m3u8") == path_only.size() - 5) {
+            std::atomic<bool> cancel_fetch{false};
+            std::string master_body;
+            std::string final_master_url = normalized_url;
+            constexpr size_t kMaxPlaylistBytes = 2ULL << 20;
+            auto fetch_res = brisk::HttpClient::PerformGet(
+                normalized_url, site_headers, std::nullopt, std::nullopt, 5000, false, cancel_fetch,
+                [&](const brisk::HttpResponseMeta& meta) {
+                    if (!meta.final_url.empty()) final_master_url = meta.final_url;
+                    return meta.status_code >= 200 && meta.status_code < 400;
+                },
+                [&](const uint8_t* data, size_t len) {
+                    if (master_body.size() + len > kMaxPlaylistBytes) return false;
+                    master_body.append(reinterpret_cast<const char*>(data), len);
+                    return true;
+                });
+            if (fetch_res.ok()) {
+                auto hls_res = VideoExtractionManager::ParseHlsMasterPlaylist(master_body, final_master_url);
+                if (hls_res.ok() && hls_res.value && !hls_res.value->formats.empty()) {
+                    // Check first variant playlist for #EXT-X-ENDLIST (VOD) and duration
+                    std::string var_body;
+                    std::atomic<bool> cancel_var{false};
+                    auto var_res = brisk::HttpClient::PerformGet(
+                        hls_res.value->formats.front().video_url, site_headers, std::nullopt, std::nullopt, 5000, false, cancel_var,
+                        [](const brisk::HttpResponseMeta& meta) {
+                            return meta.status_code >= 200 && meta.status_code < 400;
+                        },
+                        [&](const uint8_t* data, size_t len) {
+                            if (var_body.size() + len > kMaxPlaylistBytes) return false;
+                            var_body.append(reinterpret_cast<const char*>(data), len);
+                            return true;
+                        });
+                    if (var_res.ok() && var_body.find("#EXT-X-ENDLIST") != std::string::npos) {
+                        double total_dur = 0.0;
+                        std::istringstream viss(var_body);
+                        std::string vline;
+                        while (std::getline(viss, vline)) {
+                            if (vline.rfind("#EXTINF:", 0) == 0) {
+                                try { total_dur += std::stod(vline.substr(8)); } catch (...) {}
+                            }
+                        }
+                        hls_res.value->duration_seconds = total_dur;
+                        hls_res.value->required_headers = site_headers;
+                        return hls_res;
+                    }
+                }
+            }
+        }
+    }
+
     std::error_code ec;
     std::filesystem::path ytdlp_bin = PathSanitizer::FindWorkerBinary("yt-dlp", PathSanitizer::GetExecutableDir());
     if (ytdlp_bin.empty() || !std::filesystem::exists(ytdlp_bin, ec)) {
@@ -1619,9 +2018,6 @@ Result<ExtractionMetadata> RunYtDlpMetadataProbe(const ExtractionRequest& req) {
             "ERR_YTDLP_NOT_FOUND",
             "yt-dlp.exe extractor engine was not found in tools/ directory.");
     }
-
-    std::string normalized_url = VideoExtractionManager::NormalizeExtractorUrl(req.url);
-    auto site_headers = VideoExtractionManager::BuildSiteHeaders(normalized_url, req.page_url, req.headers);
 
     std::filesystem::path temp_cookie_path;
     auto cleanup_cookie = [&]() {
@@ -2104,6 +2500,621 @@ void VideoExtractionManager::InvalidateCacheForUrl(const std::string& url) {
 void VideoExtractionManager::ClearCache() {
     std::lock_guard<std::mutex> lock(m_cache_mutex);
     m_cache.clear();
+}
+
+// ============================================================================
+// VideoPartSpec (MDM part.rs port)
+// ============================================================================
+
+std::optional<uint32_t> VideoPartSpec::ParseTimeSeconds(std::string_view s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+    if (s.empty()) return std::nullopt;
+
+    std::vector<uint64_t> nums;
+    size_t pos = 0;
+    while (pos <= s.size()) {
+        auto colon = s.find(':', pos);
+        std::string_view part = (colon == std::string_view::npos) ? s.substr(pos) : s.substr(pos, colon - pos);
+        if (part.empty() || part.size() > 9) return std::nullopt;
+        uint64_t val = 0;
+        for (char c : part) {
+            if (!std::isdigit(static_cast<unsigned char>(c))) return std::nullopt;
+            val = val * 10 + static_cast<uint64_t>(c - '0');
+        }
+        nums.push_back(val);
+        if (colon == std::string_view::npos) break;
+        pos = colon + 1;
+        if (nums.size() >= 3) return std::nullopt;
+    }
+    if (nums.empty() || nums.size() > 3) return std::nullopt;
+    for (size_t i = 1; i < nums.size(); ++i) {
+        if (nums[i] >= 60) return std::nullopt;
+    }
+    uint64_t secs = 0;
+    for (uint64_t n : nums) {
+        secs = secs * 60 + n;
+    }
+    if (secs > UINT32_MAX) return std::nullopt;
+    return static_cast<uint32_t>(secs);
+}
+
+Result<VideoPartSpec> VideoPartSpec::Validate(
+    std::string_view from_str,
+    std::string_view to_str,
+    bool exact,
+    std::optional<double> duration_sec) {
+    auto f = ParseTimeSeconds(from_str);
+    auto t = ParseTimeSeconds(to_str);
+    if (!f || !t) {
+        return Result<VideoPartSpec>::Err("ERR_PART_TIME", "Invalid time format (use h:mm:ss, m:ss, or seconds)");
+    }
+    if (*t <= *f) {
+        return Result<VideoPartSpec>::Err("ERR_PART_BACKWARDS", "End time must be after start time");
+    }
+    if (duration_sec && *duration_sec >= 1.0) {
+        uint32_t end_s = static_cast<uint32_t>(std::ceil(*duration_sec));
+        if (*t > end_s) {
+            return Result<VideoPartSpec>::Err("ERR_PART_PAST_END", "End time exceeds video duration");
+        }
+        if (*f == 0 && *t == end_s) {
+            return Result<VideoPartSpec>::Err("ERR_PART_WHOLE", "Range covers the entire video");
+        }
+    }
+    return Result<VideoPartSpec>::Ok(VideoPartSpec{*f, *t, exact});
+}
+
+std::string VideoPartSpec::SectionsArg() const {
+    return "*" + std::to_string(from_sec) + "-" + std::to_string(to_sec);
+}
+
+static std::string FormatPartUnit(uint32_t secs) {
+    uint32_t h = secs / 3600;
+    uint32_t m = (secs / 60) % 60;
+    uint32_t s = secs % 60;
+    char buf[48];
+    if (h > 0) {
+        std::snprintf(buf, sizeof(buf), "%uh%02um%02us", h, m, s);
+    } else if (m > 0) {
+        std::snprintf(buf, sizeof(buf), "%um%02us", m, s);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%us", s);
+    }
+    return std::string(buf);
+}
+
+std::string VideoPartSpec::FormatTag() const {
+    return FormatPartUnit(from_sec) + "-" + FormatPartUnit(to_sec);
+}
+
+std::string VideoPartSpec::FormatPartFilename(const std::string& base_name, const VideoPartSpec& part) {
+    std::string tag = "(" + part.FormatTag() + ")";
+    auto dot = base_name.rfind('.');
+    if (dot != std::string::npos && dot > 0 && base_name.size() - dot <= 6) {
+        std::string stem = base_name.substr(0, dot);
+        std::string ext = base_name.substr(dot);
+        if (stem.find(tag) != std::string::npos) return base_name;
+        return stem + " " + tag + ext;
+    }
+    if (base_name.find(tag) != std::string::npos) return base_name;
+    return base_name + " " + tag;
+}
+
+// ============================================================================
+// GalleryDownloader (MDM gallery.rs port)
+// ============================================================================
+
+std::vector<GalleryItem> GalleryDownloader::ParsePrepareOutput(const std::string& stdout_text) {
+    std::vector<GalleryItem> items;
+    std::istringstream iss(stdout_text);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        auto tab = line.find('\t');
+        if (tab == std::string::npos) continue;
+        std::string url = line.substr(0, tab);
+        std::string path = line.substr(tab + 1);
+        if ((url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0) && !path.empty() && path != "None") {
+            items.push_back(GalleryItem{std::move(url), std::move(path)});
+        }
+    }
+    return items;
+}
+
+Result<std::vector<GalleryItem>> GalleryDownloader::ExtractGalleryItems(
+    const std::string& gallery_url,
+    const std::string& cookies_path,
+    const std::map<std::string, std::string>& headers,
+    std::atomic<bool>& cancel_flag) {
+    std::error_code ec;
+    std::filesystem::path gdl = PathSanitizer::FindWorkerBinary("gallery-dl", PathSanitizer::GetExecutableDir());
+    if (gdl.empty() || !std::filesystem::exists(gdl, ec)) {
+        return Result<std::vector<GalleryItem>>::Err("ERR_GALLERYDL_NOT_FOUND", "gallery-dl binary not found in tools/ or PATH");
+    }
+
+#ifdef _WIN32
+    auto to_wide = [](const std::string& s) -> std::wstring {
+        if (s.empty()) return L"";
+        int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+        std::wstring w(n, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+        return w;
+    };
+
+    SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE hReadPipe = nullptr, hWritePipe = nullptr;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
+        return Result<std::vector<GalleryItem>>::Err("ERR_OS_PIPE", "CreatePipe failed for gallery-dl");
+    }
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE hJob = CreateJobObjectW(nullptr, nullptr);
+    if (hJob) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli{};
+        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+    }
+
+    std::wostringstream wcmd;
+    wcmd << L"\"" << gdl.wstring() << L"\" --no-download --print \"prepare-after:{_url}\t{_path}\"";
+    if (!cookies_path.empty()) {
+        wcmd << L" --cookies \"" << to_wide(cookies_path) << L"\"";
+    }
+    auto ua_it = headers.find("User-Agent");
+    if (ua_it != headers.end() && !ua_it->second.empty()) {
+        wcmd << L" --user-agent \"" << to_wide(ua_it->second) << L"\"";
+    }
+    wcmd << L" \"" << to_wide(gallery_url) << L"\"";
+    std::wstring cmd_str = wcmd.str();
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = hWritePipe;
+    si.hStdError = hWritePipe;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd_str.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        if (hJob) CloseHandle(hJob);
+        return Result<std::vector<GalleryItem>>::Err("ERR_OS_SPAWN", "Failed to spawn gallery-dl");
+    }
+    if (hJob) AssignProcessToJobObject(hJob, pi.hProcess);
+    ResumeThread(pi.hThread);
+    CloseHandle(hWritePipe);
+
+    std::string out;
+    char buf[4096];
+    DWORD got = 0;
+    while (ReadFile(hReadPipe, buf, sizeof(buf), &got, nullptr) && got > 0) {
+        if (cancel_flag.load()) {
+            if (hJob) TerminateJobObject(hJob, 1);
+            else TerminateProcess(pi.hProcess, 1);
+            break;
+        }
+        out.append(buf, got);
+    }
+    WaitForSingleObject(pi.hProcess, 30000);
+    CloseHandle(hReadPipe);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (hJob) CloseHandle(hJob);
+    return Result<std::vector<GalleryItem>>::Ok(ParsePrepareOutput(out));
+#else
+    (void)cookies_path;
+    (void)headers;
+    (void)cancel_flag;
+    return Result<std::vector<GalleryItem>>::Err("ERR_UNSUPPORTED", "gallery-dl extraction requires Windows Job Object path");
+#endif
+}
+
+Result<size_t> GalleryDownloader::DownloadGallery(
+    const std::vector<GalleryItem>& items,
+    const std::filesystem::path& save_dir,
+    const std::map<std::string, std::string>& headers,
+    std::atomic<bool>& cancel_flag) {
+    if (items.empty()) return Result<size_t>::Ok(0);
+    std::error_code ec;
+    std::filesystem::create_directories(save_dir, ec);
+
+    std::atomic<size_t> next_idx{0};
+    std::atomic<size_t> ok_count{0};
+    const size_t nthreads = std::min<size_t>(4, items.size());
+    std::vector<std::thread> workers;
+    workers.reserve(nthreads);
+    for (size_t w = 0; w < nthreads; ++w) {
+        workers.emplace_back([&]() {
+            while (!cancel_flag.load()) {
+                size_t idx = next_idx.fetch_add(1);
+                if (idx >= items.size()) break;
+                const auto& item = items[idx];
+                std::string safe_name = PathSanitizer::SanitizeFileName(
+                    std::filesystem::path(item.relative_path).filename().string());
+                if (safe_name.empty()) safe_name = "image_" + std::to_string(idx) + ".bin";
+                auto dest = save_dir / safe_name;
+                std::ofstream ofs(dest, std::ios::binary | std::ios::trunc);
+                if (!ofs.is_open()) continue;
+                auto res = brisk::HttpClient::PerformGet(
+                    item.url, headers, std::nullopt, std::nullopt, 15000, false, cancel_flag,
+                    [](const brisk::HttpResponseMeta& m) { return m.status_code >= 200 && m.status_code < 400; },
+                    [&](const uint8_t* data, size_t len) {
+                        ofs.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(len));
+                        return ofs.good();
+                    });
+                ofs.close();
+                if (res.ok()) {
+                    ok_count.fetch_add(1);
+                } else {
+                    std::error_code rm_ec;
+                    std::filesystem::remove(dest, rm_ec);
+                }
+            }
+        });
+    }
+    for (auto& t : workers) t.join();
+    return Result<size_t>::Ok(ok_count.load());
+}
+
+// ============================================================================
+// BilibiliHelper (GD3 bili_pack port: Wbi, QR Login, Multi-part, Danmaku)
+// ============================================================================
+
+namespace {
+
+static std::string ComputeMd5Hex(const std::string& input) {
+    uint8_t digest[16]{};
+    bool ok = false;
+#ifdef _WIN32
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_MD5_ALGORITHM, nullptr, 0) == 0) {
+        if (BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0) == 0) {
+            if (BCryptHashData(hHash, reinterpret_cast<PUCHAR>(const_cast<char*>(input.data())),
+                               static_cast<ULONG>(input.size()), 0) == 0 &&
+                BCryptFinishHash(hHash, digest, sizeof(digest), 0) == 0) {
+                ok = true;
+            }
+            BCryptDestroyHash(hHash);
+        }
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+    }
+#else
+    unsigned int out_len = 0;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx) {
+        if (EVP_DigestInit_ex(ctx, EVP_md5(), nullptr) == 1 &&
+            EVP_DigestUpdate(ctx, input.data(), input.size()) == 1 &&
+            EVP_DigestFinal_ex(ctx, digest, &out_len) == 1 && out_len == 16) {
+            ok = true;
+        }
+        EVP_MD_CTX_free(ctx);
+    }
+#endif
+    if (!ok) return "";
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(32);
+    for (uint8_t b : digest) {
+        hex.push_back(kHex[(b >> 4) & 0x0F]);
+        hex.push_back(kHex[b & 0x0F]);
+    }
+    return hex;
+}
+
+static std::string UrlEncodeWbi(const std::string& s) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out.push_back(static_cast<char>(c));
+        } else if (c == ' ') {
+            out.push_back('+');
+        } else {
+            out.push_back('%');
+            out.push_back(kHex[(c >> 4) & 0x0F]);
+            out.push_back(kHex[c & 0x0F]);
+        }
+    }
+    return out;
+}
+
+static bool ReadVarint(const std::vector<uint8_t>& buf, size_t& pos, uint64_t& out) {
+    out = 0;
+    int shift = 0;
+    while (pos < buf.size()) {
+        uint8_t b = buf[pos++];
+        out |= static_cast<uint64_t>(b & 0x7F) << shift;
+        if ((b & 0x80) == 0) return true;
+        shift += 7;
+        if (shift > 63) return false;
+    }
+    return false;
+}
+
+static std::string EscapeXmlText(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (unsigned char c : s) {
+        if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') continue;
+        if (c == '&') out += "&amp;";
+        else if (c == '<') out += "&lt;";
+        else if (c == '>') out += "&gt;";
+        else if (c == '"') out += "&quot;";
+        else out.push_back(static_cast<char>(c));
+    }
+    return out;
+}
+
+} // namespace
+
+std::string BilibiliHelper::ComputeWbiMixinKey(const std::string& img_key, const std::string& sub_key) {
+    static constexpr int kMixinTab[64] = {
+        46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+        33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+        61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+        36, 20, 34, 44, 52
+    };
+    if (img_key.empty() || sub_key.empty()) return "";
+    std::string orig = img_key + sub_key;
+    std::string out;
+    out.reserve(32);
+    for (int i = 0; i < 32; ++i) {
+        size_t idx = static_cast<size_t>(kMixinTab[i]);
+        if (idx < orig.size()) out.push_back(orig[idx]);
+    }
+    return out;
+}
+
+std::map<std::string, std::string> BilibiliHelper::SignWbiParams(
+    std::map<std::string, std::string> params,
+    const std::string& mixin_key,
+    int64_t wts_epoch_s) {
+    if (mixin_key.empty()) return params;
+    int64_t wts = (wts_epoch_s > 0) ? wts_epoch_s : CurrentEpochSeconds();
+    params["wts"] = std::to_string(wts);
+
+    std::string query;
+    for (auto& [k, v] : params) {
+        std::string filtered;
+        for (char c : v) {
+            if (c != '!' && c != '\'' && c != '(' && c != ')' && c != '*') {
+                filtered.push_back(c);
+            }
+        }
+        v = std::move(filtered);
+        if (!query.empty()) query.push_back('&');
+        query += UrlEncodeWbi(k) + "=" + UrlEncodeWbi(v);
+    }
+    params["w_rid"] = ComputeMd5Hex(query + mixin_key);
+    return params;
+}
+
+Result<BiliUrlInfo> BilibiliHelper::ParseBilibiliUrl(const std::string& url) {
+    BiliUrlInfo info;
+    std::string low = ToLowerAscii(url);
+    if (low.find("b23.tv") != std::string::npos) {
+        info.is_short_url = true;
+        return Result<BiliUrlInfo>::Ok(std::move(info));
+    }
+
+    static const std::regex kVideoRe(R"(/video/(BV[a-zA-Z0-9]+|av\d+))");
+    static const std::regex kListsRe(R"(/(\d+)/lists/(\d+))");
+    static const std::regex kFavRe(R"(/(\d+)/favlist)");
+    static const std::regex kMlRe(R"(/(?:list|medialist/detail)/ml(\d+))");
+
+    std::smatch m;
+    if (std::regex_search(url, m, kVideoRe)) {
+        info.video_id = m[1].str();
+        auto qpos = url.find('?');
+        if (qpos != std::string::npos) {
+            std::string qs = url.substr(qpos + 1);
+            static const std::regex kPageRe(R"((?:^|&)p=([0-9,\-]+))");
+            std::smatch pm;
+            if (std::regex_search(qs, pm, kPageRe)) {
+                std::istringstream pss(pm[1].str());
+                std::string tok;
+                while (std::getline(pss, tok, ',')) {
+                    auto dash = tok.find('-');
+                    if (dash != std::string::npos) {
+                        try {
+                            int a = std::stoi(tok.substr(0, dash));
+                            int b = std::stoi(tok.substr(dash + 1));
+                            for (int p = std::min(a, b); p <= std::max(a, b) && info.selected_pages.size() < 500; ++p) {
+                                if (p >= 1) info.selected_pages.push_back(p);
+                            }
+                        } catch (...) {}
+                    } else if (!tok.empty()) {
+                        try {
+                            int p = std::stoi(tok);
+                            if (p >= 1) info.selected_pages.push_back(p);
+                        } catch (...) {}
+                    }
+                }
+            }
+        }
+        return Result<BiliUrlInfo>::Ok(std::move(info));
+    }
+    if (std::regex_search(url, m, kListsRe)) {
+        try {
+            info.mid = std::stoull(m[1].str());
+            info.season_id = std::stoull(m[2].str());
+        } catch (...) {}
+        return Result<BiliUrlInfo>::Ok(std::move(info));
+    }
+    if (std::regex_search(url, m, kFavRe)) {
+        try { info.mid = std::stoull(m[1].str()); } catch (...) {}
+        static const std::regex kFidRe(R"((?:^|[?&])fid=(\d+))");
+        std::smatch fm;
+        if (std::regex_search(url, fm, kFidRe)) {
+            try { info.favorite_id = std::stoull(fm[1].str()); } catch (...) {}
+        }
+        return Result<BiliUrlInfo>::Ok(std::move(info));
+    }
+    if (std::regex_search(url, m, kMlRe)) {
+        try { info.favorite_id = std::stoull(m[1].str()); } catch (...) {}
+        return Result<BiliUrlInfo>::Ok(std::move(info));
+    }
+    return Result<BiliUrlInfo>::Err("ERR_BILI_INVALID_URL", "Not a recognized Bilibili video/season/favorite URL");
+}
+
+std::string BilibiliHelper::BuildQrGenerateUrl() {
+    return "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
+}
+
+std::string BilibiliHelper::BuildQrPollUrl(const std::string& qrcode_key) {
+    return "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=" + UrlEncodeWbi(qrcode_key);
+}
+
+Result<BiliQrPollResult> BilibiliHelper::ParseQrPollResponse(const std::string& json_body) {
+    auto root = json::Parse(json_body);
+    if (!root.is_object()) {
+        return Result<BiliQrPollResult>::Err("ERR_BILI_JSON", "Invalid Bilibili QR poll JSON");
+    }
+    const auto& obj = root;
+    const auto& data = obj["data"];
+    BiliQrPollResult res;
+    if (data.is_object()) {
+        res.code = static_cast<int>(data["code"].as_int64(-1));
+        res.message = data["message"].as_string();
+        res.refresh_token = data["refresh_token"].as_string();
+    } else {
+        res.code = static_cast<int>(obj["code"].as_int64(-1));
+        res.message = obj["message"].as_string();
+    }
+    return Result<BiliQrPollResult>::Ok(std::move(res));
+}
+
+std::vector<DanmakuItem> BilibiliHelper::ParseDanmakuProtobuf(const std::vector<uint8_t>& seg_so_bytes) {
+    std::vector<DanmakuItem> items;
+    size_t pos = 0;
+    while (pos < seg_so_bytes.size()) {
+        uint64_t tag = 0;
+        if (!ReadVarint(seg_so_bytes, pos, tag)) break;
+        uint64_t field = tag >> 3;
+        uint64_t wire = tag & 7;
+        if (wire == 0) {
+            uint64_t dummy = 0;
+            if (!ReadVarint(seg_so_bytes, pos, dummy)) break;
+        } else if (wire == 2) {
+            uint64_t len = 0;
+            if (!ReadVarint(seg_so_bytes, pos, len)) break;
+            if (pos + len > seg_so_bytes.size()) break;
+            if (field == 1) {
+                // Parse DanmakuElem submessage
+                DanmakuItem item;
+                size_t epos = pos;
+                size_t eend = pos + static_cast<size_t>(len);
+                while (epos < eend) {
+                    uint64_t etag = 0;
+                    if (!ReadVarint(seg_so_bytes, epos, etag)) break;
+                    uint64_t ef = etag >> 3;
+                    uint64_t ew = etag & 7;
+                    if (ew == 0) {
+                        uint64_t val = 0;
+                        if (!ReadVarint(seg_so_bytes, epos, val)) break;
+                        if (ef == 1) item.id = static_cast<int64_t>(val);
+                        else if (ef == 2) item.progress_ms = static_cast<int64_t>(val);
+                        else if (ef == 3) item.mode = static_cast<int>(val);
+                        else if (ef == 4) item.fontsize = static_cast<int>(val);
+                        else if (ef == 5) item.color = static_cast<uint32_t>(val);
+                        else if (ef == 8) item.ctime = static_cast<int64_t>(val);
+                        else if (ef == 9) item.weight = static_cast<int>(val);
+                        else if (ef == 11) item.pool = static_cast<int>(val);
+                    } else if (ew == 2) {
+                        uint64_t slen = 0;
+                        if (!ReadVarint(seg_so_bytes, epos, slen) || epos + slen > eend) break;
+                        std::string s(reinterpret_cast<const char*>(seg_so_bytes.data() + epos), static_cast<size_t>(slen));
+                        epos += static_cast<size_t>(slen);
+                        if (ef == 6) item.mid_hash = std::move(s);
+                        else if (ef == 7) item.content = std::move(s);
+                        else if (ef == 12) item.id_str = std::move(s);
+                    } else if (ew == 1) {
+                        epos += 8;
+                    } else if (ew == 5) {
+                        epos += 4;
+                    } else {
+                        break;
+                    }
+                }
+                if (!item.content.empty()) {
+                    if (item.id_str.empty() && item.id != 0) item.id_str = std::to_string(item.id);
+                    items.push_back(std::move(item));
+                }
+            }
+            pos += static_cast<size_t>(len);
+        } else if (wire == 1) {
+            pos += 8;
+        } else if (wire == 5) {
+            pos += 4;
+        } else {
+            break;
+        }
+    }
+    return items;
+}
+
+std::string BilibiliHelper::ConvertDanmakuToXml(const std::vector<DanmakuItem>& items, int64_t chat_id) {
+    std::ostringstream oss;
+    oss << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<i>\n"
+        << "  <chatid>" << chat_id << "</chatid>\n";
+    for (const auto& d : items) {
+        double sec = static_cast<double>(std::max<int64_t>(0, d.progress_ms)) / 1000.0;
+        char tbuf[32];
+        std::snprintf(tbuf, sizeof(tbuf), "%.5f", sec);
+        oss << "  <d p=\"" << tbuf << "," << d.mode << "," << d.fontsize << "," << d.color << ","
+            << d.ctime << "," << d.pool << "," << EscapeXmlText(d.mid_hash) << ","
+            << EscapeXmlText(d.id_str) << "," << d.weight << "\">"
+            << EscapeXmlText(d.content) << "</d>\n";
+    }
+    oss << "</i>\n";
+    return oss.str();
+}
+
+std::string BilibiliHelper::ConvertDanmakuToAss(const std::vector<DanmakuItem>& items, int width, int height) {
+    auto fmt_ass_time = [](int64_t ms) -> std::string {
+        int64_t cs = std::max<int64_t>(0, ms) / 10;
+        int64_t h = cs / 360000;
+        int64_t m = (cs / 6000) % 60;
+        int64_t s = (cs / 100) % 60;
+        int64_t c = cs % 100;
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%lld:%02lld:%02lld.%02lld",
+                      static_cast<long long>(h), static_cast<long long>(m),
+                      static_cast<long long>(s), static_cast<long long>(c));
+        return std::string(buf);
+    };
+
+    std::ostringstream oss;
+    oss << "[Script Info]\nScriptType: v4.00+\nPlayResX: " << width << "\nPlayResY: " << height << "\n\n"
+        << "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+           "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+           "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        << "Style: Danmaku,Microsoft YaHei,38,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1.5,0,7,0,0,0,1\n\n"
+        << "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
+
+    int slot = 0;
+    const int max_slots = std::max(1, (height - 40) / 44);
+    for (const auto& d : items) {
+        int y = 20 + (slot % max_slots) * 44;
+        ++slot;
+        int64_t dur_ms = (d.mode == 4 || d.mode == 5) ? 5000 : 12000;
+        std::string clean;
+        for (unsigned char c : d.content) {
+            if (c >= 0x20 || c == '\t') clean.push_back(static_cast<char>(c));
+        }
+        uint32_t bgr = ((d.color & 0xFF) << 16) | (d.color & 0xFF00) | ((d.color >> 16) & 0xFF);
+        char cbuf[16];
+        std::snprintf(cbuf, sizeof(cbuf), "\\c&H%06X&", bgr);
+        oss << "Dialogue: 0," << fmt_ass_time(d.progress_ms) << "," << fmt_ass_time(d.progress_ms + dur_ms)
+            << ",Danmaku,,0,0,0,,{\\move(" << width << "," << y << ",-400," << y << ")" << cbuf << "}"
+            << clean << "\n";
+    }
+    return oss.str();
 }
 
 } // namespace openidm::engine_stream

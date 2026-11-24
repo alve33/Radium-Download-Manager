@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "brisk_engine/http_client.hpp"
+#include "brisk_engine/site_handlers.hpp"
 #include "common/crypto_utils.hpp"
 #include "common/version.hpp"
 
@@ -148,12 +149,11 @@ static std::unordered_map<std::string, DnsResolutionCacheEntry> s_dns_resolution
 
 bool HttpClient::CheckHostResolvesToPrivate(const std::string& host) {
 #ifdef _WIN32
-    static bool wsa_init = false;
-    if (!wsa_init) {
-        WSADATA wsa;
+    static std::once_flag s_wsa_once;
+    std::call_once(s_wsa_once, []() {
+        WSADATA wsa{};
         WSAStartup(MAKEWORD(2, 2), &wsa);
-        wsa_init = true;
-    }
+    });
 #endif
     std::string h = ToLower(host);
     if (h == "localhost" || h == "127.0.0.1" || h == "::1") return true;
@@ -707,6 +707,63 @@ Result<HttpResponseMeta> HttpClient::MapHttpStatusToError(const HttpResponseMeta
     return Result<HttpResponseMeta>::Err("ERR_HTTP_CLIENT", "HTTP status " + std::to_string(meta.status_code));
 }
 
+#ifdef _WIN32
+struct WinHttpAsyncCtx {
+    HANDLE hComplete{nullptr};
+    HANDLE hClosed{nullptr};
+    std::atomic<DWORD> async_error{0};
+    std::atomic<DWORD> bytes_read{0};
+    std::atomic<bool> send_done{false};
+    std::atomic<bool> headers_done{false};
+    std::atomic<bool> read_done{false};
+
+    WinHttpAsyncCtx() {
+        hComplete = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        hClosed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    }
+    ~WinHttpAsyncCtx() {
+        if (hComplete) CloseHandle(hComplete);
+        if (hClosed) CloseHandle(hClosed);
+    }
+};
+
+static void CALLBACK OnWinHttpStatus(
+    HINTERNET /*hInternet*/,
+    DWORD_PTR dwContext,
+    DWORD dwInternetStatus,
+    LPVOID lpvStatusInformation,
+    DWORD dwStatusInformationLength) {
+    auto* ctx = reinterpret_cast<WinHttpAsyncCtx*>(dwContext);
+    if (!ctx) return;
+    switch (dwInternetStatus) {
+        case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
+            ctx->send_done.store(true, std::memory_order_release);
+            SetEvent(ctx->hComplete);
+            break;
+        case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
+            ctx->headers_done.store(true, std::memory_order_release);
+            SetEvent(ctx->hComplete);
+            break;
+        case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
+            ctx->bytes_read.store(dwStatusInformationLength, std::memory_order_release);
+            ctx->read_done.store(true, std::memory_order_release);
+            SetEvent(ctx->hComplete);
+            break;
+        case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR: {
+            auto* res = reinterpret_cast<const WINHTTP_ASYNC_RESULT*>(lpvStatusInformation);
+            ctx->async_error.store(res ? res->dwError : ERROR_WINHTTP_OPERATION_CANCELLED, std::memory_order_release);
+            SetEvent(ctx->hComplete);
+            break;
+        }
+        case WINHTTP_CALLBACK_STATUS_HANDLE_CLOSING:
+            SetEvent(ctx->hClosed);
+            break;
+        default:
+            break;
+    }
+}
+#endif
+
 Result<HttpResponseMeta> HttpClient::PerformGet(
     const std::string& initial_url,
     const std::map<std::string, std::string>& headers,
@@ -720,7 +777,18 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
     const HttpNetworkOptions& net_opts) {
 
     std::string current_url = initial_url;
+    if (auto not_file = SiteHandlers::CheckNotAFile(current_url)) {
+        return Result<HttpResponseMeta>::Err(not_file->first, not_file->second, false, false);
+    }
+    if (auto rewritten = SiteHandlers::RewriteUrl(current_url)) {
+        current_url = *rewritten;
+    }
     std::map<std::string, std::string> current_headers = headers;
+    std::string active_method = (net_opts.http_method == "POST" || !net_opts.post_body.empty()) ? "POST" : "GET";
+    std::string active_post_body = net_opts.post_body;
+    std::string active_post_type = net_opts.post_content_type;
+    bool bot_fallback_tried = false;
+    int site_form_posts = 0;
     ParsedUrl initial_pu;
     bool started_on_public_host = false;
 
@@ -737,28 +805,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         auto dns_check_start = std::chrono::steady_clock::now();
         bool host_is_private = pu.is_loopback_or_private;
         if (!host_is_private) {
-            static std::mutex s_dns_cache_mu;
-            struct DnsCacheEntry {
-                bool is_private;
-                std::chrono::steady_clock::time_point expires_at;
-            };
-            static std::map<std::string, DnsCacheEntry> s_dns_cache;
-            const std::string host_key = ToLower(pu.host);
-            const auto now_tp = std::chrono::steady_clock::now();
-            bool cache_hit = false;
-            {
-                std::lock_guard<std::mutex> lk(s_dns_cache_mu);
-                auto it = s_dns_cache.find(host_key);
-                if (it != s_dns_cache.end() && now_tp < it->second.expires_at) {
-                    host_is_private = it->second.is_private;
-                    cache_hit = true;
-                }
-            }
-            if (!cache_hit) {
-                host_is_private = HttpClient::CheckHostResolvesToPrivate(pu.host);
-                std::lock_guard<std::mutex> lk(s_dns_cache_mu);
-                s_dns_cache[host_key] = DnsCacheEntry{host_is_private, now_tp + std::chrono::seconds(60)};
-            }
+            host_is_private = HttpClient::CheckHostResolvesToPrivate(pu.host);
         }
         if (net_opts.on_timing) {
             auto dns_check_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -779,20 +826,42 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
                     "ERR_NET_UNSAFE_REDIRECT",
                     "Blocked unsafe redirect from public host to loopback/private address: " + current_url);
             }
-            // Cross-origin redirect credential stripping (SEC-01)
+            // Cross-origin redirect credential stripping (SEC-01), preserving cookies across same-party site hosts
             bool origin_changed = (pu.scheme != initial_pu.scheme ||
                                    ToLower(pu.host) != ToLower(initial_pu.host) ||
                                    pu.port != initial_pu.port);
             if (origin_changed) {
+                const bool same_party = SiteHandlers::SameParty(initial_url, current_url);
                 for (auto it = current_headers.begin(); it != current_headers.end();) {
                     std::string kl = ToLower(it->first);
-                    if (kl == "authorization" || kl == "cookie" || kl == "proxy-authorization") {
+                    if (kl == "authorization" || kl == "proxy-authorization" ||
+                        (kl == "cookie" && !same_party)) {
                         it = current_headers.erase(it);
                     } else {
                         ++it;
                     }
                 }
             }
+        }
+
+        // Apply per-host IdentityPreset or site-specific User-Agent if configured
+        std::string active_profile = "chrome";
+        if (auto preset = SiteHandlers::MatchIdentityPreset(pu.host, net_opts.identity_presets)) {
+            active_profile = preset->profile;
+            if (!preset->user_agent.empty()) {
+                current_headers["User-Agent"] = preset->user_agent;
+            }
+            for (const auto& [pk, pv] : preset->headers) {
+                if (current_headers.find(pk) == current_headers.end()) {
+                    current_headers[pk] = pv;
+                }
+            }
+        } else if (auto site_ua = SiteHandlers::SiteUserAgent(current_url)) {
+            bool has_ua = false;
+            for (const auto& [hk, _] : current_headers) {
+                if (ToLower(hk) == "user-agent") { has_ua = true; break; }
+            }
+            if (!has_ua) current_headers["User-Agent"] = *site_ua;
         }
 
         // Auto-inject HTTP Basic Authorization from URL userinfo only for same-origin
@@ -817,13 +886,41 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
 
 #ifdef _WIN32
         // ---------------------------------------------------------------------
-        // Native Windows 11 WinHTTP Implementation (BUG-003 Fix)
+        // Native Windows 10 / 11 Async WinHTTP Implementation (WINHTTP_FLAG_ASYNC)
         // Shared persistent HINTERNET session pool for zero-latency DNS/TLS/TCP reuse
+        // and instant (< 50 ms) cancellation via WinHttpCloseHandle.
         // ---------------------------------------------------------------------
+
+        // Fail-closed Network Adapter Binding / VPN Kill Switch check (MDM net.rs port)
+        if (!net_opts.bind_interface_ip.empty() && !pu.is_loopback_or_private) {
+            struct addrinfo hints_b{};
+            hints_b.ai_family = AF_UNSPEC;
+            hints_b.ai_flags = AI_NUMERICHOST;
+            struct addrinfo* bind_ai = nullptr;
+            if (getaddrinfo(net_opts.bind_interface_ip.c_str(), nullptr, &hints_b, &bind_ai) != 0 || !bind_ai) {
+                if (bind_ai) freeaddrinfo(bind_ai);
+                return Result<HttpResponseMeta>::Err("ERR_NET_ADAPTER_DOWN",
+                    "Bound network adapter address is invalid or down: " + net_opts.bind_interface_ip, false);
+            }
+            int bind_family = bind_ai->ai_family;
+            freeaddrinfo(bind_ai);
+
+            struct addrinfo hints_t{};
+            hints_t.ai_family = bind_family;
+            hints_t.ai_socktype = SOCK_STREAM;
+            struct addrinfo* target_ai = nullptr;
+            if (getaddrinfo(pu.host.c_str(), nullptr, &hints_t, &target_ai) != 0 || !target_ai) {
+                if (target_ai) freeaddrinfo(target_ai);
+                return Result<HttpResponseMeta>::Err("ERR_NET_ADAPTER_FAMILY",
+                    "Target host has no reachable address matching bound adapter family", false);
+            }
+            freeaddrinfo(target_ai);
+        }
+
         static std::mutex s_session_mu;
         static std::map<std::string, HINTERNET> s_session_pool;
 
-        std::string session_key = net_opts.proxy_mode + "|" + net_opts.proxy_server + "|" + net_opts.proxy_bypass;
+        std::string session_key = net_opts.proxy_mode + "|" + net_opts.proxy_server + "|" + net_opts.proxy_bypass + "|" + net_opts.pac_url;
         HINTERNET hSession = nullptr;
         {
             std::lock_guard<std::mutex> lk(s_session_mu);
@@ -838,7 +935,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
                 std::wstring wbypass;
 
                 if (net_opts.proxy_mode == "system") {
-                    access_type = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+                    access_type = WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
                 } else if (net_opts.proxy_mode == "manual" && !net_opts.proxy_server.empty()) {
                     access_type = WINHTTP_ACCESS_TYPE_NAMED_PROXY;
                     wproxy = Utf8ToWide(net_opts.proxy_server);
@@ -849,22 +946,16 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
                     }
                 }
 
-                hSession = WinHttpOpen(
-                    L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                    access_type,
-                    proxy_name,
-                    proxy_bypass,
-                    0);
+                constexpr wchar_t kUserAgent[] = L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+                hSession = WinHttpOpen(kUserAgent, access_type, proxy_name, proxy_bypass, WINHTTP_FLAG_ASYNC);
+                if (!hSession && access_type == WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY) {
+                    hSession = WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC);
+                }
                 if (hSession) {
-                    // Set connection limit per server high to prevent WinHTTP from throttling concurrent connections
                     DWORD max_conns = 64;
                     WinHttpSetOption(hSession, WINHTTP_OPTION_MAX_CONNS_PER_SERVER, &max_conns, sizeof(max_conns));
                     WinHttpSetOption(hSession, WINHTTP_OPTION_MAX_CONNS_PER_1_0_SERVER, &max_conns, sizeof(max_conns));
-
-                    // Use HTTP/1.1 by default so each segmented worker gets its own independent TCP connection
-                    // rather than multiplexing all workers over a single HTTP/2 TCP stream.
-
-                    // Enable TCP Fast Open to eliminate connection handshake RTT
 #if defined(WINHTTP_OPTION_TCP_FAST_OPEN)
                     DWORD fast_open = 1;
                     WinHttpSetOption(hSession, WINHTTP_OPTION_TCP_FAST_OPEN, &fast_open, sizeof(fast_open));
@@ -876,10 +967,10 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         if (!hSession) {
             return Result<HttpResponseMeta>::Err("ERR_NET_INIT", "WinHttpOpen failed", true);
         }
-        int resolve_timeout = std::clamp(timeout_ms, 1500, 5000);
-        int connect_timeout = std::clamp(timeout_ms, 1500, 5000);
+        int resolve_timeout = std::clamp(timeout_ms, 2000, 15000);
+        int connect_timeout = std::clamp(timeout_ms, 3000, 20000);
         int send_timeout = std::clamp(timeout_ms, 3000, 30000);
-        int recv_timeout = std::clamp(timeout_ms, 3000, 60000);
+        int recv_timeout = std::clamp(timeout_ms, 1000, 60000);
 
         std::wstring whost = Utf8ToWide(pu.host);
         HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(), pu.port, 0);
@@ -889,57 +980,132 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
         }
 
         std::wstring wpath = Utf8ToWide(pu.path_and_query);
+        std::wstring wverb = (active_method == "POST") ? L"POST" : L"GET";
         DWORD req_flags = (pu.scheme == "https") ? WINHTTP_FLAG_SECURE : 0;
         HINTERNET hRequest = WinHttpOpenRequest(
-            hConnect, L"GET", wpath.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, req_flags);
+            hConnect, wverb.c_str(), wpath.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, req_flags);
         if (!hRequest) {
             DWORD req_err = GetLastError();
             WinHttpCloseHandle(hConnect);
             return Result<HttpResponseMeta>::Err("ERR_NET_REQUEST", "WinHttpOpenRequest failed (error " + std::to_string(req_err) + ")", true);
         }
+
+        auto async_ctx = std::make_unique<WinHttpAsyncCtx>();
+        if (!async_ctx->hComplete || !async_ctx->hClosed) {
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            return Result<HttpResponseMeta>::Err("ERR_NET_INIT", "CreateEventW failed for WinHTTP async context", true);
+        }
+        DWORD_PTR ctx_ptr = reinterpret_cast<DWORD_PTR>(async_ctx.get());
+        WinHttpSetOption(hRequest, WINHTTP_OPTION_CONTEXT_VALUE, &ctx_ptr, sizeof(ctx_ptr));
+        bool callback_installed = (WinHttpSetStatusCallback(
+            hRequest,
+            OnWinHttpStatus,
+            WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES,
+            0) != WINHTTP_INVALID_STATUS_CALLBACK);
+
+        auto cleanup_winhttp = [&]() {
+            if (hRequest) {
+                WinHttpCloseHandle(hRequest);
+                hRequest = nullptr;
+                if (callback_installed && async_ctx->hClosed) {
+                    WaitForSingleObject(async_ctx->hClosed, 2000);
+                }
+            }
+            if (hConnect) {
+                WinHttpCloseHandle(hConnect);
+                hConnect = nullptr;
+            }
+        };
+
+        auto wait_async_step = [&](const std::atomic<bool>& done_flag, int step_timeout_ms) -> Result<bool> {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(step_timeout_ms);
+            while (!done_flag.load(std::memory_order_acquire)) {
+                DWORD err_code = async_ctx->async_error.load(std::memory_order_acquire);
+                if (err_code != 0) {
+                    return Result<bool>::Err("ERR_NET_ASYNC", std::to_string(err_code), true);
+                }
+                if (cancel_flag.load(std::memory_order_acquire)) {
+                    cleanup_winhttp();
+                    return Result<bool>::Err("ERR_CANCELED", "Transfer canceled");
+                }
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    cleanup_winhttp();
+                    return Result<bool>::Err("ERR_NET_TIMEOUT", "WinHTTP async operation timed out", true, true);
+                }
+                WaitForSingleObject(async_ctx->hComplete, 25);
+            }
+            DWORD err_code = async_ctx->async_error.load(std::memory_order_acquire);
+            if (err_code != 0) {
+                return Result<bool>::Err("ERR_NET_ASYNC", std::to_string(err_code), true);
+            }
+            return Result<bool>::Ok(true);
+        };
+
         WinHttpSetTimeouts(hRequest, resolve_timeout, connect_timeout, send_timeout, recv_timeout);
 
         // Disable automatic WinHTTP redirects so OpenIDM's SSRF redirect guard inspects every hop
         DWORD disable_redirects = WINHTTP_DISABLE_REDIRECTS;
         WinHttpSetOption(hRequest, WINHTTP_OPTION_DISABLE_FEATURE, &disable_redirects, sizeof(disable_redirects));
 
+        // Enable gzip/deflate decompression on non-range requests when enabled
+#if defined(WINHTTP_OPTION_DECOMPRESSION) && defined(WINHTTP_DECOMPRESSION_FLAG_ALL)
+        if (net_opts.enable_decompression && !range_start.has_value()) {
+            DWORD decomp = WINHTTP_DECOMPRESSION_FLAG_ALL;
+            WinHttpSetOption(hRequest, WINHTTP_OPTION_DECOMPRESSION, &decomp, sizeof(decomp));
+        }
+#endif
+
+        // Optional PAC auto-config script resolution
+        if (!net_opts.pac_url.empty()) {
+            WINHTTP_AUTOPROXY_OPTIONS auto_opts{};
+            auto_opts.dwFlags = WINHTTP_AUTOPROXY_CONFIG_URL;
+            std::wstring wpac = Utf8ToWide(net_opts.pac_url);
+            auto_opts.lpszAutoConfigUrl = wpac.c_str();
+            auto_opts.fAutoLogonIfChallenged = TRUE;
+            WINHTTP_PROXY_INFO proxy_info{};
+            std::wstring wcur = Utf8ToWide(current_url);
+            if (WinHttpGetProxyForUrl(hSession, wcur.c_str(), &auto_opts, &proxy_info)) {
+                WinHttpSetOption(hRequest, WINHTTP_OPTION_PROXY, &proxy_info, sizeof(proxy_info));
+                if (proxy_info.lpszProxy) GlobalFree(proxy_info.lpszProxy);
+                if (proxy_info.lpszProxyBypass) GlobalFree(proxy_info.lpszProxyBypass);
+            }
+        }
+
         // Optimize TCP read buffer for high-speed segmented downloading
         DWORD read_buf_size = 524288; // 512 KiB socket read buffer
         WinHttpSetOption(hRequest, WINHTTP_OPTION_READ_BUFFER_SIZE, &read_buf_size, sizeof(read_buf_size));
 
-        // Windows Integrated Authentication (Negotiate / NTLM autologon for domain/intranet)
         if (net_opts.enable_integrated_auth) {
             DWORD autologon = WINHTTP_AUTOLOGON_SECURITY_LEVEL_MEDIUM;
             WinHttpSetOption(hRequest, WINHTTP_OPTION_AUTOLOGON_POLICY, &autologon, sizeof(autologon));
         }
-
-        // Explicit proxy credentials (RFC 7235 / WinHTTP)
         if (!net_opts.proxy_username.empty()) {
             std::wstring wp_user = Utf8ToWide(net_opts.proxy_username);
             std::wstring wp_pass = Utf8ToWide(net_opts.proxy_password);
             WinHttpSetCredentials(hRequest, WINHTTP_AUTH_TARGET_PROXY, WINHTTP_AUTH_SCHEME_BASIC, wp_user.c_str(), wp_pass.c_str(), nullptr);
         }
-
-        // Explicit origin server credentials
         if (!net_opts.server_auth_username.empty()) {
             std::wstring ws_user = Utf8ToWide(net_opts.server_auth_username);
             std::wstring ws_pass = Utf8ToWide(net_opts.server_auth_password);
             WinHttpSetCredentials(hRequest, WINHTTP_AUTH_TARGET_SERVER, WINHTTP_AUTH_SCHEME_BASIC, ws_user.c_str(), ws_pass.c_str(), nullptr);
         }
 
-        auto cleanup_winhttp = [&]() {
-            if (hRequest) { WinHttpCloseHandle(hRequest); hRequest = nullptr; }
-            if (hConnect) { WinHttpCloseHandle(hConnect); hConnect = nullptr; }
-        };
-
         std::ostringstream hdr_stream;
+        bool has_content_type = false;
         for (const auto& [k, v] : current_headers) {
             if (k.find('\r') != std::string::npos || k.find('\n') != std::string::npos ||
                 v.find('\r') != std::string::npos || v.find('\n') != std::string::npos) {
                 continue; // Prevent CRLF header injection (SEC-04)
             }
-            if (ToLower(k) == "range" || ToLower(k) == "host" || ToLower(k) == "connection") continue;
+            std::string kl = ToLower(k);
+            if (kl == "range" || kl == "host" || kl == "connection") continue;
+            if (kl == "content-type") has_content_type = true;
             hdr_stream << k << ": " << v << "\r\n";
+        }
+        if (active_method == "POST" && !active_post_type.empty() && !has_content_type &&
+            active_post_type.find('\r') == std::string::npos && active_post_type.find('\n') == std::string::npos) {
+            hdr_stream << "Content-Type: " << active_post_type << "\r\n";
         }
         if (range_start.has_value()) {
             hdr_stream << "Range: bytes=" << *range_start << "-";
@@ -951,25 +1117,13 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             WinHttpAddRequestHeaders(hRequest, wheaders.c_str(), static_cast<DWORD>(wheaders.size()), WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
         }
 
-        auto send_start = std::chrono::steady_clock::now();
-        BOOL send_ok = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
-        if (net_opts.on_timing) {
-            net_opts.on_timing("WinHTTP send/connect/TLS", std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - send_start).count());
-        }
-        auto response_start = std::chrono::steady_clock::now();
-        BOOL response_ok = send_ok && WinHttpReceiveResponse(hRequest, nullptr);
-        if (send_ok && net_opts.on_timing) {
-            net_opts.on_timing("WinHTTP response headers", std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - response_start).count());
-        }
-        if (!send_ok || !response_ok) {
-            DWORD winhttp_err = GetLastError();
-            cleanup_winhttp();
+        auto map_winhttp_err = [](DWORD winhttp_err) -> Result<HttpResponseMeta> {
             std::string err_code = "ERR_NET_SEND";
             std::string err_desc = "WinHTTP request/response failed (error " + std::to_string(winhttp_err) + ")";
             bool is_retryable = true;
-            if (winhttp_err == ERROR_WINHTTP_TIMEOUT || winhttp_err == ERROR_WINHTTP_RESPONSE_DRAIN_OVERFLOW) {
+            if (winhttp_err == ERROR_WINHTTP_OPERATION_CANCELLED) {
+                return Result<HttpResponseMeta>::Err("ERR_CANCELED", "Transfer canceled", false);
+            } else if (winhttp_err == ERROR_WINHTTP_TIMEOUT || winhttp_err == ERROR_WINHTTP_RESPONSE_DRAIN_OVERFLOW) {
                 err_code = "ERR_NET_TIMEOUT";
                 err_desc = "WinHTTP request timed out waiting for server response (error " + std::to_string(winhttp_err) + ")";
             } else if (winhttp_err == ERROR_WINHTTP_CANNOT_CONNECT) {
@@ -984,8 +1138,57 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             } else if (winhttp_err == ERROR_WINHTTP_SECURE_FAILURE) {
                 err_code = "ERR_SSL_PROTOCOL";
                 err_desc = "WinHTTP secure channel / SSL certificate verification failure (error 12175)";
+                is_retryable = false;
             }
             return Result<HttpResponseMeta>::Err(err_code, err_desc, is_retryable);
+        };
+
+        auto send_start = std::chrono::steady_clock::now();
+        async_ctx->send_done.store(false, std::memory_order_release);
+        async_ctx->async_error.store(0, std::memory_order_release);
+        LPVOID req_data = (active_method == "POST" && !active_post_body.empty())
+            ? const_cast<char*>(active_post_body.data())
+            : WINHTTP_NO_REQUEST_DATA;
+        DWORD req_len = (active_method == "POST") ? static_cast<DWORD>(active_post_body.size()) : 0;
+        BOOL send_ok = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, req_data, req_len, req_len, ctx_ptr);
+        if (send_ok) {
+            auto wres = wait_async_step(async_ctx->send_done, connect_timeout + send_timeout);
+            if (!wres.ok()) {
+                if (wres.error->code == "ERR_CANCELED") return Result<HttpResponseMeta>::Err("ERR_CANCELED", "Transfer canceled");
+                DWORD e = async_ctx->async_error.load();
+                cleanup_winhttp();
+                return e ? map_winhttp_err(e) : Result<HttpResponseMeta>::Err(wres.error->code, wres.error->message, true, true);
+            }
+        } else {
+            DWORD e = GetLastError();
+            cleanup_winhttp();
+            return map_winhttp_err(e);
+        }
+        if (net_opts.on_timing) {
+            net_opts.on_timing("WinHTTP send/connect/TLS", std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - send_start).count());
+        }
+
+        auto response_start = std::chrono::steady_clock::now();
+        async_ctx->headers_done.store(false, std::memory_order_release);
+        async_ctx->async_error.store(0, std::memory_order_release);
+        BOOL response_ok = WinHttpReceiveResponse(hRequest, nullptr);
+        if (response_ok) {
+            auto wres = wait_async_step(async_ctx->headers_done, recv_timeout);
+            if (!wres.ok()) {
+                if (wres.error->code == "ERR_CANCELED") return Result<HttpResponseMeta>::Err("ERR_CANCELED", "Transfer canceled");
+                DWORD e = async_ctx->async_error.load();
+                cleanup_winhttp();
+                return e ? map_winhttp_err(e) : Result<HttpResponseMeta>::Err(wres.error->code, wres.error->message, true, true);
+            }
+        } else {
+            DWORD e = GetLastError();
+            cleanup_winhttp();
+            return map_winhttp_err(e);
+        }
+        if (net_opts.on_timing) {
+            net_opts.on_timing("WinHTTP response headers", std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - response_start).count());
         }
 
         DWORD status_code = 0;
@@ -1025,7 +1228,20 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
                 return Result<HttpResponseMeta>::Err("ERR_HTTP_REDIRECT_NO_LOCATION", "Redirect missing Location header");
             }
             std::string loc = loc_it->second;
+            if (meta.status_code == 301 || meta.status_code == 302 || meta.status_code == 303) {
+                active_method = "GET";
+                active_post_body.clear();
+                active_post_type.clear();
+            }
             current_url = ResolveRedirectTarget(pu, loc);
+            continue;
+        }
+
+        if ((meta.status_code == 403 || meta.status_code == 412) &&
+            net_opts.enable_bot_check_fallback && !bot_fallback_tried && !range_start.has_value()) {
+            bot_fallback_tried = true;
+            cleanup_winhttp();
+            current_headers = SiteHandlers::BuildBrowserImpersonationHeaders(active_profile, current_headers);
             continue;
         }
 
@@ -1049,7 +1265,66 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             return MapHttpStatusToError(meta);
         }
 
+        // Inspect HTML interstitials on site hosts (Google Drive virus-scan, MediaFire, Rapidgator, LuluStream)
+        std::string pre_read_buffer;
+        const bool check_site_html = (meta.status_code == 200 && !range_start.has_value() &&
+                                      ToLower(meta.content_type).find("text/html") != std::string::npos &&
+                                      SiteHandlers::ExpectsFile(current_url));
+        if (check_site_html) {
+            constexpr size_t kSitePeekMax = 262144;
+            auto peek_buf = std::make_unique<uint8_t[]>(16384);
+            while (pre_read_buffer.size() < kSitePeekMax) {
+                if (cancel_flag.load()) {
+                    cleanup_winhttp();
+                    return Result<HttpResponseMeta>::Err("ERR_CANCELED", "Transfer canceled");
+                }
+                async_ctx->read_done.store(false, std::memory_order_release);
+                async_ctx->bytes_read.store(0, std::memory_order_release);
+                async_ctx->async_error.store(0, std::memory_order_release);
+                if (!WinHttpReadData(hRequest, peek_buf.get(), 16384, nullptr)) break;
+                auto wres = wait_async_step(async_ctx->read_done, recv_timeout);
+                if (!wres.ok()) break;
+                DWORD got = async_ctx->bytes_read.load(std::memory_order_acquire);
+                if (got == 0) break;
+                pre_read_buffer.append(reinterpret_cast<const char*>(peek_buf.get()), got);
+            }
+            SitePageAction page_action = SiteHandlers::ReadPage(current_url, pre_read_buffer);
+            if (page_action.kind == SiteActionKind::kNextUrl) {
+                cleanup_winhttp();
+                current_url = page_action.url;
+                active_method = "GET";
+                active_post_body.clear();
+                active_post_type.clear();
+                continue;
+            }
+            if (page_action.kind == SiteActionKind::kFormPost) {
+                cleanup_winhttp();
+                if (++site_form_posts > 4) {
+                    if (auto ref = SiteHandlers::FormRefused(current_url)) {
+                        return Result<HttpResponseMeta>::Err(ref->first, ref->second, false, false);
+                    }
+                    return Result<HttpResponseMeta>::Err("ERR_SITE_FORM_LOOP", "Site form loop exceeded max retries", false, false);
+                }
+                current_url = page_action.url;
+                active_method = "POST";
+                active_post_body = page_action.form_body;
+                active_post_type = "application/x-www-form-urlencoded";
+                continue;
+            }
+            if (page_action.kind == SiteActionKind::kRefused) {
+                cleanup_winhttp();
+                return Result<HttpResponseMeta>::Err(page_action.refusal_code, page_action.refusal_message, false, false);
+            }
+        }
+
         uint64_t bytes_delivered = 0;
+        if (!pre_read_buffer.empty()) {
+            bytes_delivered += pre_read_buffer.size();
+            if (on_chunk && !on_chunk(reinterpret_cast<const uint8_t*>(pre_read_buffer.data()), pre_read_buffer.size())) {
+                cleanup_winhttp();
+                return Result<HttpResponseMeta>::Err("ERR_CONSUMER_ABORTED", "Chunk consumer returned false");
+            }
+        }
         constexpr size_t kSocketBufSize = 524288;
         auto rbuf = std::make_unique<uint8_t[]>(kSocketBufSize);
         auto first_body_byte_start = std::chrono::steady_clock::now();
@@ -1063,12 +1338,22 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
             if (bytes_delivered == 0) {
                 to_read = 16384; // Deliver first chunk immediately without waiting to fill 512 KiB
             }
-            DWORD bytes_read = 0;
-            if (!WinHttpReadData(hRequest, rbuf.get(), to_read, &bytes_read)) {
+            async_ctx->read_done.store(false, std::memory_order_release);
+            async_ctx->bytes_read.store(0, std::memory_order_release);
+            async_ctx->async_error.store(0, std::memory_order_release);
+            if (!WinHttpReadData(hRequest, rbuf.get(), to_read, nullptr)) {
                 DWORD err = GetLastError();
                 cleanup_winhttp();
                 return Result<HttpResponseMeta>::Err("ERR_NET_TIMEOUT", "WinHttpReadData failed (error " + std::to_string(err) + ")", true, true);
             }
+            auto wres = wait_async_step(async_ctx->read_done, recv_timeout);
+            if (!wres.ok()) {
+                if (wres.error->code == "ERR_CANCELED") return Result<HttpResponseMeta>::Err("ERR_CANCELED", "Transfer canceled");
+                DWORD err = async_ctx->async_error.load();
+                cleanup_winhttp();
+                return Result<HttpResponseMeta>::Err("ERR_NET_TIMEOUT", "WinHttpReadData failed (error " + std::to_string(err) + ")", true, true);
+            }
+            DWORD bytes_read = async_ctx->bytes_read.load(std::memory_order_acquire);
             if (bytes_read == 0) break;
             if (!recorded_first_body_byte && net_opts.on_timing) {
                 recorded_first_body_byte = true;
@@ -1303,7 +1588,20 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
                 return Result<HttpResponseMeta>::Err("ERR_HTTP_REDIRECT_NO_LOCATION", "Redirect missing Location header");
             }
             std::string loc = loc_it->second;
+            if (meta.status_code == 301 || meta.status_code == 302 || meta.status_code == 303) {
+                active_method = "GET";
+                active_post_body.clear();
+                active_post_type.clear();
+            }
             current_url = ResolveRedirectTarget(pu, loc);
+            continue;
+        }
+
+        if ((meta.status_code == 403 || meta.status_code == 412) &&
+            net_opts.enable_bot_check_fallback && !bot_fallback_tried && !range_start.has_value()) {
+            bot_fallback_tried = true;
+            cleanup_winhttp();
+            current_headers = SiteHandlers::BuildBrowserImpersonationHeaders(active_profile, current_headers);
             continue;
         }
 

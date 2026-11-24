@@ -99,6 +99,15 @@ struct HttpNetworkOptions {
     std::string server_auth_username;
     std::string server_auth_password;                 // Decrypted plaintext for WinHTTP API
     bool enable_integrated_auth{true};                // Windows Negotiate / NTLM autologon
+    std::string pac_url;                              // Optional PAC auto-config script URL
+    std::string doh_url;                              // Optional DNS-over-HTTPS JSON endpoint
+    std::string bind_interface_ip;                    // Optional fail-closed local IPv4/IPv6 VPN kill switch
+    bool enable_decompression{true};                  // Enable gzip/deflate decompression on non-range requests
+    std::string http_method{"GET"};                   // "GET" or "POST"
+    std::string post_body;                            // Optional POST body
+    std::string post_content_type;                    // Optional POST Content-Type
+    std::vector<IdentityPreset> identity_presets;     // Per-host TLS/UA impersonation presets
+    bool enable_bot_check_fallback{true};             // Retry 403/412 bot challenges with browser impersonation
     // Optional redacted stage timings for callers that need request latency diagnostics.
     std::function<void(std::string_view, int64_t)> on_timing;
 };

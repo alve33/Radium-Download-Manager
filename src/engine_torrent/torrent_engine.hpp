@@ -42,6 +42,8 @@ struct TrackerEndpointInfo {
 
 struct PeerDiagnosticsInfo {
     std::string endpoint; // ip:port
+    std::string ip;
+    uint16_t port{0};
     std::string client_name;
     uint64_t download_bps{0};
     uint64_t upload_bps{0};
@@ -90,6 +92,46 @@ public:
     static Result<void> AddTrackersToTask(const std::string& task_id, const std::vector<std::string>& new_trackers);
     static Result<TorrentSwarmDetails> GetSwarmDetails(const std::string& task_id);
     static Result<void> SetSequentialMode(const std::string& task_id, bool enable);
+};
+
+// IP Blocklist (MDM blocklist.rs port: PeerGuardian P2P & eMule .dat)
+class TorrentIpBlocklist {
+public:
+    static TorrentIpBlocklist& Global();
+    size_t LoadFromText(const std::string& text);
+    void Clear();
+    bool IsBlocked(const std::string& ip_str) const;
+    size_t RangeCount() const;
+
+private:
+    struct V4Range { uint32_t start; uint32_t end; };
+    mutable std::mutex m_mu;
+    std::vector<V4Range> m_v4_ranges;
+};
+
+// RSS 2.0 / Atom Torrent Auto-Downloader (MDM rss.rs port)
+struct RssTorrentArticle {
+    std::string id;
+    std::string title;
+    std::string torrent_url;
+    std::string date;
+    uint64_t size_bytes{0};
+};
+
+struct RssEpisode {
+    uint32_t season{0};
+    uint32_t episode{0};
+};
+
+class RssTorrentFeedParser {
+public:
+    static std::vector<RssTorrentArticle> ParseFeedXml(const std::string& xml);
+    static std::optional<RssEpisode> ExtractEpisode(const std::string& title);
+    static bool MatchesFilter(
+        const std::string& title,
+        const std::string& include_words,
+        const std::string& exclude_words,
+        const std::string& episode_filter);
 };
 
 } // namespace openidm::torrent

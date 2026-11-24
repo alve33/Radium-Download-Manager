@@ -17,13 +17,17 @@
 #include "common/version.hpp"
 #include "core/download_controller.hpp"
 #include "ipc/ipc_server.hpp"
+#include "platform/windows_integrations.hpp"
+#include "remote/remote_control.hpp"
 #include "ui/win32_main_window.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -67,6 +71,9 @@ void WriteConsoleOutput(const std::string& str, bool is_error = false) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (auto cm_args = openidm::remote::CrashMonitorArgs::Parse(argc, argv)) {
+        return openidm::remote::CrashWatchdog::RunMonitorLoop(*cm_args);
+    }
 #if defined(__GLIBC__)
     // Cap glibc malloc arenas to 2 so 8-connection worker threads do not allocate 8 x 64 MiB virtual/resident arenas
     mallopt(M_ARENA_MAX, 2);
@@ -85,6 +92,11 @@ int main(int argc, char* argv[]) {
 
     std::string mode;
     std::string target_url;
+    std::vector<std::string> target_ids;
+    std::vector<uint32_t> select_indexes;
+    bool json_output = false;
+    bool delete_files = false;
+    uint32_t wait_timeout_ms = 300000;
     std::string ipc_socket_path = openidm::ipc::IpcServer::DefaultSocketPath();
     uint32_t connections = 8;
 
@@ -108,8 +120,28 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--probe-stream" && i + 1 < argc) {
             mode = "probe";
             target_url = argv[++i];
-        } else if (arg == "--list") {
+        } else if (arg == "--list" || arg == "tasks") {
             mode = "list";
+        } else if (arg == "--mcp") {
+            mode = "mcp";
+        } else if (arg == "--json") {
+            json_output = true;
+        } else if (arg == "--delete-files") {
+            delete_files = true;
+        } else if (arg == "--timeout" && i + 1 < argc) {
+            wait_timeout_ms = static_cast<uint32_t>(std::stoul(argv[++i]));
+        } else if (arg == "--select" && i + 1 < argc) {
+            std::istringstream iss(argv[++i]);
+            std::string tok;
+            while (std::getline(iss, tok, ',')) {
+                if (!tok.empty()) {
+                    try { select_indexes.push_back(static_cast<uint32_t>(std::stoul(tok))); } catch (...) {}
+                }
+            }
+        } else if ((arg == "wait" || arg == "pause" || arg == "start" || arg == "remove") && mode.empty()) {
+            mode = arg;
+        } else if (arg == "add" && mode.empty()) {
+            mode = "add";
         } else if (arg == "--gui-snapshot") {
             mode = "gui-snapshot";
         } else if (arg == "--daemon") {
@@ -124,6 +156,19 @@ int main(int argc, char* argv[]) {
             cfg.ffmpeg_binary_path = argv[++i];
         } else if (arg == "--allow-loopback") {
             cfg.allow_loopback = true;
+        } else if (arg.rfind("radium://", 0) == 0) {
+            auto parsed_uri = openidm::platform::WindowsIntegrations::ParseLaunchUri(arg);
+            if (parsed_uri.valid && !parsed_uri.wake_only && !parsed_uri.url.empty()) {
+                target_url = parsed_uri.url;
+            }
+        } else if (arg.size() > 8 && arg.rfind(".torrent") == arg.size() - 8) {
+            target_url = arg;
+        } else if (!arg.empty() && arg[0] != '-') {
+            if (mode == "add" && target_url.empty()) {
+                target_url = arg;
+            } else if (mode == "wait" || mode == "pause" || mode == "start" || mode == "remove") {
+                target_ids.push_back(arg);
+            }
         }
     }
 
@@ -194,6 +239,16 @@ int main(int argc, char* argv[]) {
 
     // Default launch path: Launch the Desktop GUI Application + IPC Server (BUG-002 Fix)
     if (mode.empty() || mode == "minimized") {
+        if (std::getenv("RADIUM_NO_CRASH_MONITOR") == nullptr && argc > 0 && argv[0]) {
+            openidm::remote::CrashWatchdog::StartMonitorProcess(argv[0], app_data_dir);
+        }
+        openidm::platform::WindowsIntegrations::RegisterUrlScheme();
+        openidm::platform::WindowsIntegrations::RegisterTorrentAssociation();
+        if (!target_url.empty()) {
+            openidm::TaskModel t;
+            t.url = target_url;
+            controller.AddTask(std::move(t), true);
+        }
         RADIUM_LOG_INFO("App", "Starting IpcServer on pipe=" + ipc_socket_path);
         openidm::ipc::IpcServer server(controller, ipc_socket_path);
         server.Start();
@@ -213,10 +268,127 @@ int main(int argc, char* argv[]) {
     }
 
     if (mode == "list") {
-        openidm::ui::DesktopView view(controller);
-        WriteConsoleOutput(view.RenderQueueTableText(), false);
+        if (json_output) {
+            openidm::json::Array arr;
+            for (const auto& t : controller.ListTasks()) {
+                openidm::json::Object obj;
+                obj["id"] = t.task_id;
+                obj["url"] = t.url;
+                obj["file_name"] = t.file_name;
+                obj["state"] = openidm::TaskStateToString(t.state);
+                obj["downloaded_bytes"] = static_cast<int64_t>(t.downloaded_bytes);
+                obj["total_bytes"] = static_cast<int64_t>(t.total_bytes);
+                arr.push_back(openidm::json::Value(std::move(obj)));
+            }
+            openidm::json::Object out;
+            out["result"] = openidm::json::Value(std::move(arr));
+            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+        } else {
+            openidm::ui::DesktopView view(controller);
+            WriteConsoleOutput(view.RenderQueueTableText(), false);
+        }
         controller.Shutdown();
         return 0;
+    }
+
+    if (mode == "mcp") {
+        std::atomic<bool> stop_mcp{false};
+        openidm::remote::McpStdioServer mcp(controller);
+        mcp.Run(std::cin, std::cout, stop_mcp);
+        controller.Shutdown();
+        return 0;
+    }
+
+    if (mode == "add") {
+        if (target_url.empty()) {
+            if (json_output) {
+                WriteConsoleOutput(R"({"error":{"code":"ERR_USAGE","message":"Missing URL"}})" "\n", false);
+            }
+            controller.Shutdown();
+            return 2;
+        }
+        openidm::TaskModel t;
+        t.url = target_url;
+        t.max_connections = connections;
+        t.save_dir = cfg.default_download_dir.string();
+        if (!select_indexes.empty()) {
+            uint32_t max_idx = *std::max_element(select_indexes.begin(), select_indexes.end());
+            t.torrent_file_selection.assign(static_cast<size_t>(max_idx) + 1, 0);
+            for (uint32_t idx : select_indexes) {
+                t.torrent_file_selection[idx] = 1;
+            }
+        }
+        auto added = controller.AddTask(std::move(t), true, true);
+        if (!added.ok()) {
+            if (json_output) {
+                openidm::json::Object e;
+                e["code"] = added.error ? added.error->code : "ERR_ADD";
+                e["message"] = added.error ? added.error->message : "AddTask failed";
+                openidm::json::Object err;
+                err["error"] = openidm::json::Value(std::move(e));
+                WriteConsoleOutput(openidm::json::Value(std::move(err)).dump() + "\n", false);
+            } else {
+                WriteConsoleOutput("ERROR: " + added.error->message + "\n", true);
+            }
+            controller.Shutdown();
+            return 1;
+        }
+        if (json_output) {
+            openidm::json::Object res;
+            res["id"] = added.value->task_id;
+            res["file_name"] = added.value->file_name;
+            openidm::json::Object out;
+            out["result"] = openidm::json::Value(std::move(res));
+            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+        } else {
+            WriteConsoleOutput(added.value->task_id + "\n", false);
+        }
+        controller.Shutdown();
+        return 0;
+    }
+
+    if (mode == "wait") {
+        bool all_ok = !target_ids.empty();
+        openidm::json::Array arr;
+        for (const auto& tid : target_ids) {
+            auto done = controller.WaitForTaskCompletion(tid, wait_timeout_ms);
+            bool ok = done.ok() && done.value->state == openidm::TaskState::kCompleted;
+            if (!ok) all_ok = false;
+            openidm::json::Object item;
+            item["id"] = tid;
+            item["state"] = done.ok() ? openidm::TaskStateToString(done.value->state) : "ERROR";
+            arr.push_back(openidm::json::Value(std::move(item)));
+        }
+        if (json_output) {
+            openidm::json::Object out;
+            out["result"] = openidm::json::Value(std::move(arr));
+            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+        }
+        controller.Shutdown();
+        return all_ok ? 0 : 1;
+    }
+
+    if (mode == "pause" || mode == "start" || mode == "remove") {
+        bool all_ok = !target_ids.empty();
+        openidm::json::Array arr;
+        for (const auto& tid : target_ids) {
+            openidm::Result<void> r = openidm::Result<void>::Err("ERR_USAGE", "Unknown");
+            if (mode == "pause") r = controller.PauseTask(tid);
+            else if (mode == "start") r = controller.ResumeTask(tid);
+            else if (mode == "remove") r = controller.RemoveTask(tid, delete_files);
+            if (!r.ok()) all_ok = false;
+            openidm::json::Object item;
+            item["id"] = tid;
+            item["ok"] = r.ok();
+            arr.push_back(openidm::json::Value(std::move(item)));
+        }
+        if (json_output) {
+            openidm::json::Object out;
+            out["result"] = openidm::json::Value(std::move(arr));
+            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+        }
+        controller.Shutdown();
+        return all_ok ? 0 : 1;
     }
 
     if (mode == "gui-snapshot") {

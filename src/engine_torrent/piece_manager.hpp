@@ -340,7 +340,7 @@ public:
         size_t block_len,
         bool& out_piece_verified,
         bool& out_piece_corrupt) {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::unique_lock<std::mutex> lock(m_mutex);
         out_piece_verified = false;
         out_piece_corrupt = false;
 
@@ -392,13 +392,16 @@ public:
                         OPENIDM_LOG_ERROR("PieceManager", "Failed to write piece to disk: " + wr_res.error->message);
                         return false;
                     }
-                    m_storage->FlushHandles();
                 }
                 m_have_pieces[piece_index] = true;
                 m_completed_pieces++;
                 m_downloaded_bytes += m_info.selected_bytes_in_piece(piece_index);
                 m_active_pieces.erase(it);
                 out_piece_verified = true;
+                lock.unlock();
+                if (m_storage) {
+                    m_storage->FlushHandles();
+                }
                 return true;
             } else {
                 OPENIDM_LOG_WARN("PieceManager", "Piece #" + std::to_string(piece_index) + " failed SHA-1 hash check; discarding corrupt block data");

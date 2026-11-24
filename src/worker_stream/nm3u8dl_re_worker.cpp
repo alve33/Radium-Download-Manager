@@ -1162,7 +1162,7 @@ bool ExtractManifestInfo(const WorkerOptions& opts, ManifestMeta& meta) {
         static const std::regex kSegTmplRe(R"(<SegmentTemplate\b([^>]*)(?:/>|>([\s\S]*?)</SegmentTemplate>))");
         static const std::regex kSTagRe(R"(<S\b([^>]*)/?>)");
 
-        uint32_t vid_idx = 0, aud_idx = 0;
+        uint32_t vid_idx = 0, aud_idx = 0, sub_idx = 0;
         auto abegin = std::sregex_iterator(text.begin(), text.end(), kAdaptRe);
         auto aend = std::sregex_iterator();
         for (auto ait = abegin; ait != aend; ++ait) {
@@ -1198,11 +1198,33 @@ bool ExtractManifestInfo(const WorkerOptions& opts, ManifestMeta& meta) {
                 std::string width = ExtractXmlAttr(rep_attrs, "width");
                 std::string height = ExtractXmlAttr(rep_attrs, "height");
                 std::string res = (!width.empty() && !height.empty()) ? (width + "x" + height) : "";
-                bool is_video = (rep_mime.find("video") != std::string::npos || content_type.find("video") != std::string::npos || !res.empty());
+                std::string mime_low = rep_mime;
+                for (char& ch : mime_low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                std::string ct_low = content_type;
+                for (char& ch : ct_low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                std::string codecs_low = codecs;
+                for (char& ch : codecs_low) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+                const bool is_subtitle = (ct_low == "text" || ct_low.find("sub") != std::string::npos ||
+                                          mime_low.find("text") != std::string::npos ||
+                                          mime_low.find("vtt") != std::string::npos ||
+                                          mime_low.find("ttml") != std::string::npos ||
+                                          codecs_low.find("wvtt") != std::string::npos ||
+                                          codecs_low.find("stpp") != std::string::npos);
+                const bool is_video = !is_subtitle &&
+                    (mime_low.find("video") != std::string::npos || ct_low.find("video") != std::string::npos || !res.empty());
 
                 TrackItem tr;
-                tr.id = is_video ? ("vid_" + std::to_string(vid_idx++)) : ("aud_" + std::to_string(aud_idx++));
-                tr.media_type = is_video ? "VIDEO" : "AUDIO";
+                if (is_subtitle) {
+                    tr.id = "sub_" + std::to_string(sub_idx++);
+                    tr.media_type = "SUBTITLES";
+                } else if (is_video) {
+                    tr.id = "vid_" + std::to_string(vid_idx++);
+                    tr.media_type = "VIDEO";
+                } else {
+                    tr.id = "aud_" + std::to_string(aud_idx++);
+                    tr.media_type = "AUDIO";
+                }
                 tr.group_id = rep_id;
                 tr.language = lang;
                 tr.name = tr.media_type + "_" + rep_id;
@@ -1883,6 +1905,51 @@ static void SignalHandler(int) {
 }
 #endif
 
+static void DecryptLiveSegmentIfNeeded(
+    const SegmentItem& seg,
+    const WorkerOptions& opts,
+    std::map<std::string, std::vector<uint8_t>>& key_cache,
+    std::vector<uint8_t>& raw) {
+    if (!seg.encrypted || seg.method != "AES_128") return;
+    std::vector<uint8_t> key_bytes;
+    if (!opts.custom_hls_key.empty()) {
+        key_bytes = HexToBytes(opts.custom_hls_key);
+    } else {
+        auto it = key_cache.find(seg.key_uri);
+        if (it != key_cache.end()) {
+            key_bytes = it->second;
+        } else {
+            std::string krurl;
+            if (FetchBytesWithRetry(seg.key_uri, opts.headers, key_bytes, krurl, opts.download_retry_count,
+                                    opts.http_request_timeout_ms, opts.allow_loopback, false, &g_live_stop_requested) &&
+                key_bytes.size() == 16) {
+                key_cache[seg.key_uri] = key_bytes;
+            }
+        }
+    }
+    if (key_bytes.size() == 16) {
+        std::vector<uint8_t> iv_bytes(16, 0);
+        if (!seg.iv_hex.empty()) {
+            auto parsed_iv = HexToBytes(seg.iv_hex);
+            if (parsed_iv.size() >= 16) {
+                std::memcpy(iv_bytes.data(), parsed_iv.data() + (parsed_iv.size() - 16), 16);
+            } else if (!parsed_iv.empty()) {
+                std::memcpy(iv_bytes.data() + (16 - parsed_iv.size()), parsed_iv.data(), parsed_iv.size());
+            }
+        } else {
+            uint64_t seq = seg.index;
+            for (int b = 15; b >= 8; --b) {
+                iv_bytes[b] = static_cast<uint8_t>(seq & 0xFF);
+                seq >>= 8;
+            }
+        }
+        std::vector<uint8_t> decrypted;
+        if (DecryptAes128Cbc(raw, key_bytes, iv_bytes, decrypted)) {
+            raw = std::move(decrypted);
+        }
+    }
+}
+
 bool DownloadAndAssembleLiveTrack(
     TrackItem& track,
     const WorkerOptions& opts,
@@ -1894,6 +1961,34 @@ bool DownloadAndAssembleLiveTrack(
 
 #ifdef _WIN32
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+    HANDLE hStopEvent = nullptr;
+    HANDLE hStopThreadDone = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    std::thread stop_watcher;
+    wchar_t stop_ev_name[256]{};
+    DWORD stop_ev_len = GetEnvironmentVariableW(L"RADIUM_LIVE_STOP_EVENT", stop_ev_name, 256);
+    if (stop_ev_len > 0 && stop_ev_len < 256) {
+        hStopEvent = OpenEventW(SYNCHRONIZE, FALSE, stop_ev_name);
+        if (hStopEvent && hStopThreadDone) {
+            stop_watcher = std::thread([hStopEvent, hStopThreadDone]() {
+                HANDLE handles[2] = { hStopEvent, hStopThreadDone };
+                DWORD res = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+                if (res == WAIT_OBJECT_0) {
+                    g_live_stop_requested.store(true);
+                }
+            });
+        }
+    }
+    struct StopWatcherGuard {
+        HANDLE hStopEvent;
+        HANDLE hStopThreadDone;
+        std::thread& t;
+        ~StopWatcherGuard() {
+            if (hStopThreadDone) SetEvent(hStopThreadDone);
+            if (t.joinable()) t.join();
+            if (hStopThreadDone) CloseHandle(hStopThreadDone);
+            if (hStopEvent) CloseHandle(hStopEvent);
+        }
+    } stop_guard{hStopEvent, hStopThreadDone, stop_watcher};
 #else
     struct sigaction sa{};
     sa.sa_handler = SignalHandler;
@@ -1939,42 +2034,7 @@ bool DownloadAndAssembleLiveTrack(
                 continue;
             }
 
-            if (seg.encrypted && seg.method == "AES_128") {
-                std::vector<uint8_t> key_bytes;
-                if (!opts.custom_hls_key.empty()) {
-                    key_bytes = HexToBytes(opts.custom_hls_key);
-                } else {
-                    if (key_cache.count(seg.key_uri)) {
-                        key_bytes = key_cache[seg.key_uri];
-                    } else {
-                        std::string krurl;
-                        if (FetchBytesWithRetry(seg.key_uri, opts.headers, key_bytes, krurl, opts.download_retry_count, opts.http_request_timeout_ms, opts.allow_loopback, false, &g_live_stop_requested) && key_bytes.size() == 16) {
-                            key_cache[seg.key_uri] = key_bytes;
-                        }
-                    }
-                }
-                if (key_bytes.size() == 16) {
-                    std::vector<uint8_t> iv_bytes(16, 0);
-                    if (!seg.iv_hex.empty()) {
-                        auto parsed_iv = HexToBytes(seg.iv_hex);
-                        if (parsed_iv.size() >= 16) {
-                            std::memcpy(iv_bytes.data(), parsed_iv.data() + (parsed_iv.size() - 16), 16);
-                        } else if (!parsed_iv.empty()) {
-                            std::memcpy(iv_bytes.data() + (16 - parsed_iv.size()), parsed_iv.data(), parsed_iv.size());
-                        }
-                    } else {
-                        uint64_t seq = seg.index;
-                        for (int b = 15; b >= 8; --b) {
-                            iv_bytes[b] = static_cast<uint8_t>(seq & 0xFF);
-                            seq >>= 8;
-                        }
-                    }
-                    std::vector<uint8_t> decrypted;
-                    if (DecryptAes128Cbc(raw, key_bytes, iv_bytes, decrypted)) {
-                        raw = std::move(decrypted);
-                    }
-                }
-            }
+            DecryptLiveSegmentIfNeeded(seg, opts, key_cache, raw);
 
             std::ofstream ofs(seg_path, std::ios::binary);
             ofs.write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
@@ -2035,6 +2095,7 @@ bool DownloadAndAssembleLiveTrack(
                 std::vector<uint8_t> raw;
                 std::string rurl;
                 if (FetchBytesWithRetry(seg.url, opts.headers, raw, rurl, opts.download_retry_count, opts.http_request_timeout_ms, opts.allow_loopback, false, &g_live_stop_requested)) {
+                    DecryptLiveSegmentIfNeeded(seg, opts, key_cache, raw);
                     std::ofstream ofs(seg_path, std::ios::binary);
                     ofs.write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
                     ofs.close();

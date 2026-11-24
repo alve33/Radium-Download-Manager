@@ -1076,20 +1076,25 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
     ASSERT_TRUE(next_hover.type == openidm::ui::HitTargetType::kTaskRow && view.GetHoveredRowIndex() == 1,
                 "Moving the pointer to the next task row updates hover state immediately");
 
-    // 4. Verify Table Column Headers are static and non-interactive
+    // 4. Verify Table Column Headers are interactive (click sorts, divider hit-test resizes)
     const auto& col0_rc = geom.table_columns[0].rect;
     auto hit_hdr = view.HitTestPoint((col0_rc.left + col0_rc.right) / 2, (col0_rc.top + col0_rc.bottom) / 2);
-    ASSERT_TRUE(hit_hdr.type == openidm::ui::HitTargetType::kNone, "Header column hit-test is non-interactive");
-    ASSERT_TRUE(!view.HandleMouseClick((col0_rc.left + col0_rc.right) / 2, (col0_rc.top + col0_rc.bottom) / 2, false),
-                "Clicking column header does not trigger action");
+    ASSERT_TRUE(hit_hdr.type == openidm::ui::HitTargetType::kTableHeaderColumn && hit_hdr.index == 0,
+                "Header column hit-test identifies column 0");
+    ASSERT_TRUE(view.HandleMouseClick((col0_rc.left + col0_rc.right) / 2, (col0_rc.top + col0_rc.bottom) / 2, false),
+                "Clicking column header triggers sort toggle");
+    ASSERT_TRUE(view.GetSortColumn() == openidm::ui::SortColumn::kFileName && view.IsSortAscending(),
+                "Clicking column 0 header sorts by Filename ascending");
     ASSERT_TRUE(view.HitTestColumnDivider((col0_rc.left + col0_rc.right) / 2, (col0_rc.top + col0_rc.bottom) / 2) == -1,
-                "Column divider hit-test is non-interactive");
+                "Column center is not a resize divider");
+    ASSERT_TRUE(view.HitTestColumnDivider(col0_rc.right, (col0_rc.top + col0_rc.bottom) / 2) == 0,
+                "Column 0 right edge hits divider 0");
 
     // Verify sorting remains fully functional via view sort controls
     view.ToggleSortColumn(openidm::ui::SortColumn::kFileName);
-    ASSERT_TRUE(view.GetSortColumn() == openidm::ui::SortColumn::kFileName && view.IsSortAscending(), "Sorted by Filename ascending via sort control");
-    view.ToggleSortColumn(openidm::ui::SortColumn::kFileName);
     ASSERT_TRUE(!view.IsSortAscending(), "Toggled Filename sort to descending via sort control");
+    view.ToggleSortColumn(openidm::ui::SortColumn::kFileName);
+    ASSERT_TRUE(view.IsSortAscending(), "Toggled Filename sort back to ascending via sort control");
 
     // Near a row boundary, reclaim the otherwise unusable strip and keep
     // completed-history actions wide enough to show their full labels.

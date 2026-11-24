@@ -18,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "brisk_engine/segment_scheduler.hpp"
@@ -25,6 +26,26 @@
 #include "common/types.hpp"
 
 namespace openidm::brisk {
+
+// Learned per-host connection caps (MDM hosts.rs port): after 2 refusals while other
+// workers are receiving, caps concurrency for 10 minutes to avoid wasted retries / bans.
+class HostLimits {
+public:
+    static HostLimits& Global();
+
+    std::optional<uint32_t> GetCap(const std::string& host);
+    std::optional<uint32_t> RecordRefusal(const std::string& host, uint32_t working);
+    void RecordWorking(const std::string& host, uint32_t working);
+
+private:
+    struct Learned {
+        uint32_t cap{1};
+        uint32_t seen{0};
+        std::chrono::steady_clock::time_point at{};
+    };
+    std::mutex m_mu;
+    std::unordered_map<std::string, Learned> m_hosts;
+};
 
 struct EngineProgress {
     std::string task_id;

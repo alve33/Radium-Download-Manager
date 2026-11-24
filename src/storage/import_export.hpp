@@ -13,7 +13,8 @@ namespace openidm::storage {
 
 enum class ExportFormat {
     kJson,
-    kCsv
+    kCsv,
+    kEf2
 };
 
 class TaskImportExport {
@@ -42,6 +43,9 @@ public:
 
     // Imports tasks from a simple text list of URLs (one URL per line)
     static Result<std::vector<TaskModel>> ImportFromUrlList(std::string_view text_list);
+
+    // Imports tasks from an IDM .ef2 file (< url / referer: / cookie: / User-Agent: >)
+    static Result<std::vector<TaskModel>> ImportFromEf2(std::string_view ef2_str);
 };
 
 } // namespace openidm::storage

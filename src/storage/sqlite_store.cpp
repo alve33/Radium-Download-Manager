@@ -40,12 +40,38 @@ Result<void> SqliteStore::Open(const std::filesystem::path& db_path) {
         return Result<void>::Err("ERR_SQLITE_OPEN", err);
     }
 
+    if (!ExecSql("PRAGMA journal_mode = WAL;").ok()) { ExecSql("PRAGMA journal_mode = TRUNCATE;"); }
+
+    int current_schema_version = 0;
+    {
+        sqlite3_stmt* vstmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, "PRAGMA user_version;", -1, &vstmt, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(vstmt) == SQLITE_ROW) {
+                current_schema_version = sqlite3_column_int(vstmt, 0);
+            }
+            sqlite3_finalize(vstmt);
+        }
+    }
+    bool tasks_table_existed = false;
+    bool has_failure_notif_col = false;
+    {
+        sqlite3_stmt* tstmt = nullptr;
+        if (sqlite3_prepare_v2(m_db, "PRAGMA table_info(tasks);", -1, &tstmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(tstmt) == SQLITE_ROW) {
+                tasks_table_existed = true;
+                if (ColText(tstmt, 1) == "failure_notification_sent") {
+                    has_failure_notif_col = true;
+                }
+            }
+            sqlite3_finalize(tstmt);
+        }
+    }
+
     const char* kSchemaSql = R"SQL(
         
         PRAGMA synchronous = NORMAL;
         PRAGMA foreign_keys = ON;
         PRAGMA busy_timeout = 5000;
-        PRAGMA user_version = 1;
 
         CREATE TABLE IF NOT EXISTS queues (
             queue_id                TEXT PRIMARY KEY,
@@ -81,6 +107,8 @@ Result<void> SqliteStore::Open(const std::filesystem::path& db_path) {
             range_supported         INTEGER NOT NULL DEFAULT 0,
             max_connections         INTEGER NOT NULL DEFAULT 8,
             conflict_policy         TEXT NOT NULL DEFAULT 'auto_rename',
+            retry_count             INTEGER NOT NULL DEFAULT 0,
+            failure_notification_sent INTEGER NOT NULL DEFAULT 0,
             scheduled               INTEGER NOT NULL DEFAULT 0,
             schedule_time_local     TEXT,
             speed_limit_bps         INTEGER NOT NULL DEFAULT 0,
@@ -118,7 +146,6 @@ Result<void> SqliteStore::Open(const std::filesystem::path& db_path) {
         );
     )SQL";
 
-    if (!ExecSql("PRAGMA journal_mode = WAL;").ok()) { ExecSql("PRAGMA journal_mode = TRUNCATE;"); }
     auto schema_res = ExecSql(kSchemaSql);
     if (!schema_res.ok()) return schema_res;
 
@@ -137,6 +164,17 @@ Result<void> SqliteStore::Open(const std::filesystem::path& db_path) {
     try_add_col("ALTER TABLE tasks ADD COLUMN conflict_policy TEXT NOT NULL DEFAULT 'auto_rename';");
     try_add_col("ALTER TABLE tasks ADD COLUMN scheduled INTEGER NOT NULL DEFAULT 0;");
     try_add_col("ALTER TABLE tasks ADD COLUMN schedule_time_local TEXT;");
+    try_add_col("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;");
+    try_add_col("ALTER TABLE tasks ADD COLUMN failure_notification_sent INTEGER NOT NULL DEFAULT 0;");
+
+    if ((tasks_table_existed && !has_failure_notif_col) || current_schema_version < 2) {
+        // Mark pre-existing failed downloads as already handled so upgrading does not
+        // replay historical failure notifications on startup.
+        auto mig_res = ExecSql("UPDATE tasks SET failure_notification_sent = 1 WHERE state = 'FAILED';");
+        if (!mig_res.ok()) return mig_res;
+    }
+    auto ver_res = ExecSql("PRAGMA user_version = 2;");
+    if (!ver_res.ok()) return ver_res;
 
     return Result<void>::Ok();
 }
@@ -220,7 +258,7 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
             conflict_policy, scheduled, schedule_time_local, speed_limit_bps,
             etag, last_modified, headers_json, encrypted_auth_blob, stream_options_json,
             expected_sha256, error_code, error_message, alternate_urls_json, schedule_stop_time_local,
-            created_at_ms, updated_at_ms, completed_at_ms
+            created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent
         ) VALUES (
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
@@ -228,7 +266,7 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?, ?
+            ?, ?, ?, ?, ?
         )
         ON CONFLICT(task_id) DO UPDATE SET
             task_type=excluded.task_type,
@@ -263,7 +301,9 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
             alternate_urls_json=excluded.alternate_urls_json,
             schedule_stop_time_local=excluded.schedule_stop_time_local,
             updated_at_ms=excluded.updated_at_ms,
-            completed_at_ms=excluded.completed_at_ms;
+            completed_at_ms=excluded.completed_at_ms,
+            retry_count=excluded.retry_count,
+            failure_notification_sent=excluded.failure_notification_sent;
     )SQL";
 
     sqlite3_stmt* stmt = nullptr;
@@ -328,6 +368,8 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
     sqlite3_bind_int64(stmt, 33, created_ms);
     sqlite3_bind_int64(stmt, 34, now_ms);
     sqlite3_bind_int64(stmt, 35, task.completed_at_ms);
+    sqlite3_bind_int(stmt, 36, static_cast<int>(task.retry_count));
+    sqlite3_bind_int(stmt, 37, task.failure_notification_sent ? 1 : 0);
 
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -588,6 +630,8 @@ static TaskModel ParseTaskRow(sqlite3_stmt* stmt) {
     t.created_at_ms = sqlite3_column_int64(stmt, 32);
     t.updated_at_ms = sqlite3_column_int64(stmt, 33);
     t.completed_at_ms = sqlite3_column_int64(stmt, 34);
+    t.retry_count = static_cast<uint32_t>(std::max(0, sqlite3_column_int(stmt, 35)));
+    t.failure_notification_sent = sqlite3_column_int(stmt, 36) != 0;
     return t;
 }
 
@@ -602,7 +646,7 @@ Result<std::optional<TaskModel>> SqliteStore::GetTask(const std::string& task_id
                conflict_policy, scheduled, schedule_time_local, speed_limit_bps,
                etag, last_modified, headers_json, encrypted_auth_blob, stream_options_json,
                expected_sha256, error_code, error_message, alternate_urls_json, schedule_stop_time_local,
-               created_at_ms, updated_at_ms, completed_at_ms
+               created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent
         FROM tasks
         WHERE task_id = ?;
     )SQL";
@@ -640,7 +684,7 @@ Result<std::vector<TaskModel>> SqliteStore::ListTasks() {
                conflict_policy, scheduled, schedule_time_local, speed_limit_bps,
                etag, last_modified, headers_json, encrypted_auth_blob, stream_options_json,
                expected_sha256, error_code, error_message, alternate_urls_json, schedule_stop_time_local,
-               created_at_ms, updated_at_ms, completed_at_ms
+               created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent
         FROM tasks
         ORDER BY created_at_ms DESC;
     )SQL";
@@ -779,7 +823,7 @@ Result<void> SqliteStore::SetSetting(const std::string& key, const std::string& 
     return Result<void>::Ok();
 }
 
-Result<std::string> SqliteStore::GetSetting(const std::string& key, const std::string& default_json) {
+Result<std::string> SqliteStore::GetSetting(const std::string& key, const std::string& default_json) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_db) return Result<std::string>::Err("ERR_SQLITE_CLOSED", "Database not open");
     sqlite3_stmt* stmt = nullptr;

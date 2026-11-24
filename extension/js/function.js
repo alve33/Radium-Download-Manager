@@ -402,28 +402,21 @@ function isSupportedVideoSiteWatchUrl(url) {
         host === "vm.tiktok.com") return true;
     if ((host === "reddit.com" || host.endsWith(".reddit.com")) && path.includes("/comments/")) return true;
 
-    // Generic video page path and query parameter heuristics
+    // Generic video page path heuristics (avoid broad substring matches like ?v=, /v/, /play/, /status/)
     if (path.startsWith("/watch") ||
         path.includes("/video/") ||
         path.includes("/videos/") ||
         path.startsWith("/video-") ||
         path.startsWith("/hd-") ||
-        path.startsWith("/v/") ||
         path.startsWith("/reel/") ||
         path.startsWith("/reels/") ||
         path.startsWith("/shorts/") ||
         path.startsWith("/clip/") ||
         path.startsWith("/clips/") ||
         path.startsWith("/embed/") ||
-        path.startsWith("/play/") ||
-        path.startsWith("/player/") ||
-        path.includes("/status/") ||
-        path.includes("/comments/") ||
         u.searchParams.has("viewkey") ||
         path.includes("view_video") ||
-        u.searchParams.has("v") ||
-        /^\/video[0-9a-z._-]+/i.test(path) ||
-        (/^\/\d+/.test(path) && path.split("/").filter(Boolean).length === 1)) {
+        /^\/video[0-9a-z._-]+/i.test(path)) {
       return true;
     }
   } catch (_) {}

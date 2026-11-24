@@ -12,6 +12,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <thread>
 #include <vector>
 
@@ -572,8 +573,18 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
             auto tr_res = tr_future.get();
             if (tr_res.ok()) {
                 peer_swarm = tr_res.value->peers;
+                std::lock_guard<std::mutex> slk(active_session->session_lock);
+                for (auto& tr : active_session->trackers) {
+                    tr.status = "OK";
+                    tr.seeders = tr_res.value->complete;
+                    tr.leechers = tr_res.value->incomplete;
+                }
             } else {
                 OPENIDM_LOG_WARN("TorrentEngine", "All announce trackers failed for task " + task.task_id + ": " + tr_res.error->message);
+                std::lock_guard<std::mutex> slk(active_session->session_lock);
+                for (auto& tr : active_session->trackers) {
+                    tr.status = "Failed: " + tr_res.error->message;
+                }
             }
         }
         auto dht_peers = dht_future.get();
@@ -752,12 +763,33 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     // Tit-for-Tat Choking & Unchoking State (BEP 3)
     struct PeerSession {
         uint64_t peer_id_num = 0;
+        std::string ip;
+        uint16_t port = 0;
         std::atomic<bool> is_choked_by_us{true};
         std::atomic<uint64_t> downloaded_recent{0};
+        std::mutex cancel_mu;
+        std::vector<std::vector<uint8_t>> pending_cancels;
     };
     std::mutex session_mutex;
     std::vector<std::shared_ptr<PeerSession>> active_peer_sessions;
     std::atomic<uint64_t> next_peer_session_id{1};
+
+    auto sync_active_peers = [&]() {
+        std::vector<PeerDiagnosticsInfo> snapshot;
+        {
+            std::lock_guard<std::mutex> slk(session_mutex);
+            snapshot.reserve(active_peer_sessions.size());
+            for (const auto& ps : active_peer_sessions) {
+                PeerDiagnosticsInfo pdi;
+                pdi.ip = ps->ip;
+                pdi.port = ps->port;
+                pdi.is_choked = ps->is_choked_by_us.load(std::memory_order_relaxed);
+                snapshot.push_back(std::move(pdi));
+            }
+        }
+        std::lock_guard<std::mutex> aslk(active_session->session_lock);
+        active_session->active_peers = std::move(snapshot);
+    };
 
     // Peer connection worker lambda
     std::mutex swarm_mutex;
@@ -765,6 +797,9 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     uint32_t connection_limit = std::max<uint32_t>(1, std::min<uint32_t>(max_peers, 64));
 
     auto peer_worker = [&](PeerEndpoint peer) {
+        if (TorrentIpBlocklist::Global().IsBlocked(peer.ip)) {
+            return;
+        }
         SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (s == INVALID_SOCKET) return;
         UniqueSocket sock(s);
@@ -804,6 +839,8 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         // Register with Tit-for-Tat Choking Coordinator
         auto session = std::make_shared<PeerSession>();
         session->peer_id_num = next_peer_session_id++;
+        session->ip = peer.ip;
+        session->port = peer.port;
         bool initially_unchoked = false;
         {
             std::lock_guard<std::mutex> slk(session_mutex);
@@ -817,18 +854,23 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
             }
             active_peer_sessions.push_back(session);
         }
+        sync_active_peers();
 
         // Clean up session upon peer exit
         struct SessionGuard {
             std::mutex& mtx;
             std::vector<std::shared_ptr<PeerSession>>& list;
             std::shared_ptr<PeerSession> sess;
+            const std::function<void()>& sync_fn;
             ~SessionGuard() {
-                std::lock_guard<std::mutex> lk(mtx);
-                auto it = std::find(list.begin(), list.end(), sess);
-                if (it != list.end()) list.erase(it);
+                {
+                    std::lock_guard<std::mutex> lk(mtx);
+                    auto it = std::find(list.begin(), list.end(), sess);
+                    if (it != list.end()) list.erase(it);
+                }
+                sync_fn();
             }
-        } session_guard{session_mutex, active_peer_sessions, session};
+        } session_guard{session_mutex, active_peer_sessions, session, sync_active_peers};
 
         // Exchange interested & initial choking state
         auto interested = PeerWireProtocol::CreateInterested();
@@ -942,6 +984,18 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                     if (verified) {
                         auto have_msg = PeerWireProtocol::CreateHave(msg.piece_index);
                         send(sock.s, reinterpret_cast<const char*>(have_msg.data()), static_cast<int>(have_msg.size()), 0);
+                        // Endgame kCancel (id=8): broadcast CANCEL for this piece's blocks to other active peers
+                        uint64_t p_sz = torrent_info.get_piece_size(msg.piece_index);
+                        std::lock_guard<std::mutex> slk(session_mutex);
+                        for (const auto& other : active_peer_sessions) {
+                            if (other == session) continue;
+                            std::lock_guard<std::mutex> clk(other->cancel_mu);
+                            for (uint32_t off = 0; off < p_sz; off += 16384U) {
+                                uint32_t blen = static_cast<uint32_t>(std::min<uint64_t>(16384U, p_sz - off));
+                                other->pending_cancels.push_back(
+                                    PeerWireProtocol::CreateCancel(msg.piece_index, off, blen));
+                            }
+                        }
                     }
 
                     // Report received blocks immediately so the task does not
@@ -1007,6 +1061,17 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                             }
                         }
                     }
+                }
+            }
+
+            {
+                std::vector<std::vector<uint8_t>> cancels;
+                {
+                    std::lock_guard<std::mutex> clk(session->cancel_mu);
+                    cancels.swap(session->pending_cancels);
+                }
+                for (const auto& cmsg : cancels) {
+                    SendAll(sock.s, cmsg.data(), cmsg.size());
                 }
             }
 
@@ -1161,6 +1226,14 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_announce_time).count() >= 1) {
             last_announce_time = now;
+            {
+                std::lock_guard<std::mutex> aslk(active_session->session_lock);
+                for (const auto& tr : active_session->announce_urls) {
+                    if (std::find(announce_urls.begin(), announce_urls.end(), tr) == announce_urls.end()) {
+                        announce_urls.push_back(tr);
+                    }
+                }
+            }
             std::vector<PeerEndpoint> discovered;
             if (!announce_urls.empty()) {
                 auto tr_res = TrackerClient::AnnounceAny(
@@ -1176,6 +1249,12 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                 if (tr_res.ok()) {
                     for (const auto& p : tr_res.value->peers) {
                         discovered.push_back(p);
+                    }
+                    std::lock_guard<std::mutex> aslk(active_session->session_lock);
+                    for (auto& tr : active_session->trackers) {
+                        tr.status = "OK";
+                        tr.seeders = tr_res.value->complete;
+                        tr.leechers = tr_res.value->incomplete;
                     }
                 }
             }
@@ -1474,6 +1553,319 @@ Result<void> TorrentEngine::SetSequentialMode(const std::string& task_id, bool e
         session->piece_mgr->SetSequentialMode(enable, true);
     }
     return Result<void>::Ok();
+}
+
+// ============================================================================
+// TorrentIpBlocklist (MDM blocklist.rs port)
+// ============================================================================
+
+namespace {
+
+static bool ParseIpv4HostOrder(std::string_view s, uint32_t& out) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+    uint32_t octets[4]{};
+    size_t pos = 0;
+    for (int idx = 0; idx < 4; ++idx) {
+        auto dot = (idx < 3) ? s.find('.', pos) : std::string_view::npos;
+        if (idx < 3 && dot == std::string_view::npos) return false;
+        std::string_view part = (idx < 3) ? s.substr(pos, dot - pos) : s.substr(pos);
+        if (part.empty() || part.size() > 3) return false;
+        uint32_t val = 0;
+        for (char c : part) {
+            if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+            val = val * 10 + static_cast<uint32_t>(c - '0');
+        }
+        if (val > 255) return false;
+        octets[idx] = val;
+        if (idx < 3) pos = dot + 1;
+    }
+    out = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
+    return true;
+}
+
+} // namespace
+
+TorrentIpBlocklist& TorrentIpBlocklist::Global() {
+    static TorrentIpBlocklist inst;
+    return inst;
+}
+
+void TorrentIpBlocklist::Clear() {
+    std::lock_guard<std::mutex> lk(m_mu);
+    m_v4_ranges.clear();
+}
+
+size_t TorrentIpBlocklist::RangeCount() const {
+    std::lock_guard<std::mutex> lk(m_mu);
+    return m_v4_ranges.size();
+}
+
+size_t TorrentIpBlocklist::LoadFromText(const std::string& text) {
+    std::vector<V4Range> parsed;
+    std::istringstream iss(text);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) continue;
+        std::string_view sv(line.data() + first, line.size() - first);
+        if (sv.starts_with("#") || sv.starts_with("//")) continue;
+
+        std::string_view span;
+        auto comma = sv.find(',');
+        bool emule_allowed = false;
+        if (comma != std::string_view::npos) {
+            std::string_view candidate = sv.substr(0, comma);
+            auto dash = candidate.find('-');
+            uint32_t a = 0, b = 0;
+            if (dash != std::string_view::npos &&
+                ParseIpv4HostOrder(candidate.substr(0, dash), a) &&
+                ParseIpv4HostOrder(candidate.substr(dash + 1), b)) {
+                // eMule .dat: start - end , level , description (level > 127 is allowed)
+                std::string_view rest = sv.substr(comma + 1);
+                auto c2 = rest.find(',');
+                std::string_view lvl_sv = (c2 == std::string_view::npos) ? rest : rest.substr(0, c2);
+                while (!lvl_sv.empty() && std::isspace(static_cast<unsigned char>(lvl_sv.front()))) lvl_sv.remove_prefix(1);
+                uint32_t level = 0;
+                for (char c : lvl_sv) {
+                    if (!std::isdigit(static_cast<unsigned char>(c))) break;
+                    level = level * 10 + static_cast<uint32_t>(c - '0');
+                }
+                if (level > 127) {
+                    emule_allowed = true;
+                } else {
+                    span = candidate;
+                }
+            }
+        }
+        if (emule_allowed) continue;
+        if (span.empty()) {
+            auto colon = sv.rfind(':');
+            if (colon == std::string_view::npos) continue;
+            span = sv.substr(colon + 1);
+        }
+        auto dash = span.find('-');
+        if (dash == std::string_view::npos) continue;
+        uint32_t s_ip = 0, e_ip = 0;
+        if (ParseIpv4HostOrder(span.substr(0, dash), s_ip) &&
+            ParseIpv4HostOrder(span.substr(dash + 1), e_ip) && s_ip <= e_ip) {
+            parsed.push_back(V4Range{s_ip, e_ip});
+        }
+    }
+    std::sort(parsed.begin(), parsed.end(), [](const V4Range& a, const V4Range& b) {
+        return a.start < b.start || (a.start == b.start && a.end < b.end);
+    });
+    // Merge overlapping intervals for O(log N) lookup
+    std::vector<V4Range> merged;
+    for (const auto& r : parsed) {
+        if (!merged.empty() && r.start <= merged.back().end) {
+            merged.back().end = std::max(merged.back().end, r.end);
+        } else {
+            merged.push_back(r);
+        }
+    }
+    std::lock_guard<std::mutex> lk(m_mu);
+    m_v4_ranges = std::move(merged);
+    return m_v4_ranges.size();
+}
+
+bool TorrentIpBlocklist::IsBlocked(const std::string& ip_str) const {
+    uint32_t ip = 0;
+    if (!ParseIpv4HostOrder(ip_str, ip)) return false;
+    std::lock_guard<std::mutex> lk(m_mu);
+    if (m_v4_ranges.empty()) return false;
+    auto it = std::upper_bound(m_v4_ranges.begin(), m_v4_ranges.end(), ip,
+        [](uint32_t val, const V4Range& r) { return val < r.start; });
+    if (it == m_v4_ranges.begin()) return false;
+    --it;
+    return ip >= it->start && ip <= it->end;
+}
+
+// ============================================================================
+// RssTorrentFeedParser (MDM rss.rs port)
+// ============================================================================
+
+namespace {
+
+static std::string ExtractXmlTagContent(const std::string& block, const std::string& tag) {
+    std::string open = "<" + tag;
+    auto pos = block.find(open);
+    if (pos == std::string::npos) return "";
+    auto gt = block.find('>', pos + open.size());
+    if (gt == std::string::npos) return "";
+    std::string close = "</" + tag + ">";
+    auto end = block.find(close, gt + 1);
+    if (end == std::string::npos) return "";
+    std::string val = block.substr(gt + 1, end - (gt + 1));
+    // Strip CDATA wrapper if present
+    constexpr const char* kCdataStart = "<![CDATA[";
+    if (val.rfind(kCdataStart, 0) == 0) {
+        auto cend = val.rfind("]]>");
+        if (cend != std::string::npos && cend >= 9) {
+            val = val.substr(9, cend - 9);
+        }
+    }
+    size_t a = val.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return "";
+    size_t b = val.find_last_not_of(" \t\r\n");
+    return val.substr(a, b - a + 1);
+}
+
+static std::string ExtractXmlAttrValue(const std::string& tag_text, const std::string& attr) {
+    static const std::regex kAttrRe;
+    std::regex re("\\b" + attr + "\\s*=\\s*[\"']([^\"']*)[\"']");
+    std::smatch m;
+    if (std::regex_search(tag_text, m, re)) return m[1].str();
+    return "";
+}
+
+static std::string ToLowerAsciiRss(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+} // namespace
+
+std::vector<RssTorrentArticle> RssTorrentFeedParser::ParseFeedXml(const std::string& xml) {
+    std::vector<RssTorrentArticle> out;
+    if (xml.find("<!ENTITY") != std::string::npos) {
+        return out; // Reject DTD entity expansion
+    }
+
+    static const std::regex kItemRe(R"(<(?:item|entry)\b[^>]*>([\s\S]*?)</(?:item|entry)>)");
+    static const std::regex kEncRe(R"(<(?:enclosure|link)\b([^>]*)/?>)");
+
+    auto begin = std::sregex_iterator(xml.begin(), xml.end(), kItemRe);
+    auto end = std::sregex_iterator();
+    for (auto it = begin; it != end && out.size() < 200; ++it) {
+        std::string body = (*it)[1].str();
+        RssTorrentArticle art;
+        art.title = ExtractXmlTagContent(body, "title");
+        art.id = ExtractXmlTagContent(body, "guid");
+        if (art.id.empty()) art.id = ExtractXmlTagContent(body, "id");
+        art.date = ExtractXmlTagContent(body, "pubDate");
+        if (art.date.empty()) art.date = ExtractXmlTagContent(body, "updated");
+
+        std::string magnet = ExtractXmlTagContent(body, "magnetURI");
+        if (!magnet.empty() && magnet.rfind("magnet:?", 0) == 0) {
+            art.torrent_url = magnet;
+        }
+        if (art.torrent_url.empty()) {
+            auto eb = std::sregex_iterator(body.begin(), body.end(), kEncRe);
+            auto ee = std::sregex_iterator();
+            for (auto eit = eb; eit != ee; ++eit) {
+                std::string attrs = (*eit)[1].str();
+                std::string u = ExtractXmlAttrValue(attrs, "url");
+                if (u.empty()) u = ExtractXmlAttrValue(attrs, "href");
+                std::string type = ToLowerAsciiRss(ExtractXmlAttrValue(attrs, "type"));
+                std::string lu = ToLowerAsciiRss(u);
+                if (type == "application/x-bittorrent" || lu.rfind("magnet:?", 0) == 0 || lu.find(".torrent") != std::string::npos) {
+                    art.torrent_url = u;
+                    std::string len_s = ExtractXmlAttrValue(attrs, "length");
+                    if (!len_s.empty()) {
+                        try { art.size_bytes = std::stoull(len_s); } catch (...) {}
+                    }
+                    break;
+                }
+            }
+        }
+        if (art.torrent_url.empty()) {
+            std::string link = ExtractXmlTagContent(body, "link");
+            std::string ll = ToLowerAsciiRss(link);
+            if (ll.rfind("magnet:?", 0) == 0 || ll.find(".torrent") != std::string::npos) {
+                art.torrent_url = link;
+            }
+        }
+        if (art.id.empty()) art.id = !art.torrent_url.empty() ? art.torrent_url : art.title;
+        if (!art.title.empty() || !art.torrent_url.empty()) {
+            out.push_back(std::move(art));
+        }
+    }
+    return out;
+}
+
+std::optional<RssEpisode> RssTorrentFeedParser::ExtractEpisode(const std::string& title) {
+    static const std::regex kSxE(R"((?:^|[^0-9a-zA-Z])[sS](\d{1,3})[eE](\d{1,4})(?:[^0-9]|$))");
+    static const std::regex kX(R"((?:^|[^0-9a-zA-Z])(\d{1,3})[xX](\d{1,4})(?:[^0-9]|$))");
+    std::smatch m;
+    if (std::regex_search(title, m, kSxE) || std::regex_search(title, m, kX)) {
+        try {
+            return RssEpisode{
+                static_cast<uint32_t>(std::stoul(m[1].str())),
+                static_cast<uint32_t>(std::stoul(m[2].str()))
+            };
+        } catch (...) {}
+    }
+    return std::nullopt;
+}
+
+bool RssTorrentFeedParser::MatchesFilter(
+    const std::string& title,
+    const std::string& include_words,
+    const std::string& exclude_words,
+    const std::string& episode_filter) {
+    std::string low_title = ToLowerAsciiRss(title);
+    if (!include_words.empty()) {
+        std::istringstream iss(include_words);
+        std::string group;
+        while (iss >> group) {
+            // Support | alternatives within a token
+            bool any_alt = false;
+            std::istringstream gss(group);
+            std::string alt;
+            while (std::getline(gss, alt, '|')) {
+                if (!alt.empty() && low_title.find(ToLowerAsciiRss(alt)) != std::string::npos) {
+                    any_alt = true;
+                    break;
+                }
+            }
+            if (!any_alt) return false;
+        }
+    }
+    if (!exclude_words.empty()) {
+        std::istringstream iss(exclude_words);
+        std::string word;
+        while (iss >> word) {
+            if (!word.empty() && low_title.find(ToLowerAsciiRss(word)) != std::string::npos) {
+                return false;
+            }
+        }
+    }
+    if (!episode_filter.empty()) {
+        auto ep = ExtractEpisode(title);
+        if (!ep) return false;
+        // Format: "1x2;1x5-8;2x1-"
+        bool matched = false;
+        std::istringstream fss(episode_filter);
+        std::string clause;
+        while (std::getline(fss, clause, ';')) {
+            auto x = clause.find_first_of("xX");
+            if (x == std::string::npos) continue;
+            try {
+                uint32_t s = static_cast<uint32_t>(std::stoul(clause.substr(0, x)));
+                if (s != ep->season) continue;
+                std::string er = clause.substr(x + 1);
+                auto dash = er.find('-');
+                if (dash == std::string::npos) {
+                    if (ep->episode == static_cast<uint32_t>(std::stoul(er))) {
+                        matched = true;
+                        break;
+                    }
+                } else {
+                    uint32_t lo = static_cast<uint32_t>(std::stoul(er.substr(0, dash)));
+                    std::string hi_s = er.substr(dash + 1);
+                    uint32_t hi = hi_s.empty() ? UINT32_MAX : static_cast<uint32_t>(std::stoul(hi_s));
+                    if (ep->episode >= lo && ep->episode <= hi) {
+                        matched = true;
+                        break;
+                    }
+                }
+            } catch (...) {}
+        }
+        if (!matched) return false;
+    }
+    return true;
 }
 
 } // namespace openidm::torrent

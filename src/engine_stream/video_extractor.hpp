@@ -1,10 +1,13 @@
 #pragma once
 
 #include "common/types.hpp"
+#include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -186,6 +189,29 @@ public:
     static Result<ExtractionMetadata> ParseYtDlpJson(
         const std::string& json_str,
         const std::string& fallback_url);
+    static Result<ExtractionMetadata> ParseHlsMasterPlaylist(
+        const std::string& playlist_text,
+        const std::string& master_url);
+
+    // MP4 / WebM HTTP-Range container index probe (GD3 features/ffmpeg_pack/container.py port)
+    struct ContainerIndexEntry {
+        double time_sec = 0.0;
+        uint64_t offset = 0;
+        uint64_t size = 0;
+    };
+    struct ContainerIndex {
+        std::string format; // "mp4" or "webm"
+        double duration_sec = 0.0;
+        uint64_t init_end = 0;
+        std::vector<ContainerIndexEntry> entries;
+    };
+    static bool FindContainerIndexRange(
+        const std::vector<uint8_t>& head,
+        uint64_t file_size,
+        uint64_t& out_offset,
+        uint64_t& out_length);
+    static std::optional<ContainerIndex> ParseContainerIndex(
+        const std::vector<uint8_t>& data);
 
     // Error classification from raw extractor / HTTP stderr
     static ExtractionErrorCategory ClassifyError(
@@ -209,6 +235,91 @@ private:
     std::vector<std::unique_ptr<IVideoExtractor>> m_extractors;
     mutable std::mutex m_cache_mutex;
     std::map<std::string, CacheEntry> m_cache;
+};
+
+// Video part cutting (MDM part.rs port)
+struct VideoPartSpec {
+    uint32_t from_sec = 0;
+    uint32_t to_sec = 0;
+    bool exact = false;
+
+    static std::optional<uint32_t> ParseTimeSeconds(std::string_view s);
+    static Result<VideoPartSpec> Validate(
+        std::string_view from_str,
+        std::string_view to_str,
+        bool exact,
+        std::optional<double> duration_sec = std::nullopt);
+    std::string SectionsArg() const;
+    std::string FormatTag() const;
+    static std::string FormatPartFilename(const std::string& base_name, const VideoPartSpec& part);
+};
+
+// gallery-dl image gallery pipeline (MDM gallery.rs port)
+struct GalleryItem {
+    std::string url;
+    std::string relative_path;
+};
+
+class GalleryDownloader {
+public:
+    static std::vector<GalleryItem> ParsePrepareOutput(const std::string& stdout_text);
+    static Result<std::vector<GalleryItem>> ExtractGalleryItems(
+        const std::string& gallery_url,
+        const std::string& cookies_path,
+        const std::map<std::string, std::string>& headers,
+        std::atomic<bool>& cancel_flag);
+    static Result<size_t> DownloadGallery(
+        const std::vector<GalleryItem>& items,
+        const std::filesystem::path& save_dir,
+        const std::map<std::string, std::string>& headers,
+        std::atomic<bool>& cancel_flag);
+};
+
+// Bilibili Wbi signing, QR login, multi-part URL parsing & Danmaku XML/ASS (GD3 bili_pack port)
+struct BiliUrlInfo {
+    std::string video_id;
+    uint64_t mid = 0;
+    uint64_t season_id = 0;
+    uint64_t favorite_id = 0;
+    std::vector<int> selected_pages;
+    bool is_short_url = false;
+};
+
+struct BiliQrPollResult {
+    int code = -1; // 0 = success, 86101 = unscanned, 86090 = scanned, 86038 = expired
+    std::string message;
+    std::string refresh_token;
+    std::string cookie_header;
+};
+
+struct DanmakuItem {
+    int64_t id = 0;
+    int64_t progress_ms = 0;
+    int mode = 1;
+    int fontsize = 25;
+    uint32_t color = 0xFFFFFF;
+    std::string mid_hash;
+    std::string content;
+    int64_t ctime = 0;
+    int weight = 0;
+    int pool = 0;
+    std::string id_str;
+};
+
+class BilibiliHelper {
+public:
+    static std::string ComputeWbiMixinKey(const std::string& img_key, const std::string& sub_key);
+    static std::map<std::string, std::string> SignWbiParams(
+        std::map<std::string, std::string> params,
+        const std::string& mixin_key,
+        int64_t wts_epoch_s = 0);
+    static Result<BiliUrlInfo> ParseBilibiliUrl(const std::string& url);
+    static std::string BuildQrGenerateUrl();
+    static std::string BuildQrPollUrl(const std::string& qrcode_key);
+    static Result<BiliQrPollResult> ParseQrPollResponse(const std::string& json_body);
+    static std::vector<DanmakuItem> ParseDanmakuProtobuf(const std::vector<uint8_t>& seg_so_bytes);
+    static std::string ConvertDanmakuToXml(const std::vector<DanmakuItem>& items, int64_t chat_id = 0);
+    static std::string ConvertDanmakuToAss(const std::vector<DanmakuItem>& items, int width = 1920, int height = 1080);
 };
 
 } // namespace openidm::engine_stream

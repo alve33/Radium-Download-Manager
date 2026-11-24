@@ -174,6 +174,27 @@ Result<std::string> TaskImportExport::ExportTasksToString(
         }
         out += "]\n";
         return Result<std::string>::Ok(out);
+    } else if (format == ExportFormat::kEf2) {
+        std::string out;
+        for (const auto& t : tasks) {
+            out += "<\r\n";
+            out += (include_credentials ? t.url : ScrubUrlCredentials(t.url)) + "\r\n";
+            for (const auto& [k, v] : t.headers) {
+                std::string kl = k;
+                for (char& c : kl) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (kl == "referer") out += "referer: " + v + "\r\n";
+                else if (kl == "user-agent") out += "User-Agent: " + v + "\r\n";
+            }
+            if (include_credentials) {
+                for (const auto& [k, v] : t.auth_headers) {
+                    std::string kl = k;
+                    for (char& c : kl) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (kl == "cookie") out += "cookie: " + v + "\r\n";
+                }
+            }
+            out += ">\r\n";
+        }
+        return Result<std::string>::Ok(out);
     } else {
         std::string out = "URL,FileName,Category,Queue,TotalBytes,State,TorrentSelection\r\n";
         for (const auto& t : tasks) {
@@ -361,6 +382,83 @@ Result<std::vector<TaskModel>> TaskImportExport::ImportFromUrlList(std::string_v
         t.updated_at_ms = t.created_at_ms;
         out.push_back(std::move(t));
     }
+    return Result<std::vector<TaskModel>>::Ok(std::move(out));
+}
+
+Result<std::vector<TaskModel>> TaskImportExport::ImportFromEf2(std::string_view ef2_str) {
+    std::vector<TaskModel> out;
+    std::string s(ef2_str);
+    std::stringstream ss(s);
+    std::string line;
+    bool in_block = false;
+    TaskModel cur;
+    bool has_url = false;
+
+    auto trim = [](std::string str) {
+        while (!str.empty() && (str.front() == ' ' || str.front() == '\t')) str.erase(str.begin());
+        while (!str.empty() && (str.back() == ' ' || str.back() == '\t' || str.back() == '\r')) str.pop_back();
+        return str;
+    };
+
+    auto finalize_block = [&]() {
+        if (has_url && !cur.url.empty()) {
+            cur.task_id = GenerateUuidV4();
+            cur.file_name = PathSanitizer::SanitizeFileName(PathSanitizer::ExtractFromUrl(cur.url));
+            cur.category = InferCategoryFromFilename(cur.file_name);
+            cur.queue_id = "main";
+            cur.save_dir = PathSanitizer::GetDefaultDownloadDir().string();
+            cur.state = TaskState::kQueued;
+            cur.created_at_ms = NowEpochMs();
+            cur.updated_at_ms = cur.created_at_ms;
+            out.push_back(std::move(cur));
+        }
+        cur = TaskModel{};
+        has_url = false;
+    };
+
+    while (std::getline(ss, line)) {
+        line = trim(std::move(line));
+        if (line == "<") {
+            if (in_block) finalize_block();
+            in_block = true;
+            cur = TaskModel{};
+            has_url = false;
+            continue;
+        }
+        if (line == ">") {
+            if (in_block) {
+                finalize_block();
+                in_block = false;
+            }
+            continue;
+        }
+        if (!in_block || line.empty()) continue;
+
+        if (!has_url && (line.rfind("http://", 0) == 0 || line.rfind("https://", 0) == 0 ||
+                         line.rfind("ftp://", 0) == 0 || line.rfind("ftps://", 0) == 0)) {
+            cur.url = line;
+            cur.task_type = (line.rfind("ftp://", 0) == 0 || line.rfind("ftps://", 0) == 0)
+                ? TaskType::kFtp
+                : TaskType::kHttpFile;
+            has_url = true;
+            continue;
+        }
+
+        size_t colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string key = trim(line.substr(0, colon));
+            std::string val = trim(line.substr(colon + 1));
+            for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (key == "referer" && !val.empty()) {
+                cur.headers["Referer"] = val;
+            } else if (key == "user-agent" && !val.empty()) {
+                cur.headers["User-Agent"] = val;
+            } else if (key == "cookie" && !val.empty()) {
+                cur.auth_headers["Cookie"] = val;
+            }
+        }
+    }
+    if (in_block) finalize_block();
     return Result<std::vector<TaskModel>>::Ok(std::move(out));
 }
 

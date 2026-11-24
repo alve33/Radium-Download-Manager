@@ -3,7 +3,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -19,6 +22,9 @@ struct LiveSegment {
     std::atomic<uint64_t> end_offset{0};
     std::atomic<bool> completed{false};
     std::atomic<bool> active_worker{false};
+    std::atomic<bool> receiving{false};
+    std::atomic<uint64_t> owner_generation{0};
+    std::chrono::steady_clock::time_point assigned_at{};
     // True while the current HTTP request still uses the pre-split end offset.
     // Prevents repeatedly shrinking one in-flight response before it observes
     // the first split and exits.
@@ -69,6 +75,11 @@ public:
     bool CanSplitAnySegment() const;
     bool HasIncompleteUnassignedSegment() const;
 
+    // Event-driven worker wakeup & TTFB preemption (MDM planner.rs port)
+    void NotifyAll();
+    void WaitForWork(int timeout_ms, const std::function<bool()>& stop_pred) const;
+    void SetPreemptAfterMs(int64_t ms);
+
     // Concurrency and rate limiting management
     uint32_t GetMaxConnections() const;
     void SetMaxConnections(uint32_t conns);
@@ -82,9 +93,11 @@ public:
 
 private:
     mutable std::mutex m_mutex;
+    mutable std::condition_variable m_cv;
     uint64_t m_total_bytes{0};
     uint32_t m_max_connections{8};
     uint64_t m_min_split_bytes{262144}; // Default 256 KiB min split remainder
+    int64_t m_preempt_after_ms{0};
     uint32_t m_next_segment_id{0};
     uint32_t m_consecutive_failures{0};
     uint32_t m_consecutive_successes{0};

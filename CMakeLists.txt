@@ -68,21 +68,27 @@ set(RADIUM_CORE_SOURCES
     src/storage/import_export.cpp
     src/archive/zip_preview.cpp
     src/security/antivirus_scanner.cpp
+    src/platform/windows_integrations.cpp
     src/crawler/site_grabber.cpp
     src/engine_ftp/ftp_client.cpp
     src/engine_torrent/torrent_creator.cpp
     src/engine_torrent/torrent_parser.cpp
     src/engine_torrent/torrent_engine.cpp
     src/core/update_manager.cpp
+    src/core/extension_installer.cpp
     src/engine_stream/rtsp_mms_adapter.cpp
     src/brisk_engine/segment_scheduler.cpp
     src/brisk_engine/http_client.cpp
+    src/brisk_engine/site_handlers.cpp
     src/brisk_engine/http_download_engine.cpp
     src/engine_stream/nm3u8dl_re_adapter.cpp
     src/engine_stream/video_extractor.cpp
+    src/packs/specialized_packs.cpp
+    src/remote/remote_control.cpp
     src/core/download_controller.cpp
     src/ipc/ipc_server.cpp
     src/ui/startup_log_dialog.cpp
+    src/ui/extension_setup_dialog.cpp
     src/ui/localization.cpp
     src/ui/win32_main_window.cpp
 )
@@ -104,7 +110,7 @@ add_executable(radium $<TARGET_OBJECTS:radium_core> src/app/main.cpp ${RADIUM_RC
 add_executable(radium-nmh src/nmh/main.cpp ${RADIUM_RC_SOURCES})
 add_executable(radium_unit_tests $<TARGET_OBJECTS:radium_core> tests/cpp/unit_tests.cpp)
 add_executable(radium_core_tests $<TARGET_OBJECTS:radium_core> tests/unit/core_unit_tests.cpp)
-add_executable(N_m3u8DL-RE src/common/crypto_utils.cpp src/brisk_engine/http_client.cpp src/worker_stream/nm3u8dl_re_worker.cpp)
+add_executable(N_m3u8DL-RE src/common/crypto_utils.cpp src/brisk_engine/http_client.cpp src/brisk_engine/site_handlers.cpp src/worker_stream/nm3u8dl_re_worker.cpp)
 
 # Build prerequisite: unit tests expect worker binary to be available
 add_dependencies(radium_unit_tests N_m3u8DL-RE)

@@ -35,6 +35,12 @@ struct GrabbedItem {
     uint32_t depth{0};
 };
 
+struct GrabbedGroup {
+    std::string group_name;
+    bool is_split_volume{false};
+    std::vector<GrabbedItem> items;
+};
+
 using GrabbedItemCallback = std::function<void(const GrabbedItem&)>;
 
 class SiteGrabber {
@@ -47,6 +53,15 @@ public:
         const SiteGrabberConfig& cfg,
         std::atomic<bool>& cancel_requested,
         GrabbedItemCallback on_item_found = nullptr);
+
+    // Extracts split-archive volume base key (e.g. "movie.part1.rar" -> "movie", "data.001" -> "data")
+    static std::optional<std::string> ExtractVolumeKey(std::string_view filename);
+
+    // Groups grabbed items into split-volume packages, per-page groups, or "Various files"
+    static std::vector<GrabbedGroup> GroupGrabbedItems(const std::vector<GrabbedItem>& items);
+
+    // Expands GD3-style batch URL templates: [01-10:2], [a-z], {mp4,mkv}
+    static std::vector<std::string> ExpandBatchUrlTemplate(std::string_view tmpl, size_t max_urls = 5000);
 
     // Resolves a relative or protocol-relative URL against a base URL
     static std::string ResolveUrl(std::string_view base_url, std::string_view relative_url);

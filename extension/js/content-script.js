@@ -838,7 +838,9 @@ function handleLinkClick(ev) {
     ]);
 
     const isAiFileUrl = href.includes("oaiusercontent.com") || href.includes("rscd=") ||
-                        href.includes("response-content-disposition=") || href.includes("/backend-api/files/");
+                        href.includes("response-content-disposition=") || href.includes("/backend-api/files/") ||
+                        href.includes("contribution.usercontent.google.com") ||
+                        pathname.includes("/artifacts/");
     let isEligible = isWebBlob || hasDownloadAttr || isAiFileUrl || interceptExts.has(ext) ||
       pathname.includes("/redirect") || pathname.includes("/download") || pathname.includes("/dl/");
 
@@ -1235,9 +1237,11 @@ function initContentScript() {
             if (!resolved) {
               resolved = true;
               window.removeEventListener("message", handler, true);
-              sendResponse({ success: false, error: "TIMEOUT" });
+              if (window === window.top) {
+                sendResponse({ success: false, error: "TIMEOUT" });
+              }
             }
-          }, 8000);
+          }, 1500);
         };
 
         if (typeof fetch === "function") {
