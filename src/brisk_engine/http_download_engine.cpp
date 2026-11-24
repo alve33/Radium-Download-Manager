@@ -517,9 +517,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 while (!fatal_abort.load() && !pause_requested.load() && !cancel_requested.load() &&
                        !scheduler->AllCompleted() && std::chrono::steady_clock::now() < wait_deadline) {
                     scheduler->WaitForWork(50, [&]() {
-                        return fatal_abort.load() || pause_requested.load() || cancel_requested.load() ||
-                               scheduler->AllCompleted() || scheduler->CanSplitAnySegment() ||
-                               scheduler->HasIncompleteUnassignedSegment();
+                        return fatal_abort.load() || pause_requested.load() || cancel_requested.load();
                     });
                     if (fatal_abort.load() || pause_requested.load() || cancel_requested.load() || scheduler->AllCompleted()) {
                         break;

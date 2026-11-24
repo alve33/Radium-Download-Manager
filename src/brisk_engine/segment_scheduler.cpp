@@ -476,9 +476,42 @@ void SegmentScheduler::WaitForWork(int timeout_ms, const std::function<bool()>& 
     std::unique_lock<std::mutex> lk(m_mutex);
     m_cv.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&]() {
         if (stop_pred && stop_pred()) return true;
+        if (m_segments.empty()) return false;
+        bool all_done = true;
+        uint32_t active_count = 0;
         for (const auto& s : m_segments) {
-            if (!s->completed.load(std::memory_order_relaxed) && !s->active_worker.load(std::memory_order_relaxed)) {
-                return true;
+            bool done = s->completed.load(std::memory_order_relaxed);
+            if (!done) {
+                all_done = false;
+                if (!s->active_worker.load(std::memory_order_relaxed)) {
+                    if (s->current_offset.load(std::memory_order_relaxed) <= s->end_offset.load(std::memory_order_relaxed)) {
+                        return true;
+                    }
+                } else {
+                    ++active_count;
+                }
+            }
+        }
+        if (all_done) return true;
+        if (active_count < m_max_connections && m_total_bytes > 0) {
+            uint64_t floor_bytes = (active_count + 1 < m_max_connections) ? 65536ULL : 131072ULL;
+            uint64_t min_separation = (std::max<uint64_t>)(m_min_split_bytes, floor_bytes);
+            const uint64_t pending_threshold = (active_count + 1 < m_max_connections)
+                ? (2 * min_separation)
+                : (8 * min_separation);
+            for (const auto& s : m_segments) {
+                if (s->completed.load(std::memory_order_relaxed)) continue;
+                uint64_t curr = s->current_offset.load(std::memory_order_relaxed);
+                uint64_t end = s->end_offset.load(std::memory_order_relaxed);
+                if (end > curr) {
+                    uint64_t rem = end - curr + 1;
+                    uint64_t needed = s->split_pending.load(std::memory_order_relaxed)
+                        ? pending_threshold
+                        : (2 * min_separation);
+                    if (rem >= needed) {
+                        return true;
+                    }
+                }
             }
         }
         return false;

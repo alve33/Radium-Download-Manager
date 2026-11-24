@@ -232,8 +232,8 @@ bool IsLoopbackHost(std::string_view host) {
 
 } // namespace
 
-static bool ParseUint64Strict(std::string_view s, uint64_t& out) {
-    s = Trim(s);
+static bool ParseUint64Strict(std::string_view sv, uint64_t& out) {
+    std::string s = Trim(sv);
     if (s.empty()) return false;
     uint64_t val = 0;
     for (char c : s) {
