@@ -1,0 +1,73 @@
+name: Repository Hygiene Check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reject tracked binaries and oversized files
+        run: |
+          python3 - <<'EOF'
+          import os
+          import subprocess
+          import sys
+
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          errors = []
+          forbidden_ext = (".exe", ".msix", ".dll")
+          max_bytes = 2 * 1024 * 1024
+
+          for raw_path in tracked:
+              if not raw_path:
+                  continue
+              path = raw_path.decode("utf-8", errors="replace")
+              lower = path.lower()
+              if lower.endswith(forbidden_ext):
+                  errors.append(f"Forbidden tracked binary: {path}")
+              if os.path.isfile(path) and not path.startswith("src/third_party/"):
+                  size = os.path.getsize(path)
+                  if size > max_bytes:
+                      errors.append(f"File exceeds 2 MB limit ({size} bytes): {path}")
+
+          if errors:
+              for e in errors:
+                  print(f"::error::{e}")
+              sys.exit(1)
+          print("Binary and file-size hygiene check passed.")
+          EOF
+
+      - name: Verify docs/INDEX.md links resolve
+        run: |
+          python3 - <<'EOF'
+          import os
+          import re
+          import sys
+
+          index_path = "docs/INDEX.md"
+          with open(index_path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          links = re.findall(r"\[[^\]]+\]\(([^)]+)\)", content)
+          errors = []
+          for target in links:
+              if target.startswith(("http://", "https://", "#")):
+                  continue
+              target_clean = target.split("#")[0]
+              resolved = os.path.normpath(os.path.join(os.path.dirname(index_path), target_clean))
+              if not os.path.exists(resolved):
+                  errors.append(f"Broken link in docs/INDEX.md: {target} -> {resolved}")
+
+          if errors:
+              for e in errors:
+                  print(f"::error::{e}")
+              sys.exit(1)
+          print(f"Verified {len(links)} links in docs/INDEX.md.")
+          EOF

@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(r"c:\Users\sayed\Downloads\Radium")
+ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist"
 RADIUM_BIN = DIST / "Radium.exe"
 NMH_BIN = DIST / "radium-nmh.exe"

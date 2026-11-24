@@ -1,8 +1,8 @@
 # Radium Download Manager Engineering Documentation Index
 
 **Document Status:** Active Navigation Map
-**Last Reviewed:** October 26, 2026
-**Scope:** Guide to the Radium Download Manager engineering documentation suite, architectural decision records, subsystem specifications, and historical maintenance archives.
+**Last Reviewed:** November 24, 2026
+**Scope:** Guide to the Radium Download Manager engineering documentation suite, architectural decision records, and subsystem specifications.
 
 ---
 
@@ -11,8 +11,10 @@
 1. **[../README.md](../README.md)** — Project overview, architecture summary, live benchmarks, and build instructions.
 2. **[../AGENTS.md](../AGENTS.md)** — Mandatory coding instructions, RAII rules, security invariants, and documentation sync requirements.
 3. **[../CONTRIBUTING.md](../CONTRIBUTING.md)** — Development workflow, commit guidelines, and testing requirements.
-4. **[DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)** — Step-by-step developer environment setup for Windows 10 / 11 MSVC and CMake.
-5. **[SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)** — Process boundaries, IPC topologies, component design, and storage architecture.
+4. **[../SECURITY.md](../SECURITY.md)** — Vulnerability reporting policy and security boundaries.
+5. **[PROJECT_BRIEF.md](PROJECT_BRIEF.md)** — High-level product scope, goals, and target audience.
+6. **[DEVELOPMENT_SETUP.md](DEVELOPMENT_SETUP.md)** — Step-by-step developer environment setup for Windows 10 / 11 MSVC and CMake.
+7. **[SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)** — Process boundaries, IPC topologies, component design, and storage architecture.
 
 ---
 
@@ -23,6 +25,7 @@
 - **[STREAM_DOWNLOAD_PIPELINE.md](STREAM_DOWNLOAD_PIPELINE.md)** — Out-of-process HLS/DASH/MSS pipeline, N_m3u8DL-RE worker isolation, and FFmpeg muxing.
 - **[MEDIA_DETECTION.md](MEDIA_DETECTION.md)** — Network sniffing, DOM observation, manifest deduplication, and confidence scoring.
 - **[UPSTREAM_PROJECT_ANALYSIS.md](UPSTREAM_PROJECT_ANALYSIS.md)** — Architectural analysis of Brisk, Cat Catch, and N_m3u8DL-RE.
+- **[UPSTREAM_INTEGRATION_MAP.md](UPSTREAM_INTEGRATION_MAP.md)** — Integration mapping between Radium subsystems and upstream reference projects.
 - **[SOURCE_MAPPING.md](SOURCE_MAPPING.md)** — Upstream source file and license attribution mapping.
 
 ### 2.2 Client UI & Browser Extension
@@ -34,20 +37,23 @@
 ### 2.3 Storage, Reliability & Security
 - **[DATA_MODEL_AND_STORAGE.md](DATA_MODEL_AND_STORAGE.md)** — SQLite WAL schema, state machine, crash recovery, and atomic commit semantics.
 - **[ERROR_HANDLING_AND_RECOVERY.md](ERROR_HANDLING_AND_RECOVERY.md)** — Error taxonomy, exponential retry backoff, and recovery flows.
-- **[SETTINGS_AUDIT.md](SETTINGS_AUDIT.md)** — Visible Settings controls traced from UI through persistence to runtime consumers.
 - **[SECURITY_THREAT_MODEL.md](SECURITY_THREAT_MODEL.md)** — STRIDE threat model, credential protections (DPAPI), and path sanitization.
 - **[PRIVACY_AND_DATA_HANDLING.md](PRIVACY_AND_DATA_HANDLING.md)** — Sensitive data classification, redaction policies, and telemetry boundaries.
 - **[KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)** — Explicit non-goals (DRM non-circumvention, browser-internal blobs) and platform constraints.
+- **[TECHNICAL_RISK_REGISTER.md](TECHNICAL_RISK_REGISTER.md)** — Active engineering risk register and mitigation tracking.
 
-### 2.4 Product Requirements & Quality Assurance
+### 2.4 Product Requirements, Build & Quality Assurance
 - **[PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md)** — Functional and non-functional requirements specification.
 - **[FEATURE_MATRIX.md](FEATURE_MATRIX.md)** — Requirement-to-module traceability and implementation verification status.
 - **[TEST_STRATEGY.md](TEST_STRATEGY.md)** — Automated unit, loopback integration, and reliability test strategy.
 - **[TEST_MATRIX.md](TEST_MATRIX.md)** — Test suite mappings, verification classifications, and test commands.
 - **[WINDOWS_BUILD_AND_PACKAGING.md](WINDOWS_BUILD_AND_PACKAGING.md)** — MSVC/CMake compilation pipeline, binary size targets, and installer packaging.
+- **[WINDOWS_COMPATIBILITY_AND_CLOUD_TESTING.md](WINDOWS_COMPATIBILITY_AND_CLOUD_TESTING.md)** — Windows 10/11 compatibility matrix and CI verification.
+- **[RELEASE_AND_UPDATE_PROCESS.md](RELEASE_AND_UPDATE_PROCESS.md)** — Release workflow, checksum generation, and update channel policies.
 - **[PERFORMANCE_AND_SIZE_BUDGET.md](PERFORMANCE_AND_SIZE_BUDGET.md)** — Resource budgets and binary footprint benchmarks.
 - **[ROADMAP.md](ROADMAP.md)** — Milestone definitions and future platform goals.
 - **[GLOSSARY.md](GLOSSARY.md)** — Technical domain terminology and definitions.
+- **[LICENSE_REVIEW.md](LICENSE_REVIEW.md)** — Third-party license audits and GPL-3.0 compatibility verification.
 
 ---
 
@@ -67,29 +73,13 @@
 ## 4. Benchmark Documentation (`benchmarks/`)
 
 - **[../benchmarks/RESULTS.md](../benchmarks/RESULTS.md)** — Master benchmark registry, 500 MB comparative results against IDM, historical benchmarks, and raw artifact download instructions.
-- **[../benchmarks/results/IDM_RADIUM_2GB_COMPARISON.md](../benchmarks/results/IDM_RADIUM_2GB_COMPARISON.md)** — Dedicated 2.14 GB AlmaLinux ISO comparative transfer report.
-- **[../benchmarks/results/adaptive_500mb_final/20261026_500MB_ADAPTIVE_FINAL_REPORT.md](../benchmarks/results/adaptive_500mb_final/20261026_500MB_ADAPTIVE_FINAL_REPORT.md)** — Trial 1 live 500 MB benchmark report.
-- **[../benchmarks/results/adaptive_500mb_confirmation/20261026_500MB_CONFIRMATION_REPORT.md](../benchmarks/results/adaptive_500mb_confirmation/20261026_500MB_CONFIRMATION_REPORT.md)** — Trial 2 live 500 MB confirmation benchmark report (reversed order).
-
-- **[../benchmarks/results/LOCAL_BENCHMARK_TELEMETRY_CONSOLIDATED_REPORT.md](../benchmarks/results/LOCAL_BENCHMARK_TELEMETRY_CONSOLIDATED_REPORT.md)** — Consolidated local benchmark telemetry (16 MiB & 128 MiB synthetic loopback matrix).
-- **[benchmarks/REAL_WORLD_TEST_REPORT.md](benchmarks/REAL_WORLD_TEST_REPORT.md)** — Authoritative real-world test and UI evidence audit report.
-- **[LICENSE_REVIEW.md](LICENSE_REVIEW.md)** — Third-party license audits and GPL-3.0 compatibility verification.
+- **[../benchmarks/LATEST_COMPARISON.md](../benchmarks/LATEST_COMPARISON.md)** — Latest comparative benchmark summary.
 
 ---
 
-## 5. Historical Maintenance Audits (`docs/archive/maintenance-audits/`)
+## 5. Localized READMEs & Hosting Mirrors
 
-The following historical audit records, phased remediation logs, and initial rebranding audits are preserved for engineering reference in the archive:
-
-- **[archive/maintenance-audits/ANTIGRAVITY_FIX_REPORT.md](archive/maintenance-audits/ANTIGRAVITY_FIX_REPORT.md)** — Initial reverse engineering and defect triage.
-- **[archive/maintenance-audits/AUDIT_REMEDIATION_REPORT.md](archive/maintenance-audits/AUDIT_REMEDIATION_REPORT.md)** — Audit remediation report and verification matrix.
-- **[archive/maintenance-audits/BUG_FIX_LOG.md](archive/maintenance-audits/BUG_FIX_LOG.md)** — Detailed bug fix log (`BUG-001` through `BUG-014`).
-- **[archive/maintenance-audits/CURRENT_STATE_AUDIT.md](archive/maintenance-audits/CURRENT_STATE_AUDIT.md)** — Pre-rebranding state audit.
-- **[archive/maintenance-audits/DOCUMENTATION_AUDIT.md](archive/maintenance-audits/DOCUMENTATION_AUDIT.md)** — Documentation suite validation audit.
-- **[archive/maintenance-audits/FLUX_FAILURE_AUDIT.md](archive/maintenance-audits/FLUX_FAILURE_AUDIT.md)** — Diagnostic audit of legacy stream interception.
-- **[archive/maintenance-audits/FLUX_REBRANDING_AUDIT.md](archive/maintenance-audits/FLUX_REBRANDING_AUDIT.md)** — Audit of codebase rename to Radium.
-- **[archive/maintenance-audits/IDM_AUDIT_IMPLEMENTATION_MAP.md](archive/maintenance-audits/IDM_AUDIT_IMPLEMENTATION_MAP.md)** — Initial IDM feature parity roadmap.
-- **[archive/maintenance-audits/PHASE_REPORTS.md](archive/maintenance-audits/PHASE_REPORTS.md)** — Historical phase 1–10 build reports.
-- **[archive/maintenance-audits/PRODUCT_COMPLETION_AUDIT.md](archive/maintenance-audits/PRODUCT_COMPLETION_AUDIT.md)** — Early product completion audit.
-- **[archive/maintenance-audits/RELEASE_READINESS_REPORT.md](archive/maintenance-audits/RELEASE_READINESS_REPORT.md)** — Initial release readiness assessment.
-- **[archive/maintenance-audits/BENCHMARK_REPORT.md](archive/maintenance-audits/BENCHMARK_REPORT.md)** — Early internal benchmark measurements.
+- **[i18n/](i18n/)** — Localized README translations (`README.ar-SA.md`, `README.de-DE.md`, `README.es.md`, `README.fr.md`, `README.it-IT.md`, `README.ja.md`, `README.ko.md`, `README.pt-BR.md`, `README.ru-RU.md`, `README.zh-CN.md`, `README.zh-TW.md`).
+- **[hosting/MULTI_PLATFORM_REPOSITORY.md](hosting/MULTI_PLATFORM_REPOSITORY.md)** — Multi-platform Git mirror topology.
+- **[hosting/MULTI_PLATFORM_STATUS.md](hosting/MULTI_PLATFORM_STATUS.md)** — Mirror synchronization status.
+- **[hosting/GITLAB_SETUP.md](hosting/GITLAB_SETUP.md)** — GitLab mirror configuration notes.

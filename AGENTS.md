@@ -22,7 +22,7 @@ Your objective is to build and maintain **Radium Download Manager** (short name:
 2. **[docs/SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md)** and **[docs/TECHNOLOGY_STACK.md](docs/TECHNOLOGY_STACK.md)** define the system structure and approved technology choices.
 3. **[docs/adr/](docs/adr/)** (`0001` through `0008`) records binding architectural decisions.
 4. **Never override an Accepted or Proposed ADR silently.** If implementation evidence proves an ADR must change, you must:
-   - Document the empirical evidence in [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md),
+   - Document the empirical evidence in [docs/TECHNICAL_RISK_REGISTER.md](docs/TECHNICAL_RISK_REGISTER.md) or the relevant ADR,
    - Update or supersede the relevant ADR in `docs/adr/`, and
    - Update [docs/SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) in the same change.
 
@@ -32,7 +32,7 @@ Your objective is to build and maintain **Radium Download Manager** (short name:
 
 Before creating or modifying any file, inspect the repository state (`git status`, directory tree) and read the documents matching your task:
 
-1. **Every Task:** Read `AGENTS.md` (this file), [docs/REPOSITORY_AUDIT.md](docs/REPOSITORY_AUDIT.md), and [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md).
+1. **Every Task:** Read `AGENTS.md` (this file), [docs/INDEX.md](docs/INDEX.md), and [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md).
 2. **Desktop UI, Core Controller, or Storage Tasks:** Read [docs/SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md), [docs/DATA_MODEL_AND_STORAGE.md](docs/DATA_MODEL_AND_STORAGE.md), [docs/ERROR_HANDLING_AND_RECOVERY.md](docs/ERROR_HANDLING_AND_RECOVERY.md), and [docs/adr/0001-desktop-framework.md](docs/adr/0001-desktop-framework.md).
 3. **HTTP Segmented Download Engine Tasks:** Read [docs/DOWNLOAD_ENGINE_DESIGN.md](docs/DOWNLOAD_ENGINE_DESIGN.md) and [docs/adr/0005-download-engine-integration.md](docs/adr/0005-download-engine-integration.md).
 4. **HLS / DASH / Stream Pipeline Tasks:** Read [docs/STREAM_DOWNLOAD_PIPELINE.md](docs/STREAM_DOWNLOAD_PIPELINE.md), [docs/UPSTREAM_PROJECT_ANALYSIS.md](docs/UPSTREAM_PROJECT_ANALYSIS.md), and [docs/adr/0005-download-engine-integration.md](docs/adr/0005-download-engine-integration.md).
@@ -131,4 +131,13 @@ To preserve seamless operation for users upgrading from earlier working titles (
 2. **Named Pipe & Socket Discovery:** Desktop and NMH prioritize `\\.\pipe\Radium_IPC_<UserSID>` (Windows) or `/tmp/radium_ipc_<uid>.sock` (POSIX). Environmental overrides are evaluated in strict priority order: `RADIUM_IPC_SOCKET` > `FLUX_IPC_SOCKET` > `OPENIDM_IPC_SOCKET`.
 3. **State & Data Migration:** On initial startup, the desktop application automatically detects and migrates legacy state databases and task histories from `%LOCALAPPDATA%\Flux Download Manager`, `%LOCALAPPDATA%\Flux`, or `%LOCALAPPDATA%\OpenIDM` into `%LOCALAPPDATA%\Radium Download Manager`.
 4. **POSIX Key Derivation Seed:** Never alter the POSIX credential derivation seed (`OpenIDM_DPAPI_Equivalent_UserKey_v1_UID_`) without an accompanying cryptographic state migration.
+
+---
+
+## 11. Repository Hygiene Guardrails (Non-Negotiable)
+
+1. **No New Root-Level Markdown or Dated Audit Folders:** Never create new `.md` files in the repository root, `audit/` folders, `specs/` dumps, or one-off report files. Always update the existing authoritative specifications in `docs/` in place and keep [docs/INDEX.md](docs/INDEX.md) synchronized.
+2. **No Committed Binaries or Oversized Assets:** Never commit compiled `.exe`, `.msix`, `.dll`, or release `.zip` installers into Git. Release artifacts belong exclusively on GitHub Releases (with `release/SHA256SUMS.txt` for checksum verification).
+3. **No Local Paths or Runtime Logs:** Never commit hardcoded user filesystem paths (`C:\Users\...`, `/Users/...`) or runtime diagnostic logs (`diagnostics/`). Always use repository-relative paths or environment variables.
+
 

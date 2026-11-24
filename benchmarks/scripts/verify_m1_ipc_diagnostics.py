@@ -5,7 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 
-ROOT = Path(r"c:\Users\sayed\Downloads\Radium")
+ROOT = Path(__file__).resolve().parents[2]
 RADIUM_BIN = ROOT / "build" / "radium-x64" / "Release" / "radium.exe"
 NMH_BIN = ROOT / "build" / "radium-x64" / "Release" / "radium-nmh.exe"
 

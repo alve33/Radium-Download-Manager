@@ -12,10 +12,10 @@ To maintain transparent and reproducible technical claims, benchmark results in 
 
 | Category | Benchmark Payload | Endpoint / Network | Tested Build | Status | Authoritative Report |
 |---|---|---|---|---|---|
-| **Active Comparative Benchmark** | 500 MB Test File (`500MB.test`, 500,000,000 bytes) | `https://sg-lg.regxa.com/500MB.test` (Live Internet) | Radium v0.3.5 (Dev Build with Adaptive Range Splitting) | **Active / Current** | [`benchmarks/results/adaptive_500mb_final/20261026_500MB_ADAPTIVE_FINAL_REPORT.md`](results/adaptive_500mb_final/20261026_500MB_ADAPTIVE_FINAL_REPORT.md) & [`benchmarks/results/adaptive_500mb_confirmation/20261026_500MB_CONFIRMATION_REPORT.md`](results/adaptive_500mb_confirmation/20261026_500MB_CONFIRMATION_REPORT.md) |
-| **Archived Large-File Benchmark** | 2.14 GB AlmaLinux ISO (`AlmaLinux-8.10-x86_64-minimal.iso`) | `https://mirror.xeonbd.com/almalinux/8/...` (Live Internet) | Radium v0.3.2 (Production Release) | **Archived / Baseline** | [`benchmarks/results/IDM_RADIUM_2GB_COMPARISON.md`](results/IDM_RADIUM_2GB_COMPARISON.md) |
+| **Active Comparative Benchmark** | 500 MB Test File (`500MB.test`, 500,000,000 bytes) | `https://sg-lg.regxa.com/500MB.test` (Live Internet) | Radium v0.3.5 (Dev Build with Adaptive Range Splitting) | **Active / Current** | See Section 2 Below |
+| **Archived Large-File Benchmark** | 2.14 GB AlmaLinux ISO (`AlmaLinux-8.10-x86_64-minimal.iso`) | `https://mirror.xeonbd.com/almalinux/8/...` (Live Internet) | Radium v0.3.2 (Production Release) | **Archived / Baseline** | See Section 4 Below |
 | **Archived Rate-Limited Benchmark** | 100 MiB Binary (`100MB.bin`, 104,857,600 bytes) | `https://fsn1-speed.hetzner.com/100MB.bin` (Falkenstein Rate-Limited) | Radium v0.3.2 (Production Release) | **Archived / Historical** | See Section 3 Below |
-| **Controlled Local Loopback Matrix** | 16 MiB & 128 MiB Synthetic HTTP Payloads | Local RFC 7233 Python Server (Paced / Latency / Loss) | Radium v0.3.5 vs. Baseline | **Active / Engine Tuning** | [`benchmarks/results/20261026_ADAPTIVE_SPLITTING_EVALUATION.md`](results/20261026_ADAPTIVE_SPLITTING_EVALUATION.md) |
+| **Controlled Local Loopback Matrix** | 16 MiB & 128 MiB Synthetic HTTP Payloads | Local RFC 7233 Python Server (Paced / Latency / Loss) | Radium v0.3.5 vs. Baseline | **Active / Engine Tuning** | See GitHub Actions Artifacts |
 
 ---
 
@@ -72,14 +72,12 @@ Conducted on October 25, 2026 downloading an authentic 2,140,143,616 byte ISO (`
 | **Peak RAM (RSS)** | **~42–45 MB** | **~58–61 MB** | **Radium consumed ~26% less RAM** |
 | **Peak CPU Usage** | **~3.8–4.1%** | **~5.2–5.8%** | **Radium used ~27% less CPU** |
 
-Full report: [`benchmarks/results/IDM_RADIUM_2GB_COMPARISON.md`](results/IDM_RADIUM_2GB_COMPARISON.md).
-
 ---
 
 ## 5. Raw Evidence Retention & GitHub Actions Artifact Archives
 
 To prevent repository clone bloat while preserving scientific evidence and reproducibility:
-- **Consolidated Summaries & Reports:** Reusable test fixtures, Markdown reports, and consolidated audit summaries (such as [`benchmarks/results/LOCAL_BENCHMARK_TELEMETRY_CONSOLIDATED_REPORT.md`](results/LOCAL_BENCHMARK_TELEMETRY_CONSOLIDATED_REPORT.md)) remain tracked directly in Git.
+- **Consolidated Summaries & Reports:** Reusable benchmark summaries ([`benchmarks/RESULTS.md`](RESULTS.md) and [`benchmarks/LATEST_COMPARISON.md`](LATEST_COMPARISON.md)) remain tracked directly in Git.
 - **Raw Multi-Repeat Trial Dumps & Telemetry Traces:** Individual per-run trace dumps (`*repeat*.json`, `summary*.json`, and generated CSV files totaling ~69 MB across the benchmarking passes) are preserved in downloadable GitHub Actions workflow artifacts:
   - **Archive Artifact Name:** `raw-benchmark-evidence-archive`
   - **Source Workflow Run:** [Run #40286662496](https://github.com/sayedalve/Radium-Download-Manager/actions/runs/40286662496)

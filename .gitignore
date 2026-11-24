@@ -16,19 +16,15 @@ tools/win-x64/*
 !tools/win-x64/.gitkeep
 *.exe
 *.dll
-!release/*.exe
 
 # Third-party dependencies & audit artifacts
-third_party/
-idm audit/
+# Note: third_party/ submodules are registered in .gitmodules
 
-# Release archives and installers
+# Release archives and installers (distributed via GitHub Releases, not Git)
 *.zip
 *.tar.gz
 *.7z
-!release/*.zip
-!release/*.exe
-!release/*.msix
+*.msix
 
 # Visual Studio / MSVC artifacts
 .vs/
@@ -66,6 +62,7 @@ test_out/
 test_*_out/
 tmp/
 temp/
+diagnostics/
 
 # Python & Node.js
 __pycache__/
@@ -81,7 +78,6 @@ test-results/
 *.swp
 *~
 redesign/
-*antigravity*.txt
 benchmarks/*local*
 benchmarks/test_*
  
@@ -102,12 +98,6 @@ benchmarks/**/*.csv
 !extension/icons/*.png
 !docs/images/**/*.png
 !docs/images/*.png
-clean_status.py
-patch_tests.py
-update_dialog.py
 .agents/
 skills-lock.json
-
-
-qbt.cany/
 

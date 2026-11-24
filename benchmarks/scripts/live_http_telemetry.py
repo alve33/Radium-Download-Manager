@@ -4,7 +4,7 @@ import subprocess
 import time
 from pathlib import Path
 
-ROOT = Path(r"c:\Users\sayed\Downloads\Radium")
+ROOT = Path(__file__).resolve().parents[2]
 RADIUM_BIN = ROOT / "dist" / "Radium.exe"
 
 def run_test():

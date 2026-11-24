@@ -40,7 +40,7 @@ RADIUM_BIN_CANDIDATES = [
 ]
 RADIUM_BIN = next((p for p in RADIUM_BIN_CANDIDATES if p.exists()), RADIUM_BIN_CANDIDATES[0])
 FLUX_BIN = RADIUM_BIN
-IDM_DWNL_ROOT = Path(os.environ.get("APPDATA", "")) / "IDM" / "DwnlData" / os.environ.get("USERNAME", "sayed")
+IDM_DWNL_ROOT = Path(os.environ.get("APPDATA", "")) / "IDM" / "DwnlData" / os.environ.get("USERNAME", "user")
 
 
 def compute_sha256(file_path: Path) -> tuple[str, float]:

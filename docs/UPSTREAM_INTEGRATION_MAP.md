@@ -9,9 +9,9 @@
 ## 1. Upstream Repositories Directory Reference
 
 The source code of all three projects resides unmodified in `third_party/`:
-- **Brisk**: [`third_party/brisk/`](file:///c:/Users/sayed/Downloads/openidm/third_party/brisk) (Flutter / Dart segmented engine)
-- **Cat Catch**: [`third_party/cat-catch/`](file:///c:/Users/sayed/Downloads/openidm/third_party/cat-catch) (WebExtension media detection & manifest parser)
-- **N_m3u8DL-RE**: [`third_party/N_m3u8DL-RE/`](file:///c:/Users/sayed/Downloads/openidm/third_party/N_m3u8DL-RE) (.NET C# adaptive streaming engine)
+- **Brisk**: [`third_party/brisk/`](../third_party/brisk) (Flutter / Dart segmented engine)
+- **Cat Catch**: [`third_party/cat-catch/`](../third_party/cat-catch) (WebExtension media detection & manifest parser)
+- **N_m3u8DL-RE**: [`third_party/N_m3u8DL-RE/`](../third_party/N_m3u8DL-RE) (.NET C# adaptive streaming engine)
 
 ---
 

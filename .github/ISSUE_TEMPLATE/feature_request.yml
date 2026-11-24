@@ -1,0 +1,17 @@
+name: Feature Request
+description: Suggest a new capability or enhancement for Radium Download Manager.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem & Proposal
+      description: Describe the problem you're trying to solve and your proposed solution.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches or workarounds you've considered.

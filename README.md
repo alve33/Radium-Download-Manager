@@ -11,7 +11,7 @@
 <h1 align="center">Radium Download Manager</h1>
 
 <p align="center">
-  <b>English</b> · <a href="README.ja.md">日本語</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ko.md">한국어</a> · <a href="README.es.md">Español</a> · <a href="README.fr.md">Français</a> · <a href="README.pt-BR.md">Português</a> · <a href="README.de-DE.md">Deutsch</a> · <a href="README.ru-RU.md">Русский</a> · <a href="README.it-IT.md">Italiano</a> · <a href="README.ar-SA.md">العربية</a>
+  <b>English</b> · <a href="docs/i18n/README.ja.md">日本語</a> · <a href="docs/i18n/README.zh-CN.md">简体中文</a> · <a href="docs/i18n/README.zh-TW.md">繁體中文</a> · <a href="docs/i18n/README.ko.md">한국어</a> · <a href="docs/i18n/README.es.md">Español</a> · <a href="docs/i18n/README.fr.md">Français</a> · <a href="docs/i18n/README.pt-BR.md">Português</a> · <a href="docs/i18n/README.de-DE.md">Deutsch</a> · <a href="docs/i18n/README.ru-RU.md">Русский</a> · <a href="docs/i18n/README.it-IT.md">Italiano</a> · <a href="docs/i18n/README.ar-SA.md">العربية</a>
 </p>
 
 <p align="center">
@@ -308,7 +308,7 @@ Tested on an authentic 2,140,143,616 byte ISO (`AlmaLinux-8.10-x86_64-minimal.is
 | **Peak Memory (RSS)** | ~42–45 MB | ~58–61 MB | Radium uses ~26% less RAM |
 | **Peak CPU Usage** | ~3.8–4.1% | ~5.2–5.8% | Radium uses ~27% less CPU |
 
-See [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) and [`benchmarks/results/IDM_RADIUM_2GB_COMPARISON.md`](benchmarks/results/IDM_RADIUM_2GB_COMPARISON.md) for full trial records.
+See [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md) for full trial records.
 </details>
 
 <br>
