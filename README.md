@@ -16,7 +16,7 @@
 
 <p align="center">
   <b>Fast, simple Windows 11 download manager with built-in video fetching.</b><br>
-  Accelerate multi-connection file downloads and capture videos from supported browsers (HLS, DASH, and web streams).<br>
+  Accelerate multi-connection file downloads and download videos from YouTube, Bilibili, and many other websites (HLS, DASH, and web streams).<br>
   Lightweight native C++20 &amp; Win32 app with zero Electron bloat, minimal RAM, and no background noise.
 </p>
 
@@ -233,36 +233,6 @@ Radium is built from the ground up for a global user base. Internationalization 
 - **Offline & Self-Contained:** Language strings are loaded directly from local JSON catalogs (`translations/desktop.json`) with fallback to English for missing keys.
 - **Script & Unicode Fidelity:** Native ISO C++20 Unicode pipeline using UTF-8 internally and `std::wstring` at Win32 boundaries, with right-to-left (RTL) layout awareness designed for Arabic (`ar-SA`) and Persian (`fa-IR`).
 
-### Application Language Catalog Status
-
-The table below reflects the actual status of language catalogs in the Radium desktop application (`src/ui/localization.cpp` and `translations/desktop.json`):
-
-| Language | Native Name | Code | Status | README Available |
-| :--- | :--- | :---: | :---: | :---: |
-| **English** | English | `en` | **Available (Base)** | [README.md](README.md) |
-| **Japanese** | 日本語 | `ja` | **Available** | [README.ja.md](README.ja.md) |
-| **Simplified Chinese** | 简体中文 | `zh-CN` | **Available** | [README.zh-CN.md](README.zh-CN.md) |
-| **Traditional Chinese** | 繁體中文 | `zh-TW` | **Available** | [README.zh-TW.md](README.zh-TW.md) |
-| **Korean** | 한국어 | `ko` | **Available** | [README.ko.md](README.ko.md) |
-| **Spanish** | Español | `es` | **Available** | [README.es.md](README.es.md) |
-| **French** | Français | `fr` | **Available** | [README.fr.md](README.fr.md) |
-| **Brazilian Portuguese** | Português (Brasil) | `pt-BR` | **Available** | [README.pt-BR.md](README.pt-BR.md) |
-| **German** | Deutsch | `de-DE` | **Available** | [README.de-DE.md](README.de-DE.md) |
-| **Russian** | Русский | `ru-RU` | **Available** | [README.ru-RU.md](README.ru-RU.md) |
-| **Italian** | Italiano | `it-IT` | **Available** | [README.it-IT.md](README.it-IT.md) |
-| **Arabic** | العربية | `ar-SA` | **Available (RTL)** | [README.ar-SA.md](README.ar-SA.md) |
-| **Vietnamese** | Tiếng Việt | `vi` | **Available** | Planned |
-| **Dutch** | Nederlands | `nl-NL` | **Available** | Planned |
-| **Polish** | Polski | `pl-PL` | **Available** | Planned |
-| **Turkish** | Türkçe | `tr-TR` | **Available** | Planned |
-| **Indonesian** | Bahasa Indonesia | `id-ID` | **Available** | Planned |
-| **Persian** | فارسی | `fa-IR` | **Available (RTL)** | Planned |
-| **Ukrainian** | Українська | `uk-UA` | **Available** | Planned |
-| **Czech** | Čeština | `cs-CZ` | **Available** | Planned |
-| **Romanian** | Română | `ro-RO` | **Available** | Planned |
-| **Thai** | ไทย | `th-TH` | **Available** | Planned |
-| **Swedish** | Svenska | `sv-SE` | **Available** | Planned |
-| **Greek** | Ελληνικά | `el-GR` | **Available** | Planned |
 
 <br>
 
@@ -508,18 +478,8 @@ Bug reports and focused pull requests are welcome. Please read [CONTRIBUTING.md]
 
 Radium Download Manager is open-source software licensed under the **Apache License, Version 2.0** ([Apache-2.0](LICENSE)).
 
-### Third-Party Components & Attributions
-Radium incorporates or interoperates with the following third-party components and utilities:
-
-| Component | Project / Source | License | Purpose in Radium |
-|---|---|---|---|
-| **Stream Extraction** | [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) | MIT | Out-of-process HLS/DASH stream segment downloader |
-| **Container Muxing** | [FFmpeg](https://ffmpeg.org/) | LGPL-2.1+ / LGPL-3.0 | Out-of-process video/audio segment demuxing and container remuxing |
-| **RAII Wrappers** | [Microsoft WIL](https://github.com/microsoft/wil) | MIT | Windows Implementation Libraries for exception-safe Win32 handles |
-| **State Database** | [SQLite](https://www.sqlite.org/) | Public Domain | Embedded ACID-compliant database with Write-Ahead Logging (WAL) |
-| **JSON Engine** | [nlohmann/json](https://github.com/nlohmann/json) | MIT | Structured JSON serialization for IPC and task import/export |
-
-See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`NOTICE`](NOTICE).
+### Third-Party Components
+Radium uses [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Public Domain), and [nlohmann/json](https://github.com/nlohmann/json) (MIT). See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`NOTICE`](NOTICE).
 
 <br>
 

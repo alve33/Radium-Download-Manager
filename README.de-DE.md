@@ -16,7 +16,7 @@
 
 <p align="center">
   <b>Schneller, schlanker Windows 11 Download-Manager mit integrierter Video- und Medienerfassung.</b><br>
-  Beschleunigen Sie Dateidownloads über dynamische Mehrfachverbindungen und erfassen Sie Online-Videos (HLS, DASH und Web-Streams) mit nur einem Klick.<br>
+  Beschleunigen Sie Dateidownloads über dynamische Mehrfachverbindungen und laden Sie Videos von YouTube, Bilibili und vielen weiteren Websites herunter (HLS, DASH und Web-Streams).<br>
   Native C++20- und Win32-Architektur ohne Electron-Overhead – minimaler Arbeitsspeicherverbrauch, ressourcenschonend und ohne störende Hintergrundprozesse.
 </p>
 
@@ -300,11 +300,8 @@ Beiträge zur Weiterentwicklung sind herzlich willkommen! Bitte lesen Sie vor de
 
 Radium Download Manager steht unter der **Apache-2.0-Lizenz**. Einzelheiten finden Sie in der Datei [LICENSE](LICENSE).
 
-### Drittanbieter-Komponenten & Namensnennungen
-- **[Brisk](https://github.com/BrisklyDev/brisk)** – Architekturinspiration für die segmentierte HTTP-Download-Engine (GPL-3.0).
-- **[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE)** – Stream-Verarbeitungs-Worker (MIT).
-- **[FFmpeg](https://ffmpeg.org/)** – Audio- und Video-Muxing (LGPL-2.1+ / GPL-3.0).
-- **[SQLite 3](https://www.sqlite.org/)** – Zustands- und Verlaufsdatenbank (Public Domain).
+### Drittanbieter-Komponenten
+Radium nutzt [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0), [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL/GPL) und [SQLite 3](https://www.sqlite.org/) (Public Domain).
 
 ---
 <p align="center">

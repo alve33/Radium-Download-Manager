@@ -18,7 +18,7 @@
 
 <p align="center">
   <b>مدير تنزيل سريع وخفيف لنظام Windows 11 مع ميزة التقاط الوسائط والفيديو المدمجة.</b><br>
-  تسريع تنزيل الملفات عبر الاتصالات المتعددة المجزأة والتقاط مقاطع الفيديو عبر الإنترنت (HLS وDASH وبث الويب) بنقرة واحدة.<br>
+  تسريع تنزيل الملفات عبر الاتصالات المتعددة المجزأة وتنزيل مقاطع الفيديو من YouTube وBilibili والعديد من المواقع الأخرى (HLS وDASH وبث الويب).<br>
   تطبيق أصيل مبني باستخدام C++20 وWin32 دون عبء Electron الزائد — استهلاك ضئيل للذاكرة العشوائية وتشغيل هادئ خالٍ من العمليات الخلفية غير الضرورية.
 </p>
 
@@ -302,11 +302,8 @@ npm test
 
 يخضع برنامج Radium Download Manager لترخيص **Apache-2.0**. لمزيد من التفاصيل، راجع ملف [LICENSE](LICENSE).
 
-### المكونات الخارجية وحقوق الملكية
-- **[Brisk](https://github.com/BrisklyDev/brisk)** – الاستلهام الهندسي لمحرك تنزيل HTTP المجزأ في C++ (GPL-3.0).
-- **[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE)** – أداة معالجة وتنزيل تدفقات HLS وDASH (MIT).
-- **[FFmpeg](https://ffmpeg.org/)** – مكتبة وأدوات دمج الوسائط والصوتيات (LGPL-2.1+ / GPL-3.0).
-- **[SQLite 3](https://www.sqlite.org/)** – محرك قواعد البيانات المدمج لحفظ المهام والسجل (الملكية العامة).
+### المكونات الخارجية
+يستخدم Radium كلاً من [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0) و[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT) و[FFmpeg](https://ffmpeg.org/) (LGPL/GPL) و[SQLite 3](https://www.sqlite.org/) (Public Domain).
 
 ---
 <p align="center">

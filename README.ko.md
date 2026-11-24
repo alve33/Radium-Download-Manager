@@ -16,7 +16,7 @@
 
 <p align="center">
   <b>동영상 다운로드 기능을 내장한 빠르고 간결한 Windows 11 다운로드 매니저.</b><br>
-  다중 연결 파일 다운로드를 가속화하고 브라우저에서 동영상(HLS, DASH 및 웹 스트림)을 안전하게 캡처합니다.<br>
+  다중 연결 파일 다운로드를 가속화하고 YouTube, Bilibili 등 다양한 웹사이트의 동영상(HLS, DASH 및 웹 스트림)을 다운로드할 수 있습니다.<br>
   Electron이 없는 순수 C++20 및 Win32 네이티브 앱으로, 가벼운 메모리 점유율과 쾌적한 사용성을 보장합니다.
 </p>
 
@@ -228,36 +228,6 @@ Radium은 전 세계 사용자를 위해 설계되었습니다. 다국어 처리
 - **완전한 오프라인 환경:** 로컬 JSON 파일(`translations/desktop.json`)에서 번역을 읽어오며 번역이 없는 항목은 영어로 자연스럽게 폴백됩니다.
 - **유니코드 및 RTL 지원:** UTF-8과 Win32 `std::wstring`을 기반으로 구축되었으며 아랍어(`ar-SA`) 및 페르시아어(`fa-IR`)를 위한 우측에서 좌측으로(RTL) 읽기 레이아웃을 지원합니다.
 
-### 데스크톱 애플리케이션 언어 지원 현황
-
-다음 표는 Radium 데스크톱 애플리케이션 코드(`src/ui/localization.cpp` 및 `translations/desktop.json`)의 언어 지원 현황입니다:
-
-| 언어 | 고유 표기 | 코드 | 상태 | 지원 README |
-| :--- | :--- | :---: | :---: | :---: |
-| **영어** | English | `en` | **지원됨 (기준)** | [README.md](README.md) |
-| **일본어** | 日本語 | `ja` | **지원됨** | [README.ja.md](README.ja.md) |
-| **중국어 (간체)** | 简体中文 | `zh-CN` | **지원됨** | [README.zh-CN.md](README.zh-CN.md) |
-| **중국어 (번체)** | 繁體中文 | `zh-TW` | **지원됨** | [README.zh-TW.md](README.zh-TW.md) |
-| **한국어** | 한국어 | `ko` | **지원됨** | [README.ko.md](README.ko.md) |
-| **스페인어** | Español | `es` | **지원됨** | [README.es.md](README.es.md) |
-| **프랑스어** | Français | `fr` | **지원됨** | [README.fr.md](README.fr.md) |
-| **포르투갈어 (브라질)** | Português (Brasil) | `pt-BR` | **지원됨** | [README.pt-BR.md](README.pt-BR.md) |
-| **독일어** | Deutsch | `de-DE` | **지원됨** | [README.de-DE.md](README.de-DE.md) |
-| **러시아어** | Русский | `ru-RU` | **지원됨** | [README.ru-RU.md](README.ru-RU.md) |
-| **이탈리아어** | Italiano | `it-IT` | **지원됨** | [README.it-IT.md](README.it-IT.md) |
-| **아랍어** | العربية | `ar-SA` | **지원됨 (RTL)** | [README.ar-SA.md](README.ar-SA.md) |
-| **베트남어** | Tiếng Việt | `vi` | **지원됨** | 추가 예정 |
-| **네덜란드어** | Nederlands | `nl-NL` | **지원됨** | 추가 예정 |
-| **폴란드어** | Polski | `pl-PL` | **지원됨** | 추가 예정 |
-| **튀르키예어** | Türkçe | `tr-TR` | **지원됨** | 추가 예정 |
-| **인도네시아어** | Bahasa Indonesia | `id-ID` | **지원됨** | 추가 예정 |
-| **페르시아어** | فارسی | `fa-IR` | **지원됨 (RTL)** | 추가 예정 |
-| **우크라이나어** | Українська | `uk-UA` | **지원됨** | 추가 예정 |
-| **체코어** | Čeština | `cs-CZ` | **지원됨** | 추가 예정 |
-| **루마니아어** | Română | `ro-RO` | **지원됨** | 추가 예정 |
-| **태국어** | ไทย | `th-TH` | **지원됨** | 추가 예정 |
-| **스웨덴어** | Svenska | `sv-SE` | **지원됨** | 추가 예정 |
-| **그리스어** | Ελληνικά | `el-GR` | **지원됨** | 추가 예정 |
 
 <br>
 
@@ -473,17 +443,7 @@ Radium은 서버가 유효한 `206 Partial Content` 응답을 줄 때만 다중 
 Radium Download Manager는 **Apache License, Version 2.0** ([Apache-2.0](LICENSE)) 하에 배포되는 오픈 소스 소프트웨어입니다.
 
 ### 서드파티 오픈소스 컴포넌트
-Radium은 다음의 오픈소스 프로젝트를 활용하거나 연동하고 있습니다:
-
-| 구성 요소 | 프로젝트 / 출처 | 라이선스 | Radium 내 역할 |
-|---|---|---|---|
-| **스트림 추출** | [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) | MIT | 아웃오브프로세스 HLS/DASH 미디어 조각 다운로드 |
-| **컨테이너 패키징** | [FFmpeg](https://ffmpeg.org/) | LGPL-2.1+ / LGPL-3.0 | 비디오/오디오 세그먼트 디먹싱 및 컨테이너 무손실 다중화 |
-| **RAII 래퍼** | [Microsoft WIL](https://github.com/microsoft/wil) | MIT | 예외에 안전한 Win32 OS 핸들 래퍼 |
-| **상태 데이터베이스** | [SQLite](https://www.sqlite.org/) | Public Domain | WAL 모드가 적용된 신뢰도 높은 임베디드 데이터베이스 |
-| **JSON 직렬화** | [nlohmann/json](https://github.com/nlohmann/json) | MIT | IPC 메시지 및 설정 데이터 직렬화/파싱 |
-
-자세한 내용은 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 및 [`NOTICE`](NOTICE)를 참조하세요.
+[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Public Domain), [nlohmann/json](https://github.com/nlohmann/json) (MIT)를 사용합니다. 자세한 내용은 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 및 [`NOTICE`](NOTICE)를 참조하세요.
 
 <br>
 

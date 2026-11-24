@@ -16,7 +16,7 @@
 
 <p align="center">
   <b>動画ダウンロード機能を内蔵した、高速でシンプルな Windows 11 向けダウンロードマネージャー。</b><br>
-  複数接続によるファイルダウンロードの高速化と、対応ブラウザーからの動画キャプチャ（HLS、DASH、Web ストリーム）を実現。<br>
+  複数接続による高速ファイルダウンロードに加え、YouTube、Bilibili をはじめ多くの Web サイトから動画（HLS、DASH、Web ストリーム）をダウンロード可能。<br>
   Electron による余分なオーバーヘッドがなく、最小限のメモリ消費とバックグラウンド動作を誇るネイティブ C++20 &amp; Win32 アプリケーション。
 </p>
 
@@ -228,36 +228,6 @@ Radium は世界中のユーザーに向けて設計されています。国際�
 - **完全オフライン動作:** 言語データはローカルの JSON カタログ（`translations/desktop.json`）から読み込まれ、未定義キーは英語に自動フォールバック。
 - **高度な Unicode パイプライン:** 内部 UTF-8、Win32 境界 `std::wstring` を採用し、アラビア語（`ar-SA`）やペルシア語（`fa-IR`）などの右横書き（RTL）言語にも対応。
 
-### アプリケーション言語カタログ状況
-
-以下は Radium デスクトップアプリケーション（`src/ui/localization.cpp` および `translations/desktop.json`）における言語カタログの実装状況です：
-
-| 言語 | 現地表記 | コード | 実装状況 | 対応 README |
-| :--- | :--- | :---: | :---: | :---: |
-| **英語** | English | `en` | **利用可能 (基本)** | [README.md](README.md) |
-| **日本語** | 日本語 | `ja` | **利用可能** | [README.ja.md](README.ja.md) |
-| **簡体字中国語** | 简体中文 | `zh-CN` | **利用可能** | [README.zh-CN.md](README.zh-CN.md) |
-| **繁体字中国語** | 繁體中文 | `zh-TW` | **利用可能** | [README.zh-TW.md](README.zh-TW.md) |
-| **韓国語** | 한국어 | `ko` | **利用可能** | [README.ko.md](README.ko.md) |
-| **スペイン語** | Español | `es` | **利用可能** | [README.es.md](README.es.md) |
-| **フランス語** | Français | `fr` | **利用可能** | [README.fr.md](README.fr.md) |
-| **ブラジルポルトガル語** | Português (Brasil) | `pt-BR` | **利用可能** | [README.pt-BR.md](README.pt-BR.md) |
-| **ドイツ語** | Deutsch | `de-DE` | **利用可能** | [README.de-DE.md](README.de-DE.md) |
-| **ロシア語** | Русский | `ru-RU` | **利用可能** | [README.ru-RU.md](README.ru-RU.md) |
-| **イタリア語** | Italiano | `it-IT` | **利用可能** | [README.it-IT.md](README.it-IT.md) |
-| **アラビア語** | العربية | `ar-SA` | **利用可能 (RTL)** | [README.ar-SA.md](README.ar-SA.md) |
-| **ベトナム語** | Tiếng Việt | `vi` | **利用可能** | 順次展開予定 |
-| **オランダ語** | Nederlands | `nl-NL` | **利用可能** | 順次展開予定 |
-| **ポーランド語** | Polski | `pl-PL` | **利用可能** | 順次展開予定 |
-| **トルコ語** | Türkçe | `tr-TR` | **利用可能** | 順次展開予定 |
-| **インドネシア語** | Bahasa Indonesia | `id-ID` | **利用可能** | 順次展開予定 |
-| **ペルシア語** | فارسی | `fa-IR` | **利用可能 (RTL)** | 順次展開予定 |
-| **ウクライナ語** | Українська | `uk-UA` | **利用可能** | 順次展開予定 |
-| **チェコ語** | Čeština | `cs-CZ` | **利用可能** | 順次展開予定 |
-| **ルーマニア語** | Română | `ro-RO` | **利用可能** | 順次展開予定 |
-| **タイ語** | ไทย | `th-TH` | **利用可能** | 順次展開予定 |
-| **スウェーデン語** | Svenska | `sv-SE` | **利用可能** | 順次展開予定 |
-| **ギリシャ語** | Ελληνικά | `el-GR` | **利用可能** | 順次展開予定 |
 
 <br>
 
@@ -473,17 +443,7 @@ Radium は、リモートサーバーが正常な `206 Partial Content` レス�
 Radium Download Manager は **Apache License, Version 2.0** ([Apache-2.0](LICENSE)) の下で公開されているオープンソースソフトウェアです。
 
 ### サードパーティ製コンポーネント
-Radium は以下のオープンソースコンポーネントを活用しています：
-
-| コンポーネント | プロジェクト / 配布元 | ライセンス | Radium 内での用途 |
-|---|---|---|---|
-| **ストリーム抽出** | [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) | MIT | HLS/DASH ストリームセグメントのプロセス外ダウンローダー |
-| **コンテナ結合** | [FFmpeg](https://ffmpeg.org/) | LGPL-2.1+ / LGPL-3.0 | 音声・動画セグメントのプロセス外多重化およびコンテナ結合 |
-| **RAII ラッパー** | [Microsoft WIL](https://github.com/microsoft/wil) | MIT | 例外安全な Win32 ハンドル管理 |
-| **状態データベース** | [SQLite](https://www.sqlite.org/) | Public Domain | WAL モードによる高速な ACID 準拠ローカルデータベース |
-| **JSON エンジン** | [nlohmann/json](https://github.com/nlohmann/json) | MIT | IPC およびタスク設定の構造化 JSON シリアライザー |
-
-詳細は [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) および [`NOTICE`](NOTICE) を参照してください。
+[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT)、[FFmpeg](https://ffmpeg.org/) (LGPL)、[Microsoft WIL](https://github.com/microsoft/wil) (MIT)、[SQLite](https://www.sqlite.org/) (Public Domain)、[nlohmann/json](https://github.com/nlohmann/json) (MIT) を使用しています。詳細は [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) および [`NOTICE`](NOTICE) をご覧ください。
 
 <br>
 

@@ -16,7 +16,7 @@
 
 <p align="center">
   <b>Gestionnaire de téléchargements rapide et fluide pour Windows 11 avec capture vidéo intégrée.</b><br>
-  Accélérez vos téléchargements de fichiers grâce au découpage multiconnexion et capturez les vidéos en ligne (HLS, DASH et flux web) en un seul clic.<br>
+  Accélérez vos téléchargements de fichiers grâce au découpage multiconnexion et téléchargez des vidéos depuis YouTube, Bilibili et de nombreux autres sites web (HLS, DASH et flux web).<br>
   Application native C++20 et Win32 ultra-légère, sans le moindre surcoût lié à Electron — consommation minimale de mémoire vive et exécution discrète sans processus d'arrière-plan inutiles.
 </p>
 
@@ -300,11 +300,8 @@ Les contributions au projet sont les bienvenues ! Veuillez consulter notre guide
 
 Radium Download Manager est distribué sous la **licence Apache-2.0**. Pour plus de précisions, reportez-vous au fichier [LICENSE](LICENSE).
 
-### Composants tiers et remerciements
-- **[Brisk](https://github.com/BrisklyDev/brisk)** – Source d'inspiration pour le moteur de téléchargement segmenté en C++ (GPL-3.0).
-- **[N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE)** – Assistant de traitement et de téléchargement de flux HLS/DASH (MIT).
-- **[FFmpeg](https://ffmpeg.org/)** – Moteur de multiplexage audio et vidéo (LGPL-2.1+ / GPL-3.0).
-- **[SQLite 3](https://www.sqlite.org/)** – Base de données transactionnelle embarquée pour l'historique et les états (Domaine public).
+### Composants tiers
+Radium s'appuie sur [Brisk](https://github.com/BrisklyDev/brisk) (GPL-3.0), [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL/GPL) et [SQLite 3](https://www.sqlite.org/) (Domaine public).
 
 ---
 <p align="center">

@@ -16,7 +16,7 @@
 
 <p align="center">
   <b>快速、简洁的 Windows 11 下載管理器，內建强大的网页影片擷取功能。</b><br>
-  加速多連線文件下載，一键擷取主流瀏覽器中的線上影片（HLS、DASH 和 Web 媒体流）。<br>
+  加速多連線檔案下載，支援從 YouTube、Bilibili 等眾多網站下載影片（HLS、DASH 和 Web 媒體流）。<br>
   原生 C++20 &amp; Win32 建置，无任何 Electron 臃肿元件，占用极低記憶體，后台零干扰。
 </p>
 
@@ -228,36 +228,6 @@ Radium 为全球化而设计。国际化框架深度集成于 Win32 原生桌面
 - **纯本地化离线支援：** 文本字典直接从本地 JSON 目录（`translations/desktop.json`）加载，对于未定义字段平滑回退至英文。
 - **全字符集与排版方向感知：** 核心建置在 Unicode 体系上，在阿拉伯语（`ar-SA`）与波斯语（`fa-IR`）下自动开启从右到左（RTL）镜像排版适配。
 
-### 用戶端语言包支援状态表
-
-下表记录了 Radium 桌面用戶端代码（`src/ui/localization.cpp` 及 `translations/desktop.json`）中的语言支援现状：
-
-| 语言名称 | 本地原生名称 | 语言代码 | 介面状态 | 对应 README |
-| :--- | :--- | :---: | :---: | :---: |
-| **英语 (English)** | English | `en` | **已支援 (基准语言)** | [README.md](README.md) |
-| **日语** | 日本語 | `ja` | **已支援** | [README.ja.md](README.ja.md) |
-| **繁體中文** | 繁體中文 | `zh-CN` | **已支援** | [README.zh-CN.md](README.zh-CN.md) |
-| **繁体中文** | 繁體中文 | `zh-TW` | **已支援** | [README.zh-TW.md](README.zh-TW.md) |
-| **韩语** | 한국어 | `ko` | **已支援** | [README.ko.md](README.ko.md) |
-| **西班牙语** | Español | `es` | **已支援** | [README.es.md](README.es.md) |
-| **法语** | Français | `fr` | **已支援** | [README.fr.md](README.fr.md) |
-| **巴西葡萄牙语** | Português (Brasil) | `pt-BR` | **已支援** | [README.pt-BR.md](README.pt-BR.md) |
-| **德语** | Deutsch | `de-DE` | **已支援** | [README.de-DE.md](README.de-DE.md) |
-| **俄语** | Русский | `ru-RU` | **已支援** | [README.ru-RU.md](README.ru-RU.md) |
-| **意大利语** | Italiano | `it-IT` | **已支援** | [README.it-IT.md](README.it-IT.md) |
-| **阿拉伯语** | العربية | `ar-SA` | **已支援 (RTL)** | [README.ar-SA.md](README.ar-SA.md) |
-| **越南语** | Tiếng Việt | `vi` | **已支援** | 排程中 |
-| **荷兰语** | Nederlands | `nl-NL` | **已支援** | 排程中 |
-| **波兰语** | Polski | `pl-PL` | **已支援** | 排程中 |
-| **土耳其语** | Türkçe | `tr-TR` | **已支援** | 排程中 |
-| **印尼语** | Bahasa Indonesia | `id-ID` | **已支援** | 排程中 |
-| **波斯语** | فارسی | `fa-IR` | **已支援 (RTL)** | 排程中 |
-| **乌克兰语** | Українська | `uk-UA` | **已支援** | 排程中 |
-| **捷克语** | Čeština | `cs-CZ` | **已支援** | 排程中 |
-| **罗马尼亚语** | Română | `ro-RO` | **已支援** | 排程中 |
-| **泰语** | ไทย | `th-TH` | **已支援** | 排程中 |
-| **瑞典语** | Svenska | `sv-SE` | **已支援** | 排程中 |
-| **希腊语** | Ελληνικά | `el-GR` | **已支援** | 排程中 |
 
 <br>
 
@@ -473,17 +443,7 @@ Radium 仅在服务端正确响应 `206 Partial Content` 时启用多連線分�
 Radium Download Manager 遵循 **Apache License, Version 2.0** ([Apache-2.0](LICENSE)) 开源。
 
 ### 第三方开源元件
-本專案集成或调用了以下优秀的第三方开源库：
-
-| 元件名称 | 專案源連結 | 开源协议 | 在 Radium 中的职责 |
-|---|---|---|---|
-| **流媒体抽取** | [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) | MIT | 外部處理程序执行 HLS/DASH 媒体流分段下載 |
-| **容器格式混音封裝** | [FFmpeg](https://ffmpeg.org/) | LGPL-2.1+ / LGPL-3.0 | 影音分段提取、无损重封装与格式校验 |
-| **RAII 资源包装** | [Microsoft WIL](https://github.com/microsoft/wil) | MIT | 提供异常安全的 Windows 原生资源句柄托管 |
-| **持久化資料库** | [SQLite](https://www.sqlite.org/) | Public Domain | 具备 WAL 日志的高可靠嵌入式状态存储 |
-| **JSON 序列化** | [nlohmann/json](https://github.com/nlohmann/json) | MIT | IPC 通信协议与任务設定的解析与序列化 |
-
-详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`NOTICE`](NOTICE)。
+本專案使用 [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT)、[FFmpeg](https://ffmpeg.org/) (LGPL)、[Microsoft WIL](https://github.com/microsoft/wil) (MIT)、[SQLite](https://www.sqlite.org/) (Public Domain) 與 [nlohmann/json](https://github.com/nlohmann/json) (MIT)。詳見 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 與 [`NOTICE`](NOTICE)。
 
 <br>
 

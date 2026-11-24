@@ -16,7 +16,7 @@
 
 <p align="center">
   <b>Gestor de descargas rápido y sencillo para Windows 11 con captura de vídeo integrada.</b><br>
-  Acelera descargas multiconexión y captura vídeos de navegadores compatibles (HLS, DASH y transmisiones web).<br>
+  Acelera descargas multiconexión y descarga vídeos de YouTube, Bilibili y muchos otros sitios web (HLS, DASH y transmisiones web).<br>
   Aplicación nativa C++20 y Win32 ligera, sin sobrecarga de Electron, con mínimo consumo de RAM y silenciosa.
 </p>
 
@@ -228,34 +228,6 @@ Radium está pensado para una audiencia global. La internacionalización está i
 - **Completamente Autónomo:** Los textos se cargan desde archivos locales JSON (`translations/desktop.json`) con retroceso automático al inglés.
 - **Compatibilidad con Escritura RTL:** Diseñado para admitir idiomas con lectura de derecha a izquierda como el árabe (`ar-SA`) y el persa (`fa-IR`).
 
-### Estado de los Catálogos de Idioma en la Aplicación
-
-| Idioma | Nombre Nativo | Código | Estado en la App | README Disponible |
-| :--- | :--- | :---: | :---: | :---: |
-| **Inglés** | English | `en` | **Disponible (Base)** | [README.md](README.md) |
-| **Japonés** | 日本語 | `ja` | **Disponible** | [README.ja.md](README.ja.md) |
-| **Chino Simplificado** | 简体中文 | `zh-CN` | **Disponible** | [README.zh-CN.md](README.zh-CN.md) |
-| **Chino Tradicional** | 繁體中文 | `zh-TW` | **Disponible** | [README.zh-TW.md](README.zh-TW.md) |
-| **Coreano** | 한국어 | `ko` | **Disponible** | [README.ko.md](README.ko.md) |
-| **Español** | Español | `es` | **Disponible** | [README.es.md](README.es.md) |
-| **Francés** | Français | `fr` | **Disponible** | [README.fr.md](README.fr.md) |
-| **Portugués de Brasil** | Português (Brasil) | `pt-BR` | **Disponible** | [README.pt-BR.md](README.pt-BR.md) |
-| **Alemán** | Deutsch | `de-DE` | **Disponible** | [README.de-DE.md](README.de-DE.md) |
-| **Ruso** | Русский | `ru-RU` | **Disponible** | [README.ru-RU.md](README.ru-RU.md) |
-| **Italiano** | Italiano | `it-IT` | **Disponible** | [README.it-IT.md](README.it-IT.md) |
-| **Árabe** | العربية | `ar-SA` | **Disponible (RTL)** | [README.ar-SA.md](README.ar-SA.md) |
-| **Vietnamita** | Tiếng Việt | `vi` | **Disponible** | Planificado |
-| **Neerlandés** | Nederlands | `nl-NL` | **Disponible** | Planificado |
-| **Polaco** | Polski | `pl-PL` | **Disponible** | Planificado |
-| **Turco** | Türkçe | `tr-TR` | **Disponible** | Planificado |
-| **Indonesio** | Bahasa Indonesia | `id-ID` | **Disponible** | Planificado |
-| **Persa** | فارسی | `fa-IR` | **Disponible (RTL)** | Planificado |
-| **Ucraniano** | Українська | `uk-UA` | **Disponible** | Planificado |
-| **Checo** | Čeština | `cs-CZ` | **Disponible** | Planificado |
-| **Rumano** | Română | `ro-RO` | **Disponible** | Planificado |
-| **Tailandés** | ไทย | `th-TH` | **Disponible** | Planificado |
-| **Sueco** | Svenska | `sv-SE` | **Disponible** | Planificado |
-| **Griego** | Ελληνικά | `el-GR` | **Disponible** | Planificado |
 
 <br>
 
@@ -416,15 +388,7 @@ Los informes de errores y las solicitudes de extracción (Pull Requests) son bie
 
 Radium Download Manager es software de código abierto publicado bajo la **Licencia Apache, Versión 2.0** ([Apache-2.0](LICENSE)).
 
-| Componente | Proyecto / Origen | Licencia | Propósito en Radium |
-|---|---|---|---|
-| **Extracción de Transmisiones** | [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) | MIT | Descarga externa de fragmentos HLS/DASH |
-| **Multiplexación de Contenedor** | [FFmpeg](https://ffmpeg.org/) | LGPL-2.1+ / LGPL-3.0 | Multiplexación sin pérdidas de audio y vídeo |
-| **Contenedores RAII** | [Microsoft WIL](https://github.com/microsoft/wil) | MIT | Manejo seguro de identificadores Win32 |
-| **Base de Datos de Estado** | [SQLite](https://www.sqlite.org/) | Dominio Público | Almacenamiento ACID integrado con registro WAL |
-| **Motor JSON** | [nlohmann/json](https://github.com/nlohmann/json) | MIT | Serialización estructurada de mensajes IPC y tareas |
-
-Consulte [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) y [`NOTICE`](NOTICE).
+Radium utiliza [N_m3u8DL-RE](https://github.com/nilaoda/N_m3u8DL-RE) (MIT), [FFmpeg](https://ffmpeg.org/) (LGPL), [Microsoft WIL](https://github.com/microsoft/wil) (MIT), [SQLite](https://www.sqlite.org/) (Dominio Público) y [nlohmann/json](https://github.com/nlohmann/json) (MIT). Consulta [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) y [`NOTICE`](NOTICE).
 
 <br>
 
