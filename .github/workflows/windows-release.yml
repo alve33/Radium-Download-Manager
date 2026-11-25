@@ -273,19 +273,19 @@ jobs:
             -StoreSubmission
 
       - name: Upload MSIX Package (Windows x64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: radium-msix-windows-x64
           path: release/msix/*.msix
 
       - name: Upload Release Distribution Packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: radium-dist-windows-x64
           path: dist/
 
       - name: Upload Build Evidence & Benchmark Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: radium-evidence-windows-x64
           path: |
@@ -348,7 +348,7 @@ jobs:
           python tests/test_installer_smoke.py --dist-dir dist --expected-version "${{ needs.build-and-package-x64.outputs.version }}"
 
       - name: Upload Installation Test Logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: installation-smoke-logs
@@ -393,7 +393,7 @@ jobs:
           node tests/browser/test_extension_runtime.js
 
       - name: Upload Browser Test Evidence & Screenshots
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: browser-extension-test-evidence
@@ -575,13 +575,13 @@ jobs:
             -StoreSubmission
 
       - name: Upload MSIX Package (Windows ARM64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: radium-msix-windows-arm64
           path: release/msix/*.msix
 
       - name: Upload Release Distribution Packages (ARM64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: radium-dist-windows-arm64
           path: dist/
@@ -639,7 +639,7 @@ jobs:
           python tests/test_installer_smoke.py --dist-dir dist --arch ARM64 --expected-version "${{ needs.build-and-package-arm64.outputs.version }}"
 
       - name: Upload Installation Test Logs (ARM64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: installation-smoke-logs-arm64
@@ -693,7 +693,7 @@ jobs:
           Copy-Item "release/msix/*.msix" "release/msix-bundle/" -Force
 
       - name: Upload Store Submission MSIX Packages & Bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: radium-msix-store-submission
           path: |

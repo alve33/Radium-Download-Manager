@@ -93,7 +93,7 @@ jobs:
           powershell -ExecutionPolicy Bypass -File scripts/package-release-zip.ps1 -Version "$env:RADIUM_VERSION" -PackageType Both -BuildDir "build/Release"
 
       - name: Stage Built Binaries & Release Packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: radium-build-binaries-x64
           path: |
@@ -274,7 +274,7 @@ jobs:
           Get-Content "COMPATIBILITY_REPORT_${{ matrix.os }}.md" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload Test Evidence & Compatibility Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: compatibility-evidence-${{ matrix.os }}
@@ -439,7 +439,7 @@ jobs:
           Get-Content "COMPATIBILITY_REPORT_windows-11-arm.md" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload Test Evidence & Compatibility Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: compatibility-evidence-windows-11-arm

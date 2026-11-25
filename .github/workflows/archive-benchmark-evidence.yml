@@ -33,7 +33,7 @@ jobs:
           }
 
       - name: Upload Raw Benchmark Evidence Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: raw-benchmark-evidence-archive
           path: staging_archive/
