@@ -13,7 +13,7 @@
 #include <vector>
 #include "common/types.hpp"
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 struct LiveSegment {
     uint32_t segment_id{0};
@@ -104,4 +104,4 @@ private:
     std::vector<std::shared_ptr<LiveSegment>> m_segments;
 };
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

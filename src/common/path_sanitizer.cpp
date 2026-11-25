@@ -22,7 +22,7 @@
 #include <unistd.h>
 #endif
 
-namespace openidm {
+namespace radium {
 
 std::string PathSanitizer::UrlDecode(std::string_view in) {
     std::string out;
@@ -1057,4 +1057,4 @@ bool PathSanitizer::PathsEquivalent(const std::filesystem::path& p1, const std::
 #endif
 }
 
-} // namespace openidm
+} // namespace radium

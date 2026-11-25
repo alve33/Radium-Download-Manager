@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace openidm::ui {
+namespace radium::ui {
 
 struct LanguageOption {
     std::string locale;
@@ -38,4 +38,4 @@ private:
 
 LocalizationManager& GetLocalizationManager();
 
-} // namespace openidm::ui
+} // namespace radium::ui

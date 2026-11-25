@@ -24,7 +24,7 @@
 #include "engine_torrent/peer_wire_protocol.hpp"
 #include "engine_torrent/tracker_client.hpp"
 
-namespace openidm::torrent::testing {
+namespace radium::torrent::testing {
 
 // 1. Mock BEP 15 UDP Tracker Server
 class MockUdpTrackerServer {
@@ -269,4 +269,4 @@ private:
     std::thread m_thread;
 };
 
-} // namespace openidm::torrent::testing
+} // namespace radium::torrent::testing

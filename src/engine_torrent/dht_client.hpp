@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — BitTorrent DHT Client (BEP 5 Kademlia DHT Iterative Peer Discovery)
+// Radium Download Manager — BitTorrent DHT Client (BEP 5 Kademlia DHT Iterative Peer Discovery)
 #pragma once
 
 #include <chrono>
@@ -29,7 +29,7 @@
 #include "engine_torrent/bencode.hpp"
 #include "engine_torrent/peer_wire_protocol.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 class DhtClient {
 public:
@@ -143,7 +143,7 @@ public:
                     const auto& d = dec_res.value.value();
                     if (!d.contains("t") || !d["t"].is_string() ||
                         !outstanding_transactions.erase(d["t"].as_string())) {
-                        OPENIDM_LOG_WARN("DhtClient", "Ignoring DHT response with unknown transaction id");
+                        RADIUM_LOG_WARN("DhtClient", "Ignoring DHT response with unknown transaction id");
                         continue;
                     }
                     if (d.contains("r") && d["r"].is_dict()) {
@@ -166,7 +166,7 @@ public:
                         if (r_dict.contains("nodes") && r_dict["nodes"].is_string()) {
                             const std::string& nodes_str = r_dict["nodes"].as_string();
                             if (nodes_str.size() % 26 != 0) {
-                                OPENIDM_LOG_WARN("DhtClient", "Ignoring malformed compact node payload of " + std::to_string(nodes_str.size()) + " bytes");
+                                RADIUM_LOG_WARN("DhtClient", "Ignoring malformed compact node payload of " + std::to_string(nodes_str.size()) + " bytes");
                                 continue;
                             }
                             size_t n_cnt = nodes_str.size() / 26;
@@ -190,4 +190,4 @@ public:
     }
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

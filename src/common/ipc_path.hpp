@@ -15,7 +15,7 @@
 #include <unistd.h>
 #endif
 
-namespace openidm::ipc {
+namespace radium::ipc {
 
 #ifdef _WIN32
 inline std::string GetCurrentUserSidString() {
@@ -67,12 +67,5 @@ inline std::string GetDefaultIpcSocketPath() {
 #endif
 }
 
-} // namespace openidm::ipc
-
-namespace radium::ipc {
-using openidm::ipc::GetDefaultIpcSocketPath;
-#ifdef _WIN32
-using openidm::ipc::GetCurrentUserSidString;
-#endif
 } // namespace radium::ipc
 

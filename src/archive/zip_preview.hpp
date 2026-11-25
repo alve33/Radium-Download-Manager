@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Non-Extracting ZIP Archive Central Directory Previewer & Security Guard
+// Radium Download Manager — Non-Extracting ZIP Archive Central Directory Previewer & Security Guard
 #pragma once
 
 #include <atomic>
@@ -12,7 +12,7 @@
 
 #include "common/types.hpp"
 
-namespace openidm::archive {
+namespace radium::archive {
 
 struct ZipEntryInfo {
     std::string file_path;
@@ -100,4 +100,4 @@ public:
         size_t max_files = 50000);
 };
 
-} // namespace openidm::archive
+} // namespace radium::archive

@@ -203,7 +203,7 @@ def test_foreground_and_dialog_activation():
     print("  [+] flux-nmh.exe and flux.exe binaries compiled and staged")
     print("  [+] Native Messaging Host configured with AllowSetForegroundWindow(pi.dwProcessId)")
     print("  [+] Named Pipe write configured with AllowSetForegroundWindow(ASFW_ANY)")
-    print("  [+] WM_OPENIDM_SHOW_NEW_DOWNLOAD handles SW_SHOW, SW_RESTORE, SetForegroundWindow, BringWindowToTop")
+    print("  [+] WM_RADIUM_SHOW_NEW_DOWNLOAD handles SW_SHOW, SW_RESTORE, SetForegroundWindow, BringWindowToTop")
     print("  [+] Duplicate dialog guard: FindWindowW(Flux_NewDownloadDlgClass) brings existing dialog to front")
     print("  -> PASS: Automatic foregrounding and modal New Download dialog fully verified.\n")
 

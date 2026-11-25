@@ -14,7 +14,7 @@ namespace radium::core {
 
 class SettingsSerializer {
 public:
-    static std::string SerializeToJson(const openidm::AppSettings& s) {
+    static std::string SerializeToJson(const radium::AppSettings& s) {
         std::ostringstream oss;
         oss << "{\n";
         oss << "  \"version\": 1,\n";
@@ -36,12 +36,12 @@ public:
         return oss.str();
     }
 
-    static openidm::Result<openidm::AppSettings> DeserializeFromJson(std::string_view json_str) {
+    static radium::Result<radium::AppSettings> DeserializeFromJson(std::string_view json_str) {
         if (json_str.empty()) {
-            return openidm::Result<openidm::AppSettings>::Err("ERR_EMPTY_JSON", "Settings JSON is empty");
+            return radium::Result<radium::AppSettings>::Err("ERR_EMPTY_JSON", "Settings JSON is empty");
         }
 
-        openidm::AppSettings s;
+        radium::AppSettings s;
         auto theme = ParseStringField(json_str, "theme");
         if (!theme.empty()) s.theme = theme;
         auto language = ParseStringField(json_str, "language");
@@ -67,7 +67,7 @@ public:
 
         auto cp = ParseIntField(json_str, "conflict_policy");
         if (cp.has_value() && *cp >= 0 && *cp <= 3) {
-            s.conflict_policy = static_cast<openidm::ConflictPolicy>(*cp);
+            s.conflict_policy = static_cast<radium::ConflictPolicy>(*cp);
         }
 
         auto auto_start = ParseBoolField(json_str, "auto_start_downloads");
@@ -91,26 +91,26 @@ public:
         auto retries = ParseIntField(json_str, "max_auto_retries");
         if (retries.has_value() && *retries <= 100) s.max_auto_retries = *retries;
 
-        return openidm::Result<openidm::AppSettings>::Ok(std::move(s));
+        return radium::Result<radium::AppSettings>::Ok(std::move(s));
     }
 
-    static openidm::Result<void> ExportToFile(const std::filesystem::path& file_path, const openidm::AppSettings& s) {
+    static radium::Result<void> ExportToFile(const std::filesystem::path& file_path, const radium::AppSettings& s) {
         std::ofstream ofs(file_path, std::ios::trunc);
         if (!ofs.is_open()) {
-            return openidm::Result<void>::Err("ERR_FILE_WRITE", "Cannot open file for writing settings");
+            return radium::Result<void>::Err("ERR_FILE_WRITE", "Cannot open file for writing settings");
         }
         ofs << SerializeToJson(s);
-        return openidm::Result<void>::Ok();
+        return radium::Result<void>::Ok();
     }
 
-    static openidm::Result<openidm::AppSettings> ImportFromFile(const std::filesystem::path& file_path) {
+    static radium::Result<radium::AppSettings> ImportFromFile(const std::filesystem::path& file_path) {
         std::error_code ec;
         if (!std::filesystem::exists(file_path, ec)) {
-            return openidm::Result<openidm::AppSettings>::Err("ERR_FILE_NOT_FOUND", "Settings file does not exist");
+            return radium::Result<radium::AppSettings>::Err("ERR_FILE_NOT_FOUND", "Settings file does not exist");
         }
         std::ifstream ifs(file_path);
         if (!ifs.is_open()) {
-            return openidm::Result<openidm::AppSettings>::Err("ERR_FILE_READ", "Cannot open settings file");
+            return radium::Result<radium::AppSettings>::Err("ERR_FILE_READ", "Cannot open settings file");
         }
         std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
         return DeserializeFromJson(content);

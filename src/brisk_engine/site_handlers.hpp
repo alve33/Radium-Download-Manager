@@ -11,7 +11,7 @@
 #include <vector>
 #include "common/types.hpp"
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 enum class SiteActionKind {
     kNothing = 0,
@@ -65,4 +65,4 @@ public:
     static std::string FindCurlImpersonateBinary();
 };
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

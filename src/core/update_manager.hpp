@@ -76,7 +76,7 @@ public:
     static bool IsTrustedReleaseUrl(std::string_view url, std::string_view expected_prefix = {});
 
     static std::optional<UpdateAssetInfo> SelectReleaseAsset(
-        const openidm::json::Array& assets,
+        const radium::json::Array& assets,
         std::string_view target_arch,
         std::string_view expected_release_prefix = {});
 
@@ -89,16 +89,16 @@ public:
         bool allow_prerelease = false,
         std::string_view expected_release_prefix = {});
 
-    static std::string FormatNetworkCheckError(const openidm::Error& error);
+    static std::string FormatNetworkCheckError(const radium::Error& error);
 
     // Parses a JSON release manifest (e.g. from GitHub releases or official Radium update server)
-    static openidm::Result<UpdatePackageInfo> ParseReleaseManifest(std::string_view json_content);
+    static radium::Result<UpdatePackageInfo> ParseReleaseManifest(std::string_view json_content);
 
     // Determines whether latest_version is newer than current_version
     static bool IsNewerVersion(std::string_view current_version, std::string_view latest_version);
 
     // Cryptographically checks downloaded file SHA-256 against expected hash
-    static openidm::Result<bool> VerifyPackageSha256(const std::filesystem::path& file_path, std::string_view expected_hex_hash);
+    static radium::Result<bool> VerifyPackageSha256(const std::filesystem::path& file_path, std::string_view expected_hex_hash);
 };
 
 } // namespace radium::core

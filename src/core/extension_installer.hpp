@@ -27,8 +27,10 @@ using ExtensionProgressFn = std::function<void(int percent, const std::string& s
 struct ExtensionInstallResult {
     bool success{false};
     bool rate_limited{false};
+    bool already_up_to_date{false};
     std::string version;
     std::string commit_sha;
+    std::string package_sha256;
     std::filesystem::path install_dir;
     std::vector<std::string> installed_files;
     std::string error_code;

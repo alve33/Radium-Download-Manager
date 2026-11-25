@@ -19,9 +19,9 @@ The source code of all three projects resides unmodified in `third_party/`:
 
 ### 2.1 Brisk Download Manager (`third_party/brisk`)
 
-Brisk's core contribution is its algorithmic segmentation model, work-stealing range reallocation, dynamic connection spawning, and bandwidth token bucket scheduler. Because Flux utilizes a native C++20 / Win32 desktop architecture for optimal Windows 11 performance, low idle memory (`< 15 MB`), and zero heavy runtime dependencies, Brisk's Dart algorithms have been directly translated into ISO C++20 modules in `src/brisk_engine/`.
+Brisk's core contribution is its algorithmic segmentation model, work-stealing range reallocation, dynamic connection spawning, and bandwidth token bucket scheduler. Because Radium utilizes a native C++20 / Win32 desktop architecture for optimal Windows 11 performance, low idle memory (`< 15 MB`), and zero heavy runtime dependencies, Brisk's Dart algorithms have been directly translated into ISO C++20 modules in `src/brisk_engine/`.
 
-| Upstream Module (`third_party/brisk/`) | Flux Source Module | Architectural Adaptation & Reused Logic |
+| Upstream Module (`third_party/brisk/`) | Radium Source Module | Architectural Adaptation & Reused Logic |
 | :--- | :--- | :--- |
 | `brisk_download_engine/lib/src/download_engine/segment/download_segment_tree.dart` | `src/brisk_engine/segment_scheduler.hpp`, `src/brisk_engine/segment_scheduler.cpp` | **Work-Stealing Segment Tree**: Dynamic range splitting, range validation, remaining byte calculation, and `RollbackUnstartedStolenSegment` when a secondary connection fails. |
 | `brisk_download_engine/lib/src/download_engine/engine/http_download_engine.dart` | `src/brisk_engine/http_download_engine.hpp`, `src/brisk_engine/http_download_engine.cpp` | **Multi-Connection Engine**: Dynamic spawn from 1 to 8 connections based on throughput milestones (256 KiB, 1 MiB), stall detection timer, connection reset, and atomic piece assembly. |
@@ -30,9 +30,9 @@ Brisk's core contribution is its algorithmic segmentation model, work-stealing r
 
 ### 2.2 Cat Catch (`third_party/cat-catch`)
 
-Cat Catch is the industry benchmark for browser media sniffing and manifest discovery. The Flux browser extension (`extension/`) directly incorporates and refines Cat Catch's network filtering, DOM inspection, and playlist parsing routines into a unified Manifest V3 extension.
+Cat Catch is the industry benchmark for browser media sniffing and manifest discovery. The Radium browser extension (`extension/`) directly incorporates and refines Cat Catch's network filtering, DOM inspection, and playlist parsing routines into a unified Manifest V3 extension.
 
-| Upstream Module (`third_party/cat-catch/`) | Flux Extension Module | Architectural Adaptation & Reused Logic |
+| Upstream Module (`third_party/cat-catch/`) | Radium Extension Module | Architectural Adaptation & Reused Logic |
 | :--- | :--- | :--- |
 | `js/background.js` | `extension/js/background.js` | **Network Interception**: `chrome.webRequest.onHeadersReceived` listener, MIME type dispatch table, content disposition filename extraction, size threshold filtering (`>= 512 KiB`), and header correlation. |
 | `js/function.js` | `extension/js/function.js` | **Classification & Deduplication**: Master playlist vs. variant stream grouping, `.ts`/`.m4s` segment suppression, per-site exclusion lists (`G.disabledHosts`), and regex pattern matching. |
@@ -42,14 +42,14 @@ Cat Catch is the industry benchmark for browser media sniffing and manifest disc
 
 ### 2.3 N_m3u8DL-RE (`third_party/N_m3u8DL-RE`)
 
-N_m3u8DL-RE is the premier engine for downloading and muxing HLS, MPEG-DASH, and MSS adaptive streams. Rather than reimplementing a fragile custom HLS/DASH parser and muxer in C++, Flux runs the authentic, verified upstream executable out-of-process inside a restricted Windows Job Object.
+N_m3u8DL-RE is the premier engine for downloading and muxing HLS, MPEG-DASH, and MSS adaptive streams. Rather than reimplementing a fragile custom HLS/DASH parser and muxer in C++, Radium runs the authentic, verified upstream executable out-of-process inside a restricted Windows Job Object.
 
-| Upstream Component | Flux Adapter Module | Architectural Adaptation & Reused Logic |
+| Upstream Component | Radium Adapter Module | Architectural Adaptation & Reused Logic |
 | :--- | :--- | :--- |
 | `tools/win-x64/N_m3u8DL-RE.exe` (v0.3.0 Release) | `src/engine_stream/nm3u8dl_re_adapter.hpp`, `src/engine_stream/nm3u8dl_re_adapter.cpp` | **Managed Worker Subprocess**: Invokes `N_m3u8DL-RE.exe` with structured CLI flags, response file `@job.rsp` (preventing credential exposure on cmdline), and parsed JSON track probing. |
 | Command-line Argument Parser | `src/engine_stream/nm3u8dl_re_adapter.cpp` | **Track Selection & Filters**: Passes `--select-video`, `--select-audio`, `--select-subtitle`, `--auto-select`, and `--log-level OFF`. |
 | FFmpeg Muxer Integration | `tools/win-x64/ffmpeg.exe` via `nm3u8dl_re_adapter.cpp` | **Multiplexing Pipeline**: Directs `--ffmpeg-binary-path` to the verified local FFmpeg binary to mux downloaded audio/video segments into `.mp4` or `.mkv`. |
-| Process Lifecycle & Termination | `src/engine_stream/nm3u8dl_re_adapter.cpp` | **Job Object Isolation**: Uses Win32 `CreateJobObjectW` with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` to ensure child worker processes are instantly terminated if Flux crashes or the task is canceled. |
+| Process Lifecycle & Termination | `src/engine_stream/nm3u8dl_re_adapter.cpp` | **Job Object Isolation**: Uses Win32 `CreateJobObjectW` with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` to ensure child worker processes are instantly terminated if Radium crashes or the task is canceled. |
 
 ---
 

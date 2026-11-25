@@ -13,7 +13,7 @@
 #include <windows.h>
 #endif
 
-namespace openidm::ui {
+namespace radium::ui {
 
 #ifdef _WIN32
 // Shows the shared Browser Extension Setup / Download dialog.
@@ -39,4 +39,4 @@ void ShowExtensionInstalledDialogWin32(
     const ThemePalette& palette);
 #endif
 
-} // namespace openidm::ui
+} // namespace radium::ui

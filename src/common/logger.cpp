@@ -8,7 +8,7 @@
 #include <regex>
 #include <sstream>
 
-namespace openidm {
+namespace radium {
 
 Logger& Logger::Instance() {
     static Logger inst;
@@ -91,4 +91,4 @@ std::vector<std::string> Logger::GetRecentLines(size_t max_lines) const {
     return std::vector<std::string>(m_ring_buffer.end() - max_lines, m_ring_buffer.end());
 }
 
-} // namespace openidm
+} // namespace radium

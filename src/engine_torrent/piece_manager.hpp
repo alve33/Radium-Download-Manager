@@ -16,7 +16,7 @@
 #include "engine_torrent/peer_wire_protocol.hpp"
 #include "engine_torrent/torrent_parser.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 struct BlockRequest {
     uint32_t piece_index{0};
@@ -389,7 +389,7 @@ public:
                     uint64_t torrent_offset = static_cast<uint64_t>(piece_index) * m_info.piece_length;
                     auto wr_res = m_storage->WriteBytes(torrent_offset, inc.buffer.data(), inc.buffer.size());
                     if (!wr_res.ok()) {
-                        OPENIDM_LOG_ERROR("PieceManager", "Failed to write piece to disk: " + wr_res.error->message);
+                        RADIUM_LOG_ERROR("PieceManager", "Failed to write piece to disk: " + wr_res.error->message);
                         return false;
                     }
                 }
@@ -404,7 +404,7 @@ public:
                 }
                 return true;
             } else {
-                OPENIDM_LOG_WARN("PieceManager", "Piece #" + std::to_string(piece_index) + " failed SHA-1 hash check; discarding corrupt block data");
+                RADIUM_LOG_WARN("PieceManager", "Piece #" + std::to_string(piece_index) + " failed SHA-1 hash check; discarding corrupt block data");
                 out_piece_corrupt = true;
                 inc.completed_blocks = 0;
                 std::fill(inc.blocks_received.begin(), inc.blocks_received.end(), false);
@@ -447,4 +447,4 @@ private:
     bool m_prioritize_head_tail{true};
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

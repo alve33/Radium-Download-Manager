@@ -12,7 +12,7 @@
 #include <thread>
 #include <vector>
 
-namespace openidm::packs {
+namespace radium::packs {
 
 // ============================================================================
 // Debrid Providers & Cloud Torrent Resolution (MDM crates/debrid port)
@@ -140,4 +140,4 @@ public:
     static Result<Ed2kLinkInfo> ParseEd2kLink(const std::string& ed2k_url);
 };
 
-} // namespace openidm::packs
+} // namespace radium::packs

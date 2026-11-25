@@ -116,7 +116,7 @@ For the Win32 `prompt` policy, single-file tasks preflight the destination befor
 #include <vector>
 #include "common/result.hpp"
 
-namespace openidm::engine {
+namespace radium::engine {
 
 struct SegmentState {
     uint32_t segment_id{};
@@ -165,7 +165,7 @@ public:
     virtual void SetTaskSpeedLimit(const std::string& task_id, uint64_t bytes_per_sec) = 0;
 };
 
-} // namespace openidm::engine
+} // namespace radium::engine
 
 ## Opt-in runtime performance telemetry
 

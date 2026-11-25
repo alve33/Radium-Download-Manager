@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package-release-zip.ps1 -Versio
   - Primary: `Software\Google\Chrome\NativeMessagingHosts\com.radium.downloadmanager`, `Software\Microsoft\Edge\NativeMessagingHosts\com.radium.downloadmanager`, `Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.radium.downloadmanager`, `Software\Mozilla\NativeMessagingHosts\com.radium.downloadmanager`.
   - Plus legacy aliases (`com.flux.downloadmanager`, `org.openidm.native`) for backward compatibility with existing installations.
 - **Upgrade & Uninstall Safety:**
-  - Uses `AppMutex=Local\Radium_SingleInstance,Local\Flux_SingleInstance,Local\Radium_SingleInstance` to ensure clean shutdown before binary replacement.
+  - Uses `AppMutex=Local\Radium_SingleInstance,Local\Flux_SingleInstance,Local\OpenIDM_SingleInstance` to ensure clean shutdown before binary replacement.
   - Cleanly preserves `%LOCALAPPDATA%\Radium Download Manager\state.db` and user download directories during uninstall and upgrades.
 
 

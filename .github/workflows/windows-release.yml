@@ -60,11 +60,11 @@ jobs:
             if ($rawRef -match '^v?(\d+\.\d+\.\d+.*)$') {
               $ver = $Matches[1]
             } else {
-              throw "Invalid version tag format: '$rawRef'. Expected semantic version like 'v1.0.0' or '1.0.0'."
+              throw "Invalid version tag format: '$rawRef'. Expected semantic version like 'v2.0.0' or '2.0.0'."
             }
           } else {
             $versionFile = "VERSION"
-            $ver = "1.0.0"
+            $ver = "2.0.0"
             if (Test-Path $versionFile) {
               $ver = (Get-Content $versionFile -Raw).Trim()
             } elseif (Test-Path "CMakeLists.txt") {
@@ -82,7 +82,6 @@ jobs:
 
           Write-Host "Canonical release version: $ver"
           "RADIUM_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "FLUX_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Preflight Toolchain & CMake Inspection
@@ -244,6 +243,7 @@ jobs:
         shell: powershell
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/package-release-zip.ps1 -Version "$env:RADIUM_VERSION" -PackageType Both -BuildDir "build/Release"
+          powershell -ExecutionPolicy Bypass -File scripts/package-extension-zip.ps1 -OutputPath "dist/radium-extension.zip"
           Write-Host "`n=== Final SHA-256 Release Checksums ==="
           Get-Content "dist/SHA256SUMS.txt"
 
@@ -449,7 +449,7 @@ jobs:
             }
           } else {
             $versionFile = "VERSION"
-            $ver = "1.0.0"
+            $ver = "2.0.0"
             if (Test-Path $versionFile) {
               $ver = (Get-Content $versionFile -Raw).Trim()
             } elseif (Test-Path "CMakeLists.txt") {
@@ -705,7 +705,7 @@ jobs:
   # =========================================================================
   publish-release:
     name: Publish Official GitHub Release (x64 & ARM64)
-    needs: [build-and-package-x64, clean-install-smoke-test-x64, browser-extension-runtime-test, build-and-package-arm64, clean-install-smoke-test-arm64]
+    needs: [build-and-package-x64, clean-install-smoke-test-x64, browser-extension-runtime-test, build-and-package-arm64, clean-install-smoke-test-arm64, package-msix-bundle]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-2022
     permissions:
@@ -727,6 +727,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: radium-dist-windows-arm64
+          path: dist
+
+      - name: Download Staged MSIX Packages & Bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: radium-msix-store-submission
           path: dist
 
       - name: Generate Consolidated SHA256SUMS.txt for All Release Assets
@@ -765,6 +771,10 @@ jobs:
             "Radium-v$ver-Windows-x64-Core.zip",
             "Radium-v$ver-Windows-ARM64-Full.zip",
             "Radium-v$ver-Windows-ARM64-Core.zip",
+            "Radium-x64-$ver.0.msix",
+            "Radium-ARM64-$ver.0.msix",
+            "Radium-$ver.0.msixbundle",
+            "radium-extension.zip",
             "SHA256SUMS.txt"
           )
           foreach ($name in $expectedFiles) {
@@ -811,13 +821,28 @@ jobs:
             }
           }
 
+      - name: Resolve Release Notes
+        id: release_notes
+        shell: powershell
+        run: |
+          $ver = "${{ needs.build-and-package-x64.outputs.version }}"
+          $notesPath = "docs/RELEASE_NOTES_$ver.md"
+          if (Test-Path $notesPath) {
+            "body_path=$notesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "Using release notes from $notesPath"
+          } else {
+            "body_path=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "No dedicated release notes file at $notesPath; falling back to generated notes."
+          }
+
       - name: Create Draft GitHub Release & Upload Assets
         uses: softprops/action-gh-release@v3
         with:
           name: "Radium Download Manager ${{ needs.build-and-package-x64.outputs.version }}"
           draft: true
           prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
-          generate_release_notes: true
+          body_path: ${{ steps.release_notes.outputs.body_path }}
+          generate_release_notes: ${{ steps.release_notes.outputs.body_path == '' }}
           fail_on_unmatched_files: true
           files: |
             dist/**/Radium-Setup-x64-*.exe
@@ -828,6 +853,10 @@ jobs:
             dist/**/Radium-v*-Windows-x64-Core.zip
             dist/**/Radium-v*-Windows-ARM64-Full.zip
             dist/**/Radium-v*-Windows-ARM64-Core.zip
+            dist/**/Radium-x64-*.msix
+            dist/**/Radium-ARM64-*.msix
+            dist/**/Radium-*.msixbundle
+            dist/**/radium-extension.zip
             dist/**/SHA256SUMS.txt
             LICENSE
             THIRD_PARTY_NOTICES.md
@@ -853,6 +882,10 @@ jobs:
             "Radium-v$ver-Windows-x64-Core.zip",
             "Radium-v$ver-Windows-ARM64-Full.zip",
             "Radium-v$ver-Windows-ARM64-Core.zip",
+            "Radium-x64-$ver.0.msix",
+            "Radium-ARM64-$ver.0.msix",
+            "Radium-$ver.0.msixbundle",
+            "radium-extension.zip",
             "SHA256SUMS.txt",
             "LICENSE",
             "THIRD_PARTY_NOTICES.md"

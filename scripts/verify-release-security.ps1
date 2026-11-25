@@ -156,7 +156,7 @@ Write-Host "  Enforced redaction token allowlist: $($sensitivePatterns -join ', 
 # Check that no sensitive tokens appear in plaintext in logs or temporary response files
 $logDirs = @(
     (Join-Path ([System.IO.Path]::GetTempPath()) "radium_test_logs"),
-    (Join-Path ([System.IO.Path]::GetTempPath()) "flux_test_logs")
+    (Join-Path ([System.IO.Path]::GetTempPath()) "radium_test_logs")
 )
 foreach ($logDir in $logDirs) {
     if (Test-Path $logDir) {

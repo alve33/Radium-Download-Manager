@@ -82,30 +82,20 @@ $radiumCandidates = @(
     (Join-Path $RepoRoot "build\win-x64\radium.exe"),
     (Join-Path $RepoRoot "build\win-x64\Radium.exe"),
     (Join-Path $RepoRoot "build\radium.exe"),
-    (Join-Path $RepoRoot "build\Radium.exe"),
-    # Legacy fallbacks
-    (Join-Path $DistDir "Flux.exe"),
-    (Join-Path $DistDir "flux.exe"),
-    (Join-Path $RepoRoot "build\win-x64\Release\flux.exe"),
-    (Join-Path $RepoRoot "build\win-x64\flux.exe")
+    (Join-Path $RepoRoot "build\Radium.exe")
 )
 $radiumExePath = $null
 foreach ($c in $radiumCandidates) {
     if (Test-Path $c) { $radiumExePath = (Resolve-Path $c).Path; break }
 }
 $radiumExeSize = if ($radiumExePath) { (Get-Item $radiumExePath).Length } else { 0 }
-$fluxExeSize = $radiumExeSize
 
 $radiumNmhCandidates = @(
     (Join-Path $DistDir "radium-nmh.exe"),
     (Join-Path $RepoRoot "build\win-x64\Release\radium-nmh.exe"),
     (Join-Path $RepoRoot "build\Release\radium-nmh.exe"),
     (Join-Path $RepoRoot "build\win-x64\radium-nmh.exe"),
-    (Join-Path $RepoRoot "build\radium-nmh.exe"),
-    # Legacy fallbacks
-    (Join-Path $DistDir "flux-nmh.exe"),
-    (Join-Path $RepoRoot "build\win-x64\Release\flux-nmh.exe"),
-    (Join-Path $RepoRoot "build\win-x64\flux-nmh.exe")
+    (Join-Path $RepoRoot "build\radium-nmh.exe")
 )
 $radiumNmhExePath = $null
 foreach ($c in $radiumNmhCandidates) {
@@ -388,9 +378,6 @@ $budgetData = [ordered]@{
         radium_exe_bytes = $radiumExeSize
         radium_exe_flavor = "Native C++20 / Win32"
         radium_nmh_exe_bytes = $radiumNmhExeSize
-        flux_exe_bytes = $radiumExeSize
-        flux_exe_flavor = "Native C++20 / Win32"
-        flux_nmh_exe_bytes = $radiumNmhExeSize
         browser_extension_unpacked_bytes = $extTotalBytes
         docs_and_manifests_bytes = $docsAndManifestsTotal
         worker_nm3u8dl_re_bytes = $nm3u8dlSize
@@ -451,8 +438,6 @@ if ($UpdateMetrics) {
         $existingMetrics = Get-Content $metricsPath -Raw | ConvertFrom-Json
         $existingMetrics | Add-Member -NotePropertyName "radium_binary_bytes" -NotePropertyValue $radiumExeSize -Force
         $existingMetrics | Add-Member -NotePropertyName "radium_nmh_binary_bytes" -NotePropertyValue $radiumNmhExeSize -Force
-        $existingMetrics | Add-Member -NotePropertyName "flux_binary_bytes" -NotePropertyValue $radiumExeSize -Force
-        $existingMetrics | Add-Member -NotePropertyName "flux_nmh_binary_bytes" -NotePropertyValue $radiumNmhExeSize -Force
         $existingMetrics | Add-Member -NotePropertyName "nm3u8dl_re_worker_bytes" -NotePropertyValue $nm3u8dlSize -Force
         $existingMetrics | Add-Member -NotePropertyName "ffmpeg_binary_bytes" -NotePropertyValue $ffmpegSize -Force
         $existingMetrics | Add-Member -NotePropertyName "ytdlp_binary_bytes" -NotePropertyValue $ytdlpSize -Force

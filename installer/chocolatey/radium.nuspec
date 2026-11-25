@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>radium</id>
-    <version>1.0.0</version>
+    <version>2.0.0</version>
     <packageSourceUrl>https://github.com/alve33/Radium-Download-Manager/tree/main/installer/chocolatey</packageSourceUrl>
     <owners>alve33</owners>
     <title>Radium Download Manager</title>
@@ -18,7 +18,7 @@
     <summary>Fast, native Windows 10 / 11 download manager with multi-connection acceleration and HLS/DASH stream capture.</summary>
     <description>Radium Download Manager is a lightweight, native C++20 and Win32 download manager for Windows 10 / 11.
 It combines an in-process HTTP/HTTPS segmented download engine with dynamic connection spawning and work-stealing range reuse, BitTorrent and FTP support, an out-of-process HLS/DASH stream pipeline (N_m3u8DL-RE and FFmpeg), and a Manifest V3 browser extension via Native Messaging.</description>
-    <releaseNotes>https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0</releaseNotes>
+    <releaseNotes>https://github.com/alve33/Radium-Download-Manager/releases/tag/v2.0.0</releaseNotes>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Flux Download Manager — Private / Self-Hosted Competitor Benchmark Template
+# Radium Download Manager — Private / Self-Hosted Competitor Benchmark Template
 #
 # USAGE INSTRUCTIONS:
 # This workflow template is designed for execution on a self-hosted or private Windows
@@ -16,7 +16,7 @@
 #    - benchmarks/latest_comparison_local.json
 #    - benchmarks/latest_comparison_local.csv
 
-name: Private Runner Benchmark Lab (IDM + FDM + Flux + aria2)
+name: Private Runner Benchmark Lab (IDM + FDM + Radium + aria2)
 
 on:
   workflow_dispatch:

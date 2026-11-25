@@ -7,7 +7,7 @@
 #include <mutex>
 #include <optional>
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 // Converts a monotonic cumulative payload counter into a sampled byte rate.
 // Calls from concurrent peer workers are serialized; samples closer than 500 ms
@@ -65,4 +65,4 @@ private:
     uint64_t m_rate_bps{0};
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

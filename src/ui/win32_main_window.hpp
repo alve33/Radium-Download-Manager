@@ -17,7 +17,7 @@
 #include "ui/design_system.hpp"
 #include "common/version.hpp"
 
-namespace openidm::ui {
+namespace radium::ui {
 
 enum class SidebarCategory {
     kAllDownloads = 0,
@@ -492,6 +492,10 @@ public:
 
     void SetStartVisible(bool visible) { m_start_visible = visible; }
     bool GetStartVisible() const { return m_start_visible; }
+    void SetFirstLaunchOnboardingEligible(bool eligible) { m_first_launch_onboarding_eligible = eligible; }
+    bool IsFirstLaunchOnboardingEligible() const { return m_first_launch_onboarding_eligible; }
+    void SetUpdateCheckInProgress(bool in_progress) { m_update_check_in_progress = in_progress; }
+    bool IsUpdateCheckInProgress() const { return m_update_check_in_progress; }
 
 #ifdef _WIN32
     void SetWindowHwnd(HWND hwnd) { m_hwnd = hwnd; }
@@ -638,6 +642,8 @@ private:
     int m_resize_start_x{0};
     int m_resize_orig_width{0};
     bool m_start_visible{true};
+    bool m_first_launch_onboarding_eligible{true};
+    bool m_update_check_in_progress{false};
 #ifdef _WIN32
     HWND m_hwnd{nullptr};
 #endif
@@ -650,4 +656,4 @@ void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller,
 void CopyTextToClipboardWin32(HWND hwnd, const std::string& text);
 #endif
 
-} // namespace openidm::ui
+} // namespace radium::ui

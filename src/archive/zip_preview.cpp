@@ -21,7 +21,7 @@
 #include <windows.h>
 #endif
 
-namespace openidm::archive {
+namespace radium::archive {
 
 namespace {
 
@@ -933,4 +933,4 @@ Result<std::filesystem::path> ArchiveExtractor::ExtractArchive(
     return Result<std::filesystem::path>::Ok(final_root);
 }
 
-} // namespace openidm::archive
+} // namespace radium::archive

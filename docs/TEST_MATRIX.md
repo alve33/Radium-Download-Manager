@@ -133,7 +133,7 @@ The 938x573 layout check verifies the toolbar search field keeps a useful minimu
 
 | Suite # | Test ID & Description (`tests/run_all_integration_tests.py`) | Mapped Requirements & Bug IDs | Verification Category | Result |
 | :--- | :--- | :--- | :--- | :--- |
-| **`[1/8]`** | `IT-BIN-01`: Verify Platform-Aware Compiled Executables (`flux.exe`, `flux-nmh.exe`, `N_m3u8DL-RE.exe`) | `FR-020`, `BUG-006`, `BUG-030` | `Verified by Execution` | **PASSED** |
+| **`[1/8]`** | `IT-BIN-01`: Verify Platform-Aware Compiled Executables (`radium.exe`, `radium-nmh.exe`, `N_m3u8DL-RE.exe`) | `FR-020`, `BUG-006`, `BUG-030` | `Verified by Execution` | **PASSED** |
 | **`[2/8]`** | `IT-HTTP-01` & `IT-HTTP-03`: Segmented HTTP Range Download (8 Connections + 302 Redirect + RFC 5987) | `FR-001`, `FR-003`, `BUG-003` | `Verified by Execution` | **PASSED** |
 | **`[3/8]`** | `IT-HTTP-02`: Non-Range Server Single-Stream Fallback | `FR-002`, `BUG-008` | `Verified by Execution` | **PASSED** |
 | **`[4/8]`** | `IT-HTTP-04`: Dropped Connection Reset & Resume from Exact Byte Offset | `FR-004` | `Verified by Execution` | **PASSED** |
@@ -187,7 +187,7 @@ The 938x573 layout check verifies the toolbar search field keeps a useful minimu
 | **`[4/7]`** | HLS & DASH Stream Sniffing, Exact Type Identification & Variant Deduplication | `FR-014`, `FR-016`, `FR-019` | `Verified by Execution` | **PASSED** |
 | **`[5/7]`** | Popup Interface (`popup.html`) Strict Visibility & Essential Control Audit | `FR-008`, `FR-011`, `BUG-012` | `Verified by Execution` | **PASSED** |
 | **`[6/7]`** | Real Service Worker Lifecycle Termination (CDP) & Storage Recovery | `FR-014`, `RISK-002` | `Verified by Execution` | **PASSED** |
-| **`[7/7]`** | Native Messaging Host Offline Fallback Contract (Flux Offline) | `FR-021`, `NFR-007`, `NFR-008` | `Verified by Execution` | **PASSED** |
+| **`[7/7]`** | Native Messaging Host Offline Fallback Contract (Radium Offline) | `FR-021`, `NFR-007`, `NFR-008` | `Verified by Execution` | **PASSED** |
 
 ---
 
@@ -216,9 +216,9 @@ The 938x573 layout check verifies the toolbar search field keeps a useful minimu
 
 | Verification Item | Target | Verification Procedure | Status |
 | :--- | :--- | :--- | :--- |
-| **Native PE32+ Compilation** | Windows 11 `x64` | Built with MSVC 19.44 / CMake 4.2; verified AMD64 subsystem on `flux.exe` and `flux-nmh.exe` | **Verified by Execution** |
-| **Per-User Native Messaging** | HKCU Registry | Executed `.\scripts\register-native-messaging.ps1`; verified registry keys for Chrome, Edge, Brave, and Firefox pointing to `flux-nmh.exe` | **Verified by Execution** |
-| **Portable Distribution Directory** | `dist/` | Verified `dist/Flux.exe`, `dist/flux.exe`, `dist/flux-nmh.exe`, and `dist/tools/win-x64/` (`ffmpeg.exe`, `N_m3u8DL-RE.exe`) | **Verified by Execution** |
+| **Native PE32+ Compilation** | Windows 11 `x64` | Built with MSVC 19.44 / CMake 4.2; verified AMD64 subsystem on `radium.exe` and `radium-nmh.exe` | **Verified by Execution** |
+| **Per-User Native Messaging** | HKCU Registry | Executed `.\scripts\register-native-messaging.ps1`; verified registry keys for Chrome, Edge, Brave, and Firefox pointing to `radium-nmh.exe` | **Verified by Execution** |
+| **Portable Distribution Directory** | `dist/` | Verified `dist/Radium.exe`, `dist/radium-nmh.exe`, and `dist/tools/win-x64/` (`ffmpeg.exe`, `N_m3u8DL-RE.exe`) | **Verified by Execution** |
 | **Clean Machine Installation** | Fresh Windows Host | Executed `python tests/test_installer_smoke.py`; verified silent install, real download with SHA256 match, and safe uninstall | **Verified by Execution** |
 | **Live Browser Extension Runtime** | Chromium (Playwright) | Executed `node tests/browser/test_extension_runtime.js`; verified download capture, video overlay pill, stream sniffing, and popup UI | **Verified by Execution** |
 | **Authenticode Code Signing** | Windows PE Binaries | Verified via `Get-AuthenticodeSignature`. In OSS community CI without private secrets, reported cleanly as Unsigned (non-elevated per-user execution) | **Verified by Execution (Unsigned OSS Baseline)** |

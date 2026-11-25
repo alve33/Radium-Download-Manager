@@ -48,6 +48,22 @@ void TriggerSystemSleep() {
 #endif
 
 namespace {
+int64_t QpcNowUs() {
+#ifdef _WIN32
+    static const int64_t kFreq = []() {
+        LARGE_INTEGER f{};
+        QueryPerformanceFrequency(&f);
+        return f.QuadPart > 0 ? f.QuadPart : 1000000LL;
+    }();
+    LARGE_INTEGER cnt{};
+    QueryPerformanceCounter(&cnt);
+    return (cnt.QuadPart * 1000000LL) / kFreq;
+#else
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+#endif
+}
+
 std::string BytesToHexStr(const std::vector<uint8_t>& bytes) {
     std::ostringstream oss;
     oss << std::hex << std::setfill('0');
@@ -76,7 +92,7 @@ std::vector<uint8_t> HexStrToBytes(std::string_view hex) {
 
 std::string ExtractHostFromUrl(const std::string& url) {
     if (url.empty()) return "";
-    auto parsed = openidm::brisk::HttpClient::ParseUrl(url);
+    auto parsed = radium::brisk::HttpClient::ParseUrl(url);
     if (parsed.ok()) return parsed.value->host;
     return "";
 }
@@ -190,7 +206,7 @@ bool HasScheduleWindowElapsed(const std::string& cur, const std::string& start, 
 }
 } // namespace
 
-namespace openidm {
+namespace radium {
 
 DownloadController::DownloadController(ControllerConfig cfg)
     : m_cfg(std::move(cfg)),
@@ -217,29 +233,29 @@ DownloadController::~DownloadController() {
 }
 
 Result<void> DownloadController::Initialize() {
-    OPENIDM_LOG_INFO("Controller", "Initialize: Creating directories");
+    RADIUM_LOG_INFO("Controller", "Initialize: Creating directories");
     std::error_code ec;
     std::filesystem::create_directories(m_cfg.default_download_dir, ec);
     std::filesystem::create_directories(m_cfg.temp_root_dir, ec);
 
-    OPENIDM_LOG_INFO("Controller", "Initialize: Opening store at " + m_cfg.state_db_path.string());
+    RADIUM_LOG_INFO("Controller", "Initialize: Opening store at " + m_cfg.state_db_path.string());
     auto open_res = m_store.Open(m_cfg.state_db_path);
     if (!open_res.ok()) {
-        OPENIDM_LOG_ERROR("Controller", "Initialize: m_store.Open failed: " + open_res.error->message);
+        RADIUM_LOG_ERROR("Controller", "Initialize: m_store.Open failed: " + open_res.error->message);
         return open_res;
     }
 
-    OPENIDM_LOG_INFO("Controller", "Initialize: Initializing startup diagnostics");
+    RADIUM_LOG_INFO("Controller", "Initialize: Initializing startup diagnostics");
     // Initialize startup diagnostic storage directory
     diagnostics::StartupDiagnosticRecorder::Instance().InitializeStorage(m_cfg.state_db_path.parent_path());
 
-    OPENIDM_LOG_INFO("Controller", "Initialize: Recovering interrupted tasks");
+    RADIUM_LOG_INFO("Controller", "Initialize: Recovering interrupted tasks");
     auto rec_res = m_store.RecoverInterruptedTasks(65536);
     if (rec_res.ok() && *rec_res.value > 0) {
-        OPENIDM_LOG_INFO("Controller", "Recovered " + std::to_string(*rec_res.value) + " interrupted tasks from SQLite WAL");
+        RADIUM_LOG_INFO("Controller", "Recovered " + std::to_string(*rec_res.value) + " interrupted tasks from SQLite WAL");
     }
 
-    OPENIDM_LOG_INFO("Controller", "Initialize: Listing tasks from store");
+    RADIUM_LOG_INFO("Controller", "Initialize: Listing tasks from store");
     auto loaded = m_store.ListTasks();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -276,17 +292,32 @@ Result<void> DownloadController::Initialize() {
                 m_tasks[t.task_id] = std::move(t);
             }
         }
-        OPENIDM_LOG_INFO("Controller", "Initialize: Loading persisted settings");
+        RADIUM_LOG_INFO("Controller", "Initialize: Loading persisted settings");
         LoadPersistedSettingsLocked();
+
+        // Existing installations with persisted tasks must not be treated as a fresh install
+        // for first-launch browser extension onboarding.
+        if (!m_tasks.empty()) {
+            auto ob_res = m_store.GetSetting("extension_onboarding", "");
+            if (!ob_res.ok() || ob_res.value->empty()) {
+                json::Value obj = json::Object{};
+                obj["completed"] = true;
+                obj["action"] = "existing_install";
+                obj["installedVersion"] = "";
+                obj["installedCommit"] = "";
+                obj["installDir"] = "";
+                m_store.SetSetting("extension_onboarding", obj.dump());
+            }
+        }
     }
 
     m_stopping = false;
 #ifdef _WIN32
     timeBeginPeriod(1);
 #endif
-    OPENIDM_LOG_INFO("Controller", "Initialize: Starting scheduler thread");
+    RADIUM_LOG_INFO("Controller", "Initialize: Starting scheduler thread");
     m_scheduler_thread = std::thread(&DownloadController::ScheduleLoop, this);
-    OPENIDM_LOG_INFO("Controller", "Initialize: Complete");
+    RADIUM_LOG_INFO("Controller", "Initialize: Complete");
     return Result<void>::Ok();
 }
 
@@ -439,6 +470,7 @@ Result<void> DownloadController::SaveSettingsLocked() {
 
 void DownloadController::Shutdown() {
     std::vector<std::shared_ptr<ActiveTaskControl>> to_join;
+    std::vector<std::shared_ptr<SpeculativeTransaction>> txs_to_join;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) return;
@@ -447,6 +479,19 @@ void DownloadController::Shutdown() {
             ctrl->pause_requested.store(true);
             to_join.push_back(ctrl);
         }
+        for (auto& [id, tx] : m_pending_txs) {
+            std::lock_guard<std::mutex> tx_lk(tx->mu);
+            if (!tx->accepted) {
+                tx->cancelled = true;
+                tx->state = SpeculativeTxState::kCancelled;
+                tx->ctrl->cancel_requested.store(true);
+            } else {
+                tx->ctrl->pause_requested.store(true);
+            }
+            tx->cv.notify_all();
+            txs_to_join.push_back(tx);
+        }
+        m_pending_txs.clear();
     }
     m_cv.notify_all();
     if (m_scheduler_thread.joinable()) {
@@ -455,6 +500,19 @@ void DownloadController::Shutdown() {
     for (auto& ctrl : to_join) {
         if (ctrl->worker_thread.joinable()) {
             ctrl->worker_thread.join();
+        }
+    }
+    for (auto& tx : txs_to_join) {
+        if (tx->dest_thread.joinable()) {
+            tx->dest_thread.join();
+        }
+        if (tx->bg_thread.joinable()) {
+            tx->bg_thread.join();
+        }
+        std::lock_guard<std::mutex> tx_lk(tx->mu);
+        if (!tx->accepted && !tx->staging_dir.empty()) {
+            std::error_code ec;
+            std::filesystem::remove_all(tx->staging_dir, ec);
         }
     }
     m_store.Close();
@@ -850,6 +908,37 @@ DownloadController::IncomingConflictReport DownloadController::InspectIncomingDo
         report.overwrite_allowed = false;
     }
 
+    // 2b. Check concurrent pending speculative transactions
+    int64_t my_tx_created_us = 0;
+    if (!exclude_task_id.empty()) {
+        auto my_it = m_pending_txs.find(exclude_task_id);
+        if (my_it != m_pending_txs.end()) {
+            my_tx_created_us = my_it->second->metrics.t3_tx_created_us;
+        }
+    }
+    std::optional<TaskModel> pending_same_url;
+    std::optional<TaskModel> pending_same_dest;
+    for (const auto& [tx_id, tx] : m_pending_txs) {
+        if (!exclude_task_id.empty() && tx_id == exclude_task_id) continue;
+        std::lock_guard<std::mutex> tx_lk(tx->mu);
+        if (tx->cancelled || tx->state == SpeculativeTxState::kConflictRejected || tx->accepted) continue;
+        if (my_tx_created_us > 0 &&
+            (tx->metrics.t3_tx_created_us > my_tx_created_us ||
+             (tx->metrics.t3_tx_created_us == my_tx_created_us && tx_id > exclude_task_id))) {
+            continue;
+        }
+        if (!candidate.url.empty() && tx->draft_task.url == candidate.url && !pending_same_url.has_value()) {
+            pending_same_url = tx->draft_task;
+        }
+        if (!sd.empty() && !fn.empty() &&
+            tx->draft_task.save_dir == sd && tx->draft_task.file_name == fn &&
+            !pending_same_dest.has_value()) {
+            pending_same_dest = tx->draft_task;
+            report.destination_reserved_by_task = true;
+            report.overwrite_allowed = false;
+        }
+    }
+
     // 3. Check physical file on disk
     std::error_code ec;
     if (!sd.empty() && !fn.empty()) {
@@ -889,10 +978,22 @@ DownloadController::IncomingConflictReport DownloadController::InspectIncomingDo
         }
     }
 
-    // (c) Another active/paused task has reserved the exact same destination
+    // (c) Another active/paused task (or pending speculative transaction) has reserved the exact same destination
     if (reserved.kind != core::DuplicateKind::kNone) {
         report.kind = IncomingConflictKind::kReservedByAnotherTask;
         report.matched_task = reserved.matched_task;
+        report.overwrite_allowed = false;
+        return report;
+    }
+    if (pending_same_dest.has_value()) {
+        report.kind = IncomingConflictKind::kReservedByAnotherTask;
+        report.matched_task = *pending_same_dest;
+        report.overwrite_allowed = false;
+        return report;
+    }
+    if (pending_same_url.has_value()) {
+        report.kind = IncomingConflictKind::kActiveOrQueuedSameDownload;
+        report.matched_task = *pending_same_url;
         report.overwrite_allowed = false;
         return report;
     }
@@ -1065,7 +1166,7 @@ Result<TaskModel> DownloadController::IngestCompletedTask(TaskModel task, const 
                     task.status_detail = "Threat detected by Antivirus (" + scan_res.value->scanner_name + ")";
                     task.error_code = "ERR_THREAT_DETECTED";
                     task.error_message = "A security threat was detected in the downloaded file.";
-                    OPENIDM_LOG_WARN("Controller", "Antivirus threat detected in ingested file: " + dest_path.string());
+                    RADIUM_LOG_WARN("Controller", "Antivirus threat detected in ingested file: " + dest_path.string());
                 } else if (scan_res.value->status == security::ScanStatus::kClean) {
                     task.status_detail = "Completed (Antivirus Clean)";
                 } else if (scan_res.value->status == security::ScanStatus::kScannerError) {
@@ -1424,7 +1525,7 @@ void DownloadController::ScheduleLoop() {
                 if (action == "SLEEP" || action == "SHUTDOWN") {
                     m_settings.queue_completion_action = "NONE";
                     SaveSettingsLocked();
-                    OPENIDM_LOG_INFO("Controller", "All downloads completed. Executing post-completion action: " + action);
+                    RADIUM_LOG_INFO("Controller", "All downloads completed. Executing post-completion action: " + action);
 #ifdef _WIN32
                     if (action == "SLEEP") {
                         TriggerSystemSleep();
@@ -1494,7 +1595,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
         task_type_str = "YOUTUBE_EXTRACTION";
     }
 
-    OPENIDM_LOG_INFO("Controller", "Dispatching task=" + task_id + " type=" + task_type_str +
+    RADIUM_LOG_INFO("Controller", "Dispatching task=" + task_id + " type=" + task_type_str +
                      " correlation_id=" + local_task.correlation_id + " url=" + local_task.url);
 
     if (!diagnostics::StartupDiagnosticRecorder::Instance().HasSession(task_id) &&
@@ -1538,7 +1639,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 : "Canceled because the destination file already exists";
 #ifdef _WIN32
             HWND hwnd_main = FindWindowW(L"Radium_MainWindowClass", nullptr);
-            if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_OPENIDM_SHOW_CONFLICT */, 0, 0);
+            if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_RADIUM_SHOW_CONFLICT */, 0, 0);
 #endif
         }
     }
@@ -1680,7 +1781,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
             local_task.error_code = parse_res.error->code;
             local_task.error_message = parse_res.error->message;
             local_task.status_detail = "Failed: " + parse_res.error->message;
-            OPENIDM_LOG_ERROR("Controller", "Torrent task " + task_id + " parse failed [" + local_task.error_code + "]: " + local_task.error_message);
+            RADIUM_LOG_ERROR("Controller", "Torrent task " + task_id + " parse failed [" + local_task.error_code + "]: " + local_task.error_message);
         } else {
             tinfo = parse_res.value.value();
             if (!local_task.torrent_file_paths.empty() && tinfo.files.size() == local_task.torrent_file_paths.size()) {
@@ -1710,7 +1811,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                     if (it->second.state == TaskState::kCanceled || it->second.state == TaskState::kPaused) return;
                     if ((it->second.state == TaskState::kCompleted || it->second.state == TaskState::kFailed) &&
                         tp.state != TaskState::kCompleted && tp.state != TaskState::kFailed) {
-                        OPENIDM_LOG_WARN("Controller", "Ignoring stale torrent progress task=" + task_id +
+                        RADIUM_LOG_WARN("Controller", "Ignoring stale torrent progress task=" + task_id +
                                          " phase=" + TaskStateToString(tp.state) + " after terminal state=" + TaskStateToString(it->second.state));
                         return;
                     }
@@ -1796,7 +1897,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 if (ingest_res.error->code == "ERR_FILE_EXISTS") {
 #ifdef _WIN32
                     HWND hwnd_main = FindWindowW(L"Radium_MainWindowClass", nullptr);
-                    if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_OPENIDM_SHOW_CONFLICT */, 0, 0);
+                    if (hwnd_main) PostMessageW(hwnd_main, WM_APP + 106 /* WM_RADIUM_SHOW_CONFLICT */, 0, 0);
 #endif
                 }
             }
@@ -1858,20 +1959,20 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
 
             const std::string& candidate_url = urls_to_try[uidx];
             if (uidx != start_idx) {
-                OPENIDM_LOG_INFO("Controller", "Attempting alternate mirror (" + std::to_string(uidx) + "): " + candidate_url);
+                RADIUM_LOG_INFO("Controller", "Attempting alternate mirror (" + std::to_string(uidx) + "): " + candidate_url);
                 auto probe_res = brisk::HttpClient::ProbeResource(
                     candidate_url, local_task.headers, local_task.auth_headers, ecfg.net_opts, m_cfg.allow_loopback);
                 if (probe_res.ok()) {
                     if (local_task.total_bytes > 0 && probe_res.value->has_content_length && probe_res.value->content_length > 0) {
                         if (probe_res.value->content_length != local_task.total_bytes) {
-                            OPENIDM_LOG_WARN("Controller", "Mirror Content-Length mismatch (" +
+                            RADIUM_LOG_WARN("Controller", "Mirror Content-Length mismatch (" +
                                              std::to_string(probe_res.value->content_length) + " vs " +
                                              std::to_string(local_task.total_bytes) + "). Skipping mirror: " + candidate_url);
                             continue;
                         }
                     }
                 } else {
-                    OPENIDM_LOG_WARN("Controller", "Mirror probe failed: " + candidate_url + " (" + probe_res.error->message + ")");
+                    RADIUM_LOG_WARN("Controller", "Mirror probe failed: " + candidate_url + " (" + probe_res.error->message + ")");
                     continue;
                 }
                 local_task.url = candidate_url;
@@ -1947,7 +2048,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 local_task.error_code = res.error->code;
                 local_task.error_message = res.error->message;
                 local_task.status_detail = "Failed: " + res.error->message;
-                OPENIDM_LOG_ERROR("Controller", "HTTP task " + task_id + " FAILED [" + local_task.error_code + "]: " + local_task.error_message + " (URL: " + local_task.url + ")");
+                RADIUM_LOG_ERROR("Controller", "HTTP task " + task_id + " FAILED [" + local_task.error_code + "]: " + local_task.error_message + " (URL: " + local_task.url + ")");
             }
         }
         }
@@ -1975,7 +2076,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 if (it->second.state == TaskState::kCanceled || it->second.state == TaskState::kPaused) return;
                 if ((it->second.state == TaskState::kCompleted || it->second.state == TaskState::kFailed) &&
                     sp.phase != TaskState::kCompleted && sp.phase != TaskState::kFailed) {
-                    OPENIDM_LOG_WARN("Controller", "Ignoring stale stream progress task=" + task_id +
+                    RADIUM_LOG_WARN("Controller", "Ignoring stale stream progress task=" + task_id +
                                      " phase=" + TaskStateToString(sp.phase) + " after terminal state=" + TaskStateToString(it->second.state));
                     return;
                 }
@@ -2020,7 +2121,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 local_task.error_code = res.error->code;
                 local_task.error_message = res.error->message;
                 local_task.status_detail = "Failed: " + res.error->message;
-                OPENIDM_LOG_ERROR("Controller", "Stream task " + task_id + " FAILED [" + local_task.error_code + "]: " + local_task.error_message + " (URL: " + local_task.url + ")");
+                RADIUM_LOG_ERROR("Controller", "Stream task " + task_id + " FAILED [" + local_task.error_code + "]: " + local_task.error_message + " (URL: " + local_task.url + ")");
             }
         }
     }
@@ -2059,7 +2160,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                         local_task.status_detail = "Threat detected by Antivirus (" + scan_res.value->scanner_name + ")";
                         local_task.error_code = "ERR_THREAT_DETECTED";
                         local_task.error_message = "A security threat was detected in the downloaded file.";
-                        OPENIDM_LOG_WARN("Controller", "Antivirus threat detected: " + final_p.string());
+                        RADIUM_LOG_WARN("Controller", "Antivirus threat detected: " + final_p.string());
                         std::error_code rm_ec;
                         std::filesystem::remove(final_p, rm_ec);
                     } else if (scan_res.value->status == security::ScanStatus::kClean) {
@@ -2447,7 +2548,7 @@ Result<void> DownloadController::RemoveTask(const std::string& task_id, bool del
         std::error_code ec;
         std::filesystem::remove_all(task_snapshot.part_path, ec);
         if (ec) {
-            OPENIDM_LOG_ERROR("Controller", "Failed to remove partial output " + task_snapshot.part_path + ": " + ec.message());
+            RADIUM_LOG_ERROR("Controller", "Failed to remove partial output " + task_snapshot.part_path + ": " + ec.message());
             return fail_removal("ERR_PART_DELETE_FAILED", "Failed to remove partial download data: " + ec.message());
         }
     }
@@ -2495,14 +2596,14 @@ Result<void> DownloadController::RemoveTask(const std::string& task_id, bool del
                 if (i < task_snapshot.torrent_file_selection.size() && !task_snapshot.torrent_file_selection[i]) continue;
                 auto result = remove_output_path(task_snapshot.torrent_file_paths[i], false);
                 if (!result.ok()) {
-                    OPENIDM_LOG_ERROR("Controller", "Failed to permanently delete torrent payload for task " + task_id + ": " + result.error->message);
+                    RADIUM_LOG_ERROR("Controller", "Failed to permanently delete torrent payload for task " + task_id + ": " + result.error->message);
                     return fail_removal(result.error->code, result.error->message);
                 }
             }
         } else {
             auto result = remove_output_path(task_snapshot.file_name, true);
             if (!result.ok()) {
-                OPENIDM_LOG_ERROR("Controller", "Failed to permanently delete output for task " + task_id + ": " + result.error->message);
+                RADIUM_LOG_ERROR("Controller", "Failed to permanently delete output for task " + task_id + ": " + result.error->message);
                 return fail_removal(result.error->code, result.error->message);
             }
         }
@@ -2818,7 +2919,7 @@ std::optional<TaskModel> DownloadController::TryMatchFreshLink(const TaskModel& 
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_tasks.find(best_id);
     if (it == m_tasks.end()) return std::nullopt;
-    OPENIDM_LOG_INFO("Controller", "Freshlink matched offer for '" + offer.file_name + "' -> resumed task " + best_id);
+    RADIUM_LOG_INFO("Controller", "Freshlink matched offer for '" + offer.file_name + "' -> resumed task " + best_id);
     return it->second;
 }
 
@@ -3328,6 +3429,12 @@ DownloadController::ExtensionOnboardingState DownloadController::GetExtensionOnb
 }
 
 bool DownloadController::ShouldShowExtensionOnboarding() const {
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_tasks.empty()) {
+            return false;
+        }
+    }
     return !GetExtensionOnboardingState().completed;
 }
 
@@ -3383,4 +3490,488 @@ Result<void> DownloadController::RecordInstalledExtension(
     return m_store.SetSetting("extension_onboarding", obj.dump());
 }
 
-} // namespace openidm
+Result<std::string> DownloadController::BeginSpeculativeOffer(
+    TaskModel draft_task,
+    SpeculativeDecisionCallback on_decision,
+    int64_t ipc_recv_qpc_us) {
+    const int64_t t2 = (ipc_recv_qpc_us > 0) ? ipc_recv_qpc_us : QpcNowUs();
+    if (draft_task.url.empty()) {
+        return Result<std::string>::Err("ERR_INVALID_URL", "Task URL cannot be empty");
+    }
+
+    if (draft_task.task_id.empty()) {
+        draft_task.task_id = GenerateUuidV4();
+    }
+    const std::string tx_id = draft_task.task_id;
+
+    // Resolve filename, category, and save_dir in-memory without blocking on disk/network
+    AppSettings settings_copy;
+    std::filesystem::path default_dl_dir;
+    std::filesystem::path temp_root;
+    bool allow_loopback = false;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        settings_copy = m_settings;
+        default_dl_dir = m_cfg.default_download_dir;
+        temp_root = m_cfg.temp_root_dir;
+        allow_loopback = m_cfg.allow_loopback;
+
+        // Reap completed/cancelled speculative transactions whose threads are finished
+        for (auto it = m_pending_txs.begin(); it != m_pending_txs.end();) {
+            auto& old_tx = it->second;
+            bool reapable = false;
+            {
+                std::lock_guard<std::mutex> tx_lk(old_tx->mu);
+                reapable = old_tx->dest_check_done &&
+                           (!old_tx->speculative_eligible || old_tx->engine_finished) &&
+                           (old_tx->cancelled || old_tx->accepted ||
+                            old_tx->state == SpeculativeTxState::kConflictRejected);
+            }
+            if (reapable) {
+                if (old_tx->dest_thread.joinable()) old_tx->dest_thread.join();
+                if (old_tx->bg_thread.joinable()) old_tx->bg_thread.join();
+                it = m_pending_txs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    if (draft_task.file_name.empty()) {
+        std::string fallback_ext = (draft_task.task_type == TaskType::kHttpFile)
+            ? ""
+            : draft_task.stream_options.output_format;
+        draft_task.file_name = PathSanitizer::ExtractFromUrl(draft_task.url, fallback_ext);
+    } else {
+        draft_task.file_name = PathSanitizer::SanitizeFileName(draft_task.file_name);
+    }
+    if (draft_task.category.empty() || draft_task.category == "General") {
+        draft_task.category = DetermineCategoryImpl(settings_copy, draft_task.file_name, draft_task.url);
+    }
+    if (draft_task.save_dir.empty()) {
+        if (!settings_copy.last_download_dir.empty()) {
+            draft_task.save_dir = settings_copy.last_download_dir;
+        } else {
+            draft_task.save_dir = ResolveCategorySaveDirImpl(
+                settings_copy, default_dl_dir, draft_task.category, draft_task.url).string();
+        }
+    }
+    if (draft_task.max_connections == 0) {
+        draft_task.max_connections = settings_copy.default_connections_per_task;
+    }
+
+    const bool is_http_get =
+        draft_task.task_type == TaskType::kHttpFile &&
+        (draft_task.url.rfind("http://", 0) == 0 || draft_task.url.rfind("https://", 0) == 0) &&
+        draft_task.http_method != "POST" &&
+        !PathSanitizer::IsWebpageWatchUrl(draft_task.url);
+
+    auto tx = std::make_shared<SpeculativeTransaction>();
+    tx->tx_id = tx_id;
+    tx->draft_task = draft_task;
+    tx->speculative_eligible = is_http_get;
+    tx->state = SpeculativeTxState::kPreflighting;
+    tx->metrics.t2_ipc_recv_us = t2;
+    tx->metrics.t3_tx_created_us = QpcNowUs();
+
+    if (is_http_get) {
+        tx->staging_dir = temp_root / ("spec_" + tx_id);
+        std::filesystem::path part_p = tx->staging_dir / (draft_task.file_name + "." + tx_id + ".part");
+        tx->draft_task.part_path = PathSanitizer::PathToUtf8(part_p);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_stopping) {
+            return Result<std::string>::Err("ERR_SHUTDOWN", "Controller is shutting down");
+        }
+        m_pending_txs[tx_id] = tx;
+    }
+
+    // Task A: Launch speculative background HTTP download immediately (if eligible)
+    if (is_http_get) {
+        tx->metrics.t4_bg_queued_us = QpcNowUs();
+        tx->bg_thread = std::thread([this, tx, settings_copy, allow_loopback]() {
+            TaskModel local_task;
+            {
+                std::lock_guard<std::mutex> tx_lk(tx->mu);
+                if (tx->cancelled || tx->state == SpeculativeTxState::kConflictRejected) {
+                    tx->engine_finished = true;
+                    tx->ctrl->finished.store(true);
+                    return;
+                }
+                tx->state = SpeculativeTxState::kPrefetching;
+                local_task = tx->draft_task;
+                tx->metrics.t6_http_init_us = QpcNowUs();
+            }
+
+            brisk::EngineConfig ecfg;
+            ecfg.stall_timeout_ms = settings_copy.stall_timeout_ms;
+            ecfg.min_split_bytes = settings_copy.min_split_bytes;
+            ecfg.allow_loopback_redirect = allow_loopback;
+
+            brisk::HttpDownloadEngine::SpeculativeHooks hooks;
+            hooks.use_explicit_part_path = true;
+            hooks.wait_for_acceptance = [tx](std::atomic<bool>& cancel_flag, TaskModel& task_to_commit) -> bool {
+                std::unique_lock<std::mutex> tx_lk(tx->mu);
+                tx->cv.wait(tx_lk, [&]() {
+                    return tx->accepted || tx->cancelled || cancel_flag.load();
+                });
+                if (tx->cancelled || cancel_flag.load() || !tx->accepted) {
+                    return false;
+                }
+                task_to_commit.save_dir = tx->draft_task.save_dir;
+                task_to_commit.file_name = tx->draft_task.file_name;
+                task_to_commit.conflict_policy = tx->draft_task.conflict_policy;
+                return true;
+            };
+            hooks.sync_before_commit = [tx](TaskModel& task_to_commit) {
+                std::lock_guard<std::mutex> tx_lk(tx->mu);
+                if (tx->accepted) {
+                    task_to_commit.save_dir = tx->draft_task.save_dir;
+                    task_to_commit.file_name = tx->draft_task.file_name;
+                    task_to_commit.conflict_policy = tx->draft_task.conflict_policy;
+                }
+            };
+
+            brisk::HttpDownloadEngine engine(ecfg);
+            bool first_byte_seen = false;
+            auto res = engine.ExecuteDownload(
+                local_task,
+                tx->ctrl->pause_requested,
+                tx->ctrl->cancel_requested,
+                tx->ctrl->task_speed_limit_bps,
+                [this, tx, &first_byte_seen](const brisk::EngineProgress& ep) {
+                    bool is_accepted = false;
+                    {
+                        std::lock_guard<std::mutex> tx_lk(tx->mu);
+                        if (!first_byte_seen && ep.downloaded_bytes > 0) {
+                            first_byte_seen = true;
+                            tx->metrics.t7_first_byte_us = QpcNowUs();
+                        }
+                        if (tx->cancelled || tx->state == SpeculativeTxState::kConflictRejected) return;
+                        tx->draft_task.downloaded_bytes = ep.downloaded_bytes;
+                        tx->draft_task.total_bytes = ep.total_bytes;
+                        tx->draft_task.speed_bps = ep.speed_bps;
+                        tx->draft_task.range_supported = ep.range_supported;
+                        if (!ep.resolved_filename.empty()) tx->draft_task.file_name = ep.resolved_filename;
+                        if (!ep.etag.empty()) tx->draft_task.etag = ep.etag;
+                        if (!ep.last_modified.empty()) tx->draft_task.last_modified = ep.last_modified;
+                        tx->draft_task.segments = ep.segments;
+                        is_accepted = tx->accepted;
+                    }
+                    if (is_accepted) {
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        auto it = m_tasks.find(tx->tx_id);
+                        if (it != m_tasks.end() && !m_deleted_tasks.count(tx->tx_id)) {
+                            auto& t = it->second;
+                            if (t.state == TaskState::kCanceled || t.state == TaskState::kPaused) return;
+                            t.state = ep.state;
+                            t.downloaded_bytes = ep.downloaded_bytes;
+                            t.total_bytes = ep.total_bytes;
+                            t.speed_bps = ep.speed_bps;
+                            t.range_supported = ep.range_supported;
+                            if (!ep.status_detail.empty()) t.status_detail = ep.status_detail;
+                            if (!ep.etag.empty()) t.etag = ep.etag;
+                            if (!ep.last_modified.empty()) t.last_modified = ep.last_modified;
+                            t.segments = ep.segments;
+                        }
+                    }
+                },
+                m_global_limiter,
+                &m_global_speed_limit_bps,
+                &hooks);
+
+            bool was_accepted = false;
+            {
+                std::lock_guard<std::mutex> tx_lk(tx->mu);
+                tx->engine_finished = true;
+                tx->engine_succeeded = res.ok();
+                if (!res.ok()) {
+                    tx->engine_error = res.error;
+                } else {
+                    tx->final_path = *res.value;
+                }
+                if (tx->cancelled || tx->state == SpeculativeTxState::kConflictRejected || tx->ctrl->cancel_requested.load()) {
+                    tx->metrics.t13_bg_stopped_us = QpcNowUs();
+                }
+                was_accepted = tx->accepted;
+                tx->draft_task.state = local_task.state;
+                tx->draft_task.downloaded_bytes = local_task.downloaded_bytes;
+                tx->draft_task.total_bytes = local_task.total_bytes;
+                tx->draft_task.segments = local_task.segments;
+                tx->draft_task.part_path = local_task.part_path;
+                tx->draft_task.etag = local_task.etag;
+                tx->draft_task.last_modified = local_task.last_modified;
+                tx->draft_task.completed_at_ms = local_task.completed_at_ms;
+                tx->draft_task.status_detail = local_task.status_detail;
+                tx->draft_task.error_code = local_task.error_code;
+                tx->draft_task.error_message = local_task.error_message;
+                if (res.ok()) {
+                    tx->draft_task.file_name = local_task.file_name;
+                    tx->state = SpeculativeTxState::kCompleted;
+                }
+            }
+
+            if (!was_accepted) {
+                if (!tx->staging_dir.empty()) {
+                    std::error_code ec;
+                    std::filesystem::remove_all(tx->staging_dir, ec);
+                }
+                tx->ctrl->finished.store(true);
+                return;
+            }
+
+            // Accepted transaction finished: merge final state into m_tasks + m_store
+            bool should_persist = false;
+            TaskModel to_save;
+            TaskNotificationCallback notify_cb;
+            bool should_notify = false;
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_active.erase(tx->tx_id);
+                if (!m_deleted_tasks.count(tx->tx_id)) {
+                    auto it = m_tasks.find(tx->tx_id);
+                    if (it != m_tasks.end()) {
+                        auto& t = it->second;
+                        if (t.state == TaskState::kCanceled) {
+                            local_task.state = TaskState::kCanceled;
+                            local_task.status_detail = "Canceled";
+                        } else if (t.state == TaskState::kPaused && tx->ctrl->pause_requested.load()) {
+                            local_task.state = TaskState::kPaused;
+                            local_task.status_detail = "Paused";
+                        }
+                        t.state = local_task.state;
+                        t.file_name = local_task.file_name;
+                        t.part_path = local_task.part_path;
+                        t.total_bytes = local_task.total_bytes;
+                        t.downloaded_bytes = local_task.downloaded_bytes;
+                        t.speed_bps = 0;
+                        t.range_supported = local_task.range_supported;
+                        t.status_detail = local_task.status_detail;
+                        t.etag = local_task.etag;
+                        t.last_modified = local_task.last_modified;
+                        t.segments = local_task.segments;
+                        t.error_code = local_task.error_code;
+                        t.error_message = local_task.error_message;
+                        t.updated_at_ms = NowEpochMs();
+                        t.completed_at_ms = local_task.completed_at_ms;
+                        if (t.state == TaskState::kCompleted || t.state == TaskState::kCanceled) {
+                            t.auth_headers.clear();
+                        }
+                        if (t.state == TaskState::kCompleted && m_settings.show_completion_notification &&
+                            m_notified_task_ids.insert(tx->tx_id).second) {
+                            notify_cb = m_task_notification_callback;
+                            should_notify = static_cast<bool>(notify_cb);
+                        }
+                        to_save = t;
+                        should_persist = true;
+                    }
+                }
+            }
+            if (should_persist) {
+                m_store.UpsertTask(to_save);
+                if (to_save.state == TaskState::kCompleted && !tx->staging_dir.empty()) {
+                    std::error_code ec;
+                    std::filesystem::remove_all(tx->staging_dir, ec);
+                }
+            }
+            if (should_notify) {
+                notify_cb(TaskNotification{tx->tx_id, to_save.file_name, true, "Completed"});
+            }
+            tx->ctrl->finished.store(true);
+        });
+    } else {
+        tx->engine_finished = true;
+        tx->ctrl->finished.store(true);
+    }
+
+    // Task B: Run destination & duplicate check concurrently off the IPC/UI thread
+    tx->metrics.t5_dest_check_queued_us = QpcNowUs();
+    tx->dest_thread = std::thread([this, tx, settings_copy, on_decision = std::move(on_decision)]() {
+        auto report = InspectIncomingDownload(tx->draft_task, tx->tx_id);
+        const int64_t t8 = QpcNowUs();
+        const bool is_conflict =
+            (report.kind == IncomingConflictKind::kActiveOrQueuedSameDownload && report.matched_task.has_value()) ||
+            (report.has_conflict() && settings_copy.conflict_policy == ConflictPolicy::kPrompt);
+
+        TaskModel draft_snapshot;
+        bool should_notify_ui = false;
+        {
+            std::lock_guard<std::mutex> tx_lk(tx->mu);
+            tx->dest_check_done = true;
+            tx->conflict_report = report;
+            tx->metrics.t8_dest_check_done_us = t8;
+            if (tx->cancelled || tx->accepted) {
+                return;
+            }
+            if (is_conflict) {
+                tx->state = SpeculativeTxState::kConflictRejected;
+                tx->cancelled = true;
+                tx->ctrl->cancel_requested.store(true);
+                tx->cv.notify_all();
+            } else if (tx->state == SpeculativeTxState::kPreflighting) {
+                tx->state = SpeculativeTxState::kWaitingForUser;
+            }
+            draft_snapshot = tx->draft_task;
+            should_notify_ui = true;
+        }
+        if (should_notify_ui && on_decision) {
+            on_decision(tx->tx_id, draft_snapshot, report);
+        }
+    });
+
+    return Result<std::string>::Ok(tx_id);
+}
+
+std::optional<TaskModel> DownloadController::GetSpeculativeSnapshot(const std::string& tx_id) const {
+    std::shared_ptr<SpeculativeTransaction> tx;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pending_txs.find(tx_id);
+        if (it == m_pending_txs.end()) return std::nullopt;
+        tx = it->second;
+    }
+    std::lock_guard<std::mutex> tx_lk(tx->mu);
+    return tx->draft_task;
+}
+
+std::optional<DownloadController::SpeculativeTxMetrics> DownloadController::GetSpeculativeMetrics(const std::string& tx_id) const {
+    std::shared_ptr<SpeculativeTransaction> tx;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pending_txs.find(tx_id);
+        if (it == m_pending_txs.end()) return std::nullopt;
+        tx = it->second;
+    }
+    std::lock_guard<std::mutex> tx_lk(tx->mu);
+    return tx->metrics;
+}
+
+void DownloadController::RecordSpeculativeDialogVisible(const std::string& tx_id) {
+    std::shared_ptr<SpeculativeTransaction> tx;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pending_txs.find(tx_id);
+        if (it == m_pending_txs.end()) return;
+        tx = it->second;
+    }
+    std::lock_guard<std::mutex> tx_lk(tx->mu);
+    if (tx->metrics.t9_dialog_visible_us == 0) {
+        tx->metrics.t9_dialog_visible_us = QpcNowUs();
+    }
+}
+
+Result<TaskModel> DownloadController::AcceptSpeculativeTransaction(
+    const std::string& tx_id,
+    const std::string& final_filename,
+    const std::string& final_save_dir,
+    bool start_immediately,
+    bool scheduled,
+    const std::string& schedule_time_local,
+    ConflictPolicy conflict_policy) {
+    std::shared_ptr<SpeculativeTransaction> tx;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pending_txs.find(tx_id);
+        if (it == m_pending_txs.end()) {
+            return Result<TaskModel>::Err("ERR_NOT_FOUND", "Speculative transaction not found");
+        }
+        tx = it->second;
+    }
+
+    TaskModel accepted_task;
+    bool need_fallback_start = false;
+    {
+        std::lock_guard<std::mutex> tx_lk(tx->mu);
+        if (tx->cancelled || tx->state == SpeculativeTxState::kConflictRejected) {
+            return Result<TaskModel>::Err("ERR_TX_CANCELLED", "Speculative transaction was already cancelled");
+        }
+        if (tx->accepted) {
+            return Result<TaskModel>::Ok(tx->draft_task);
+        }
+
+        tx->metrics.t10_user_download_us = QpcNowUs();
+        tx->metrics.bytes_before_decision = tx->draft_task.downloaded_bytes;
+        tx->accepted = true;
+        tx->state = SpeculativeTxState::kAccepted;
+
+        if (!final_filename.empty()) {
+            tx->draft_task.file_name = PathSanitizer::SanitizeFileName(final_filename);
+        }
+        if (!final_save_dir.empty()) {
+            tx->draft_task.save_dir = final_save_dir;
+        }
+        tx->draft_task.conflict_policy = conflict_policy;
+        tx->draft_task.scheduled = scheduled;
+        tx->draft_task.schedule_time_local = scheduled ? schedule_time_local : "";
+        tx->draft_task.user_edited_filename = true;
+        tx->draft_task.created_at_ms = NowEpochMs();
+        tx->draft_task.updated_at_ms = tx->draft_task.created_at_ms;
+
+        if (!tx->speculative_eligible || (tx->engine_finished && !tx->engine_succeeded)) {
+            need_fallback_start = true;
+            tx->draft_task.state = start_immediately ? TaskState::kQueued : TaskState::kPaused;
+            tx->draft_task.status_detail = start_immediately ? "Queued" : (scheduled ? "Scheduled" : "Paused");
+        } else if (tx->engine_finished && tx->engine_succeeded && tx->state == SpeculativeTxState::kCompleted) {
+            tx->draft_task.state = TaskState::kCompleted;
+            tx->draft_task.status_detail = "Completed";
+        } else if (!start_immediately || scheduled) {
+            tx->ctrl->pause_requested.store(true);
+            tx->draft_task.state = TaskState::kPaused;
+            tx->draft_task.status_detail = scheduled ? "Scheduled" : "Paused";
+        } else {
+            tx->draft_task.state = TaskState::kDownloading;
+            tx->draft_task.status_detail = "Downloading";
+        }
+
+        accepted_task = tx->draft_task;
+        tx->cv.notify_all();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_deleted_tasks.erase(tx_id);
+        m_tasks[tx_id] = accepted_task;
+        if (!tx->engine_finished) {
+            m_active[tx_id] = tx->ctrl;
+        }
+        m_store.UpsertTask(accepted_task);
+        if (need_fallback_start && start_immediately) {
+            m_cv.notify_all();
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> tx_lk(tx->mu);
+        tx->metrics.t11_progress_visible_us = QpcNowUs();
+    }
+    return Result<TaskModel>::Ok(accepted_task);
+}
+
+Result<void> DownloadController::CancelSpeculativeTransaction(const std::string& tx_id) {
+    std::shared_ptr<SpeculativeTransaction> tx;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_pending_txs.find(tx_id);
+        if (it == m_pending_txs.end()) {
+            return Result<void>::Ok();
+        }
+        tx = it->second;
+    }
+
+    std::lock_guard<std::mutex> tx_lk(tx->mu);
+    if (tx->accepted) {
+        return Result<void>::Err("ERR_ALREADY_ACCEPTED", "Transaction already accepted");
+    }
+    if (!tx->cancelled) {
+        tx->metrics.t12_user_cancel_us = QpcNowUs();
+        tx->cancelled = true;
+        tx->state = SpeculativeTxState::kCancelled;
+        tx->ctrl->cancel_requested.store(true);
+        tx->cv.notify_all();
+    }
+    return Result<void>::Ok();
+}
+
+} // namespace radium

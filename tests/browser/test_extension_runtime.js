@@ -300,9 +300,9 @@ async function runBrowserRuntimeTests() {
     await videoPage.goto(`${baseUrl}/video.html`, { waitUntil: "networkidle" });
 
     // Wait for content script to discover video element and attach Shadow DOM badge
-    const shadowHost = videoPage.locator("[data-flux-shadow-host]");
+    const shadowHost = videoPage.locator("[data-radium-shadow-host]");
     await shadowHost.waitFor({ state: "attached", timeout: 10000 });
-    console.log("  [OK] Shadow host [data-flux-shadow-host] discovered in DOM");
+    console.log("  [OK] Shadow host [data-radium-shadow-host] discovered in DOM");
 
     const hostBox = await shadowHost.boundingBox();
     console.log(`  Shadow Host Bounding Box: x=${hostBox.x}, y=${hostBox.y}, w=${hostBox.width}, h=${hostBox.height}`);
@@ -317,11 +317,11 @@ async function runBrowserRuntimeTests() {
     // Verify video element marked with overlay attached attribute
     const isAttached = await videoPage.evaluate(() => {
       const v = document.querySelector("video");
-      return Boolean(v && (v.dataset.fluxOverlayAttached === "true" || v.getAttribute("data-flux-overlay-attached") === "true"));
+      return Boolean(v && (v.dataset.radiumOverlayAttached === "true" || v.getAttribute("data-radium-overlay-attached") === "true"));
     });
     console.log(`  Video element overlay attached flag: ${isAttached}`);
     if (!isAttached) {
-      throw new Error("Video element missing data-flux-overlay-attached attribute");
+      throw new Error("Video element missing data-radium-overlay-attached attribute");
     }
 
     // Verify candidate was registered in background service worker (poll briefly for async message delivery)
@@ -488,7 +488,7 @@ async function runBrowserRuntimeTests() {
 
     // Suite 6: Service Worker Real Termination & Storage Recovery
     console.log(`\n[Suite 6/7] Testing Service Worker Real Lifecycle Termination & Storage Recovery...`);
-    const sentinelKey = `flux_sentinel_${Date.now()}`;
+    const sentinelKey = `radium_sentinel_${Date.now()}`;
     const sentinelVal = `val_${Math.random().toString(36).substring(2)}`;
 
     // Write sentinel into storage before termination

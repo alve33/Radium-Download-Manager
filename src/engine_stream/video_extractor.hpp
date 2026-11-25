@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace openidm::engine_stream {
+namespace radium::engine_stream {
 
 enum class ExtractionErrorCategory {
     kNone = 0,
@@ -322,4 +322,4 @@ public:
     static std::string ConvertDanmakuToAss(const std::vector<DanmakuItem>& items, int width = 1920, int height = 1080);
 };
 
-} // namespace openidm::engine_stream
+} // namespace radium::engine_stream

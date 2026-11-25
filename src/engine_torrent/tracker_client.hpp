@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — BitTorrent Tracker Client (BEP 3 HTTP/HTTPS, BEP 15 UDP Trackers, BEP 23 Compact)
+// Radium Download Manager — BitTorrent Tracker Client (BEP 3 HTTP/HTTPS, BEP 15 UDP Trackers, BEP 23 Compact)
 #pragma once
 
 #include <chrono>
@@ -34,7 +34,7 @@
 #include "engine_torrent/bencode.hpp"
 #include "engine_torrent/peer_wire_protocol.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 struct TrackerAnnounceResponse {
     bool ok{false};
@@ -430,10 +430,10 @@ public:
                 url,
                 std::async(std::launch::async, [url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event_str = std::string(event), per_tracker_timeout]() {
                     if (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0) {
-                        OPENIDM_LOG_INFO("TrackerClient", "Attempting parallel announce to HTTP tracker: " + url);
+                        RADIUM_LOG_INFO("TrackerClient", "Attempting parallel announce to HTTP tracker: " + url);
                         return AnnounceHttp(url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event_str, per_tracker_timeout);
                     } else if (url.rfind("udp://", 0) == 0) {
-                        OPENIDM_LOG_INFO("TrackerClient", "Attempting parallel announce to UDP tracker: " + url);
+                        RADIUM_LOG_INFO("TrackerClient", "Attempting parallel announce to UDP tracker: " + url);
                         return AnnounceUdp(url, info_hash_raw, peer_id, port, uploaded, downloaded, left, event_str, per_tracker_timeout);
                     }
                     return Result<TrackerAnnounceResponse>::Err("ERR_TORRENT_TRACKER_UNSUPPORTED", "Unsupported protocol");
@@ -470,18 +470,18 @@ public:
                                 new_peers++;
                             }
                         }
-                        OPENIDM_LOG_INFO("TrackerClient", "Tracker " + jobs[i].url + " succeeded: returned " +
+                        RADIUM_LOG_INFO("TrackerClient", "Tracker " + jobs[i].url + " succeeded: returned " +
                                                            std::to_string(res.value->peers.size()) + " peers (" +
                                                            std::to_string(new_peers) + " new, total pool: " +
                                                            std::to_string(merged_tr.peers.size()) + ")");
                     } else {
                         last_error = res.error->message;
-                        OPENIDM_LOG_WARN("TrackerClient", "Tracker announce failed for " + jobs[i].url + ": " + last_error);
+                        RADIUM_LOG_WARN("TrackerClient", "Tracker announce failed for " + jobs[i].url + ": " + last_error);
                     }
                 }
             }
             if (merged_tr.peers.size() >= 50) {
-                OPENIDM_LOG_INFO("TrackerClient", "Sufficient peers collected (" + std::to_string(merged_tr.peers.size()) + "); stopping tracker wait");
+                RADIUM_LOG_INFO("TrackerClient", "Sufficient peers collected (" + std::to_string(merged_tr.peers.size()) + "); stopping tracker wait");
                 break;
             }
             if (!any_resolved) {
@@ -518,4 +518,4 @@ public:
     }
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

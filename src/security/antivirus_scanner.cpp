@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Post-Download Antivirus Scanner Integration
+// Radium Download Manager — Post-Download Antivirus Scanner Integration
 #include "security/antivirus_scanner.hpp"
 
 #include <chrono>
@@ -16,7 +16,7 @@
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 
-namespace openidm::security {
+namespace radium::security {
 
 namespace {
 
@@ -281,4 +281,4 @@ Result<ScanReport> AntivirusScanner::ScanWithCustomExecutable(
 #endif
 }
 
-} // namespace openidm::security
+} // namespace radium::security

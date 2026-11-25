@@ -25,8 +25,7 @@ const {
   onHeadersReceivedHandler,
   onDownloadCreatedHandler,
   probeMediaSize,
-  submitMediaCandidateToFlux,
-  submitMediaCandidateToOpenIDM,
+  submitMediaCandidateToRadium,
   handleRuntimeMessage,
   updateTabDocument,
   downloadStateMachine
@@ -298,7 +297,7 @@ async function runTests() {
   // Direct MP4 handoff falls back to browser download when Radium is offline
   let browserFallbackTriggeredUrl = null;
   const mp4Candidate = G.cacheData.get(10)[0];
-  const fbDirect = await submitMediaCandidateToOpenIDM(
+  const fbDirect = await submitMediaCandidateToRadium(
     mp4Candidate,
     {},
     mockTransportOffline,
@@ -445,7 +444,7 @@ async function runTests() {
   };
 
   // Submit with 1080p MP4 quality: MUST NOT fall back to candidate.videoUrl (the playing 360p stream)!
-  await submitMediaCandidateToOpenIDM(fakeYtCand, {
+  await submitMediaCandidateToRadium(fakeYtCand, {
     selectedQuality: fakeYtCand.qualities[1], // 1080p MP4
     qualityId: "1080p_mp4"
   }, mockTransport);
@@ -468,7 +467,7 @@ async function runTests() {
       { id: "720p", resolution: "720p", variantUrl: "https://cdn.example.com/stream/720p.m3u8" }
     ]
   };
-  await submitMediaCandidateToOpenIDM(fakeHlsCand, {
+  await submitMediaCandidateToRadium(fakeHlsCand, {
     selectedQuality: fakeHlsCand.qualities[0],
     qualityId: "720p"
   }, mockTransport);
@@ -859,18 +858,18 @@ async function runTests() {
   FakeAnchor.prototype.click = function () { this.clicked = true; };
   mockAnchorWin.HTMLAnchorElement = FakeAnchor;
   installDeepSearchHooks(mockAnchorWin, "nonce-anchor", (msg) => {
-    if (msg.action === "radiumAnchorClicked" || msg.action === "fluxAnchorClicked") interceptedSyntheticClick = msg;
+    if (msg.action === "radiumAnchorClicked") interceptedSyntheticClick = msg;
   });
   const detachedAnchor = new FakeAnchor();
   detachedAnchor.href = "blob:https://chatgpt.com/artifact-99aa88bb";
   detachedAnchor.download = "analysis_results.csv";
   detachedAnchor.click();
   assert.strictEqual(detachedAnchor.clicked, true, "Underlying click() called");
-  assert.strictEqual(Boolean(interceptedSyntheticClick), true, "fluxAnchorClicked message emitted by HTMLAnchorElement.prototype.click hook");
+  assert.strictEqual(Boolean(interceptedSyntheticClick), true, "radiumAnchorClicked message emitted by HTMLAnchorElement.prototype.click hook");
   assert.strictEqual(interceptedSyntheticClick.url, "blob:https://chatgpt.com/artifact-99aa88bb");
   assert.strictEqual(interceptedSyntheticClick.download, "analysis_results.csv");
 
-  // Verify that when fluxAnchorClicked is relayed to background as linkClicked, correlation & eligibility succeed
+  // Verify that when radiumAnchorClicked is relayed to background as linkClicked, correlation & eligibility succeed
   handleRuntimeMessage({
     action: "linkClicked",
     url: interceptedSyntheticClick.url,
@@ -951,8 +950,8 @@ async function runTests() {
   };
 
   mockWin.ytInitialPlayerResponse = cipherPlayerResp;
-  assert.ok(mockWin.__FluxCatchTestHook, "Test hook exposed on window");
-  const scanFound = mockWin.__FluxCatchTestHook.scanPageForYouTubeData();
+  assert.ok(mockWin.__RadiumCatchTestHook, "Test hook exposed on window");
+  const scanFound = mockWin.__RadiumCatchTestHook.scanPageForYouTubeData();
   assert.strictEqual(scanFound, true, "scanPageForYouTubeData successfully processed player response");
   assert.ok(emittedYtMedia, "Dispatched catCatchAddMedia for YouTube video");
   assert.strictEqual(emittedYtMedia.streamType, "YOUTUBE");
@@ -1014,8 +1013,8 @@ async function runTests() {
 
   const attachedOverlays = scanAndAttachVideoOverlays(mockYtDoc, (meta) => { overlayClickData = meta; });
   assert.strictEqual(attachedOverlays.length, 1, "Overlay attached to YouTube <video> with pending/empty src");
-  assert.ok(mockVideoEl.__fluxHostEl, "Host element stored on video element");
-  assert.ok(mockVideoEl.__fluxBtn, "Button element stored on video element");
+  assert.ok(mockVideoEl.__radiumHostEl, "Host element stored on video element");
+  assert.ok(mockVideoEl.__radiumBtn, "Button element stored on video element");
 
   console.log("  -> PASS");
 
@@ -1112,7 +1111,7 @@ async function runTests() {
   assert.strictEqual(rangeBodyCanceled, true, "Range response body is canceled without downloading the media");
 
   let submittedParams = null;
-  await submitMediaCandidateToFlux({
+  await submitMediaCandidateToRadium({
     candidateId: "numeric-name",
     url: "https://media.example/9755",
     fileName: "9755",
@@ -1204,10 +1203,10 @@ async function runTests() {
   // Simulate window receiving catCatchAddMedia
   global.window = {
     location: { origin: "https://www.youtube.com" },
-    __fluxLastCandidate: candidateWithQualities
+    __radiumLastCandidate: candidateWithQualities
   };
   mockInteractiveDoc.querySelectorAll = (sel) => {
-    if (sel === "[data-flux-shadow-host]") return [attachedItem.hostEl];
+    if (sel === "[data-radium-shadow-host]") return [attachedItem.hostEl];
     return [];
   };
 

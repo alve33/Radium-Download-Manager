@@ -18,7 +18,7 @@
 
 | Metric ID | Metric Name | Provisional Target Budget | Hard Ceiling (CI Gate Failure) | Related Requirement | Measurement Tool |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **BUD-001** | **Core Uncompressed Binary Size** (`radium.exe` + `radium-nmh.exe`) | `1.8 – 2.5 MB` | **`3.5 MB`** | `NFR-001` | PowerShell `(Get-Item openidm*.exe \| Measure-Object Length -Sum).Sum` |
+| **BUD-001** | **Core Uncompressed Binary Size** (`radium.exe` + `radium-nmh.exe`) | `1.8 – 2.5 MB` | **`3.5 MB`** | `NFR-001` | PowerShell `(Get-Item radium*.exe \| Measure-Object Length -Sum).Sum` |
 | **BUD-002** | **Core Compressed Installer Size** (`Radium-Setup-x64-Core.exe`) | `0.9 – 1.3 MB` | **`1.8 MB`** | `NFR-001` | File size of Inno Setup output |
 | **BUD-003** | **Full Offline Installer Size** (including `N_m3u8DL-RE.exe` + minimal mux `ffmpeg.exe`) | `17.5 – 22.0 MB` (or `~34 MB` with full `ffmpeg.exe`) | **`38.0 MB`** | `ADR-0008` | File size of Inno Setup output |
 | **BUD-004** | **Cold Startup Time** (Process creation to `WM_PAINT` of Main Window on NVMe SSD) | `35 – 75 ms` | **`100 ms`** | `NFR-002` | `QueryPerformanceCounter` logged from `wWinMain` entry to first `EndPaint` |

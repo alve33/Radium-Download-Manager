@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <mutex>
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 namespace {
 
@@ -41,7 +41,7 @@ public:
         m_lock.unlock();
         const auto steady_tick_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        OPENIDM_LOG_INFO("HttpRangeTrace", "HTTP_RUNTIME_TRACE {\"event\":\"lock_timing\",\"lock\":\"" +
+        RADIUM_LOG_INFO("HttpRangeTrace", "HTTP_RUNTIME_TRACE {\"event\":\"lock_timing\",\"lock\":\"" +
             std::string(m_lock_name) + "\",\"operation\":\"" + m_operation +
             "\",\"wait_us\":" + std::to_string(m_wait_us) + ",\"hold_us\":" +
             std::to_string(hold_us) + ",\"steady_tick_us\":" + std::to_string(steady_tick_us) + "}");
@@ -332,7 +332,7 @@ std::shared_ptr<LiveSegment> SegmentScheduler::AcquireNextOrStealSegment(bool al
     if (RangeTraceEnabled()) {
         const auto event_tick_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        OPENIDM_LOG_INFO("HttpRangeTrace", "HTTP_RUNTIME_TRACE {\"event\":\"range_split\",\"parent_segment\":" +
+        RADIUM_LOG_INFO("HttpRangeTrace", "HTTP_RUNTIME_TRACE {\"event\":\"range_split\",\"parent_segment\":" +
             std::to_string(best_victim->segment_id) + ",\"child_segment\":" + std::to_string(stolen->segment_id) +
             ",\"parent_start\":" + std::to_string(curr) + ",\"parent_old_end\":" + std::to_string(old_end) +
             ",\"parent_new_end\":" + std::to_string(split_start - 1) + ",\"child_start\":" +
@@ -582,4 +582,4 @@ uint32_t SegmentScheduler::GetConsecutiveFailures() const {
     return m_consecutive_failures;
 }
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

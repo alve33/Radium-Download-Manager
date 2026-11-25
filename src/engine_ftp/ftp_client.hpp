@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — High-Performance Native WinSock2 FTP & FTPS Engine
+// Radium Download Manager — High-Performance Native WinSock2 FTP & FTPS Engine
 // Implements RFC 959 (FTP), RFC 2428 (IPv6/EPSV), RFC 3659 (REST/SIZE),
 // RFC 4217 (Explicit/Implicit FTPS via Schannel/OpenSSL), and SOCKS5/HTTP CONNECT proxy.
 #pragma once
@@ -17,7 +17,7 @@
 #include "brisk_engine/http_download_engine.hpp"
 #include "common/types.hpp"
 
-namespace openidm::ftp {
+namespace radium::ftp {
 
 struct FtpUrl {
     std::string scheme{"ftp"}; // "ftp" or "ftps"
@@ -81,4 +81,4 @@ public:
         const FtpProxyOptions& proxy_opts = {});
 };
 
-} // namespace openidm::ftp
+} // namespace radium::ftp

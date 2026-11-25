@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — HTTP/1.1 & HTTPS Ranged Client (POSIX Sockets + OpenSSL & Windows WinHTTP)
+// Radium Download Manager — HTTP/1.1 & HTTPS Ranged Client (POSIX Sockets + OpenSSL & Windows WinHTTP)
 // Implements FR-001, FR-002, FR-004, RISK-006, THREAT-005.
 #pragma once
 
@@ -12,7 +12,7 @@
 #include <string_view>
 #include "common/types.hpp"
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 struct ParsedUrl {
     std::string scheme; // "http" or "https"
@@ -114,7 +114,7 @@ struct HttpNetworkOptions {
 
 class HttpClient {
 public:
-    using HttpNetworkOptions = openidm::brisk::HttpNetworkOptions;
+    using HttpNetworkOptions = radium::brisk::HttpNetworkOptions;
 
     static Result<ParsedUrl> ParseUrl(std::string_view url);
     static std::string ResolveRedirectTarget(const ParsedUrl& base, const std::string& loc);
@@ -185,4 +185,4 @@ public:
 ContentRangeResult ParseContentRangeExtended(std::string_view val);
 bool ParseContentRange(std::string_view val, uint64_t& start, uint64_t& end, uint64_t& total);
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

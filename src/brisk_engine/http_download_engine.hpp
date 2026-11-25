@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Brisk HTTP Segmented Download Engine
+// Radium Download Manager — Brisk HTTP Segmented Download Engine
 // Direct integration of Brisk's HttpDownloadEngine & HttpDownloadConnection mechanisms:
 //   - Dynamic Connection Spawning (1 -> max_connections)
 //   - Dynamic Connection Reuse (Work-Stealing Byte-Range Split)
@@ -25,7 +25,7 @@
 #include "brisk_engine/http_client.hpp"
 #include "common/types.hpp"
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 // Learned per-host connection caps (MDM hosts.rs port): after 2 refusals while other
 // workers are receiving, caps concurrency for 10 minutes to avoid wasted retries / bans.
@@ -108,6 +108,12 @@ public:
 
     using ProgressCallback = std::function<void(const EngineProgress&)>;
 
+    struct SpeculativeHooks {
+        bool use_explicit_part_path{false};
+        std::function<bool(std::atomic<bool>& cancel_flag, TaskModel& task_to_commit)> wait_for_acceptance;
+        std::function<void(TaskModel& task_to_commit)> sync_before_commit;
+    };
+
     // Executes a synchronous or background download for TaskModel, updating task in place
     // and firing on_progress periodically. Dual token-bucket rate limiting enforces both
     // per-task bandwidth limits and aggregate global bandwidth limits simultaneously.
@@ -118,10 +124,11 @@ public:
         std::atomic<uint64_t>& task_speed_limit_bps,
         ProgressCallback on_progress,
         std::shared_ptr<TokenBucketLimiter> global_limiter = nullptr,
-        std::atomic<uint64_t>* global_speed_limit_bps = nullptr);
+        std::atomic<uint64_t>* global_speed_limit_bps = nullptr,
+        const SpeculativeHooks* speculative_hooks = nullptr);
 
 private:
     EngineConfig m_cfg;
 };
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

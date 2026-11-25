@@ -2,6 +2,7 @@
 #include "remote/remote_control.hpp"
 #include "common/json_mini.hpp"
 #include "common/path_sanitizer.hpp"
+#include "common/version.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -21,7 +22,7 @@
 #pragma comment(lib, "ws2_32.lib")
 #endif
 
-namespace openidm::remote {
+namespace radium::remote {
 
 namespace {
 
@@ -108,7 +109,7 @@ std::string McpStdioServer::HandleMessage(const std::string& json_line) {
         caps["tools"] = json::Value(json::Object{});
         json::Object info;
         info["name"] = "radium-download-manager";
-        info["version"] = "1.0.0";
+        info["version"] = RADIUM_VERSION_STRING;
         json::Object res;
         res["protocolVersion"] = "2024-11-05";
         res["capabilities"] = json::Value(std::move(caps));
@@ -733,8 +734,10 @@ bool CrashWatchdog::StartMonitorProcess(
                        L"\" --data \"" + data_dir.wstring() + L"\" --parent " + std::to_wstring(pid);
     STARTUPINFOW si{};
     si.cb = sizeof(si);
+    si.dwFlags = STARTF_FORCEOFFFEEDBACK | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS | CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
         return false;
     }
     CloseHandle(pi.hThread);
@@ -749,6 +752,9 @@ bool CrashWatchdog::StartMonitorProcess(
 
 int CrashWatchdog::RunMonitorLoop(const CrashMonitorArgs& args) {
 #ifdef _WIN32
+    // Clear any Windows app-starting cursor feedback immediately for this headless monitor process.
+    MSG init_msg{};
+    PeekMessageW(&init_msg, nullptr, 0, 0, PM_NOREMOVE);
     HANDLE hParent = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, args.parent_pid);
     if (!hParent) return 1;
     std::wstring wpipe(args.pipe_name.begin(), args.pipe_name.end());
@@ -783,4 +789,4 @@ int CrashWatchdog::RunMonitorLoop(const CrashMonitorArgs& args) {
 #endif
 }
 
-} // namespace openidm::remote
+} // namespace radium::remote

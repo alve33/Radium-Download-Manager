@@ -34,8 +34,7 @@ IS_WINDOWS = (os.name == "nt" or platform.system().lower().startswith("win"))
 EXE_EXT = ".exe" if IS_WINDOWS else ""
 
 os.environ["RADIUM_ALLOW_LOOPBACK"] = "1"
-os.environ["FLUX_ALLOW_LOOPBACK"] = "1"
-os.environ["OPENIDM_ALLOW_LOOPBACK"] = "1"
+os.environ["RADIUM_ALLOW_LOOPBACK"] = "1"
 
 
 def find_binary(name: str, custom_dir: Path | None = None) -> Path:
@@ -462,10 +461,10 @@ def main():
     bin_dir = Path(args.bin_dir).resolve() if args.bin_dir else None
     radium_bin = find_binary("radium", bin_dir)
     if not radium_bin.is_file():
-        radium_bin = find_binary("flux", bin_dir)
+        radium_bin = find_binary("radium", bin_dir)
     nmh_bin = find_binary("radium-nmh", bin_dir)
     if not nmh_bin.is_file():
-        nmh_bin = find_binary("flux-nmh", bin_dir)
+        nmh_bin = find_binary("radium-nmh", bin_dir)
 
     assert radium_bin.is_file(), f"Cannot locate radium executable: {radium_bin}"
     assert nmh_bin.is_file(), f"Cannot locate radium-nmh executable: {nmh_bin}"

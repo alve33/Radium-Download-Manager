@@ -83,7 +83,7 @@ std::optional<SemVer> SemVer::Parse(std::string_view str) {
 }
 
 bool SemVer::operator<(const SemVer& other) const {
-    auto cmp = openidm::CompareSemanticVersions(ToString(), other.ToString());
+    auto cmp = radium::CompareSemanticVersions(ToString(), other.ToString());
     if (cmp.has_value()) {
         return *cmp < 0;
     }
@@ -131,7 +131,7 @@ bool UpdateManager::IsTrustedReleaseUrl(std::string_view url, std::string_view e
 }
 
 std::optional<UpdateAssetInfo> UpdateManager::SelectReleaseAsset(
-    const openidm::json::Array& assets,
+    const radium::json::Array& assets,
     std::string_view target_arch,
     std::string_view expected_release_prefix) {
     const std::string_view prefix = ResolveReleasePrefix(expected_release_prefix);
@@ -207,9 +207,9 @@ GitHubUpdateEvaluation UpdateManager::EvaluateGitHubReleaseResponse(
     }
 
     try {
-        const auto release = openidm::json::Parse(std::string(response_body));
+        const auto release = radium::json::Parse(std::string(response_body));
         const std::string version = release["tag_name"].as_string();
-        const auto comparison = openidm::CompareSemanticVersions(version, current_version);
+        const auto comparison = radium::CompareSemanticVersions(version, current_version);
         const bool is_draft = release["draft"].as_bool(true);
         const bool is_prerelease = release["prerelease"].as_bool(false);
         if (!release.is_object() || version.empty() || is_draft ||
@@ -258,7 +258,7 @@ GitHubUpdateEvaluation UpdateManager::EvaluateGitHubReleaseResponse(
     }
 }
 
-std::string UpdateManager::FormatNetworkCheckError(const openidm::Error& error) {
+std::string UpdateManager::FormatNetworkCheckError(const radium::Error& error) {
     if (error.code == "ERR_NET_TIMEOUT") {
         return "Could not check GitHub Releases: request timed out (" + error.message + ").";
     }
@@ -271,15 +271,15 @@ std::string UpdateManager::FormatNetworkCheckError(const openidm::Error& error) 
     return "Could not check GitHub Releases: " + error.message;
 }
 
-openidm::Result<UpdatePackageInfo> UpdateManager::ParseReleaseManifest(std::string_view json_content) {
+radium::Result<UpdatePackageInfo> UpdateManager::ParseReleaseManifest(std::string_view json_content) {
     if (json_content.empty()) {
-        return openidm::Result<UpdatePackageInfo>::Err("ERR_EMPTY_MANIFEST", "Release manifest is empty");
+        return radium::Result<UpdatePackageInfo>::Err("ERR_EMPTY_MANIFEST", "Release manifest is empty");
     }
 
     try {
-        const auto root = openidm::json::Parse(std::string(json_content));
+        const auto root = radium::json::Parse(std::string(json_content));
         if (!root.is_object()) {
-            return openidm::Result<UpdatePackageInfo>::Err("ERR_INVALID_MANIFEST", "Release manifest is not a JSON object");
+            return radium::Result<UpdatePackageInfo>::Err("ERR_INVALID_MANIFEST", "Release manifest is not a JSON object");
         }
 
         UpdatePackageInfo info;
@@ -288,7 +288,7 @@ openidm::Result<UpdatePackageInfo> UpdateManager::ParseReleaseManifest(std::stri
             info.version = root["version"].as_string();
         }
         if (info.version.empty()) {
-            return openidm::Result<UpdatePackageInfo>::Err("ERR_INVALID_MANIFEST", "Manifest missing version or tag_name");
+            return radium::Result<UpdatePackageInfo>::Err("ERR_INVALID_MANIFEST", "Manifest missing version or tag_name");
         }
 
         info.release_title = root["name"].as_string();
@@ -310,26 +310,26 @@ openidm::Result<UpdatePackageInfo> UpdateManager::ParseReleaseManifest(std::stri
             info.download_url = root["download_url"].as_string();
         }
 
-        return openidm::Result<UpdatePackageInfo>::Ok(std::move(info));
+        return radium::Result<UpdatePackageInfo>::Ok(std::move(info));
     } catch (...) {
-        return openidm::Result<UpdatePackageInfo>::Err("ERR_INVALID_MANIFEST", "Release manifest JSON is malformed");
+        return radium::Result<UpdatePackageInfo>::Err("ERR_INVALID_MANIFEST", "Release manifest JSON is malformed");
     }
 }
 
 bool UpdateManager::IsNewerVersion(std::string_view current_version, std::string_view latest_version) {
-    const auto cmp = openidm::CompareSemanticVersions(latest_version, current_version);
+    const auto cmp = radium::CompareSemanticVersions(latest_version, current_version);
     return cmp.has_value() && *cmp > 0;
 }
 
-openidm::Result<bool> UpdateManager::VerifyPackageSha256(const std::filesystem::path& file_path, std::string_view expected_hex_hash) {
+radium::Result<bool> UpdateManager::VerifyPackageSha256(const std::filesystem::path& file_path, std::string_view expected_hex_hash) {
     std::error_code ec;
     if (!std::filesystem::exists(file_path, ec) || !std::filesystem::is_regular_file(file_path, ec)) {
-        return openidm::Result<bool>::Err("ERR_FILE_NOT_FOUND", "Update file not found on disk");
+        return radium::Result<bool>::Err("ERR_FILE_NOT_FOUND", "Update file not found on disk");
     }
 
-    auto file_res = openidm::CryptoUtils::ComputeFileSha256Hex(file_path);
+    auto file_res = radium::CryptoUtils::ComputeFileSha256Hex(file_path);
     if (!file_res.ok()) {
-        return openidm::Result<bool>::Err(file_res.error->code, file_res.error->message);
+        return radium::Result<bool>::Err(file_res.error->code, file_res.error->message);
     }
     std::string actual_hash = file_res.value.value();
 
@@ -337,14 +337,14 @@ openidm::Result<bool> UpdateManager::VerifyPackageSha256(const std::filesystem::
     std::string actual_clean = ToLower(actual_hash);
 
     if (actual_clean.empty()) {
-        return openidm::Result<bool>::Err("ERR_HASH_FAILED", "Failed to calculate SHA-256 hash");
+        return radium::Result<bool>::Err("ERR_HASH_FAILED", "Failed to calculate SHA-256 hash");
     }
 
     if (actual_clean == expected_clean) {
-        return openidm::Result<bool>::Ok(true);
+        return radium::Result<bool>::Ok(true);
     }
 
-    return openidm::Result<bool>::Err("ERR_HASH_MISMATCH",
+    return radium::Result<bool>::Err("ERR_HASH_MISMATCH",
         "Package SHA-256 verification failed. Expected: " + expected_clean + ", Actual: " + actual_clean);
 }
 

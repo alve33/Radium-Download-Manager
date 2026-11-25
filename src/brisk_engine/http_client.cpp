@@ -30,7 +30,7 @@
 #include <openssl/ssl.h>
 #endif
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 namespace {
 
@@ -1044,7 +1044,7 @@ Result<HttpResponseMeta> HttpClient::PerformGet(
 
         WinHttpSetTimeouts(hRequest, resolve_timeout, connect_timeout, send_timeout, recv_timeout);
 
-        // Disable automatic WinHTTP redirects so OpenIDM's SSRF redirect guard inspects every hop
+        // Disable automatic WinHTTP redirects so Radium's SSRF redirect guard inspects every hop
         DWORD disable_redirects = WINHTTP_DISABLE_REDIRECTS;
         WinHttpSetOption(hRequest, WINHTTP_OPTION_DISABLE_FEATURE, &disable_redirects, sizeof(disable_redirects));
 
@@ -1737,4 +1737,4 @@ Result<HttpResponseMeta> HttpClient::ProbeResource(
         net_opts);
 }
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

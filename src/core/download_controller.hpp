@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Unified Download Controller, Queue Scheduler & Settings Service
+// Radium Download Manager — Unified Download Controller, Queue Scheduler & Settings Service
 // Combines ordinary HTTP/HTTPS downloads (Brisk engine) and HLS/DASH streams (N_m3u8DL-RE worker)
 // into a single persistent queue and unified task model.
 // Implements Phase 3, Phase 5, Phase 7, and Phase 8 requirements.
@@ -36,7 +36,7 @@
 #include "storage/sqlite_store.hpp"
 #include "common/central_config.hpp"
 
-namespace openidm {
+namespace radium {
 
 // Sliding-window download quota (ported from MDM quota.rs: "Download no more than N MBytes every H hours")
 class SlidingWindowQuota {
@@ -287,6 +287,59 @@ public:
     // Waits until a specific task reaches a terminal/paused state (useful for CLI & integration tests)
     Result<TaskModel> WaitForTaskCompletion(const std::string& task_id, int timeout_ms = 30000);
 
+    // Speculative background download transactions for intercepted browser offers
+    enum class SpeculativeTxState {
+        kReceived = 0,
+        kPreflighting = 1,
+        kConflictRejected = 2,
+        kPrefetching = 3,
+        kWaitingForUser = 4,
+        kAccepted = 5,
+        kCancelled = 6,
+        kCompleted = 7
+    };
+
+    struct SpeculativeTxMetrics {
+        int64_t t2_ipc_recv_us{0};
+        int64_t t3_tx_created_us{0};
+        int64_t t4_bg_queued_us{0};
+        int64_t t5_dest_check_queued_us{0};
+        int64_t t6_http_init_us{0};
+        int64_t t7_first_byte_us{0};
+        int64_t t8_dest_check_done_us{0};
+        int64_t t9_dialog_visible_us{0};
+        int64_t t10_user_download_us{0};
+        int64_t t11_progress_visible_us{0};
+        int64_t t12_user_cancel_us{0};
+        int64_t t13_bg_stopped_us{0};
+        uint64_t bytes_before_decision{0};
+    };
+
+    using SpeculativeDecisionCallback = std::function<void(
+        const std::string& tx_id,
+        const TaskModel& draft,
+        const IncomingConflictReport& conflict)>;
+
+    Result<std::string> BeginSpeculativeOffer(
+        TaskModel draft_task,
+        SpeculativeDecisionCallback on_decision,
+        int64_t ipc_recv_qpc_us = 0);
+
+    std::optional<TaskModel> GetSpeculativeSnapshot(const std::string& tx_id) const;
+    std::optional<SpeculativeTxMetrics> GetSpeculativeMetrics(const std::string& tx_id) const;
+    void RecordSpeculativeDialogVisible(const std::string& tx_id);
+
+    Result<TaskModel> AcceptSpeculativeTransaction(
+        const std::string& tx_id,
+        const std::string& final_filename,
+        const std::string& final_save_dir,
+        bool start_immediately,
+        bool scheduled,
+        const std::string& schedule_time_local,
+        ConflictPolicy conflict_policy);
+
+    Result<void> CancelSpeculativeTransaction(const std::string& tx_id);
+
 private:
     struct ActiveTaskControl {
         std::atomic<bool> pause_requested{false};
@@ -294,6 +347,28 @@ private:
         std::atomic<uint64_t> task_speed_limit_bps{0};
         std::thread worker_thread;
         std::atomic<bool> finished{false};
+    };
+
+    struct SpeculativeTransaction {
+        std::string tx_id;
+        TaskModel draft_task;
+        std::shared_ptr<ActiveTaskControl> ctrl{std::make_shared<ActiveTaskControl>()};
+        mutable std::mutex mu;
+        std::condition_variable cv;
+        SpeculativeTxState state{SpeculativeTxState::kReceived};
+        bool speculative_eligible{false};
+        bool accepted{false};
+        bool cancelled{false};
+        bool engine_finished{false};
+        bool engine_succeeded{false};
+        bool dest_check_done{false};
+        std::filesystem::path staging_dir;
+        std::filesystem::path final_path;
+        std::optional<Error> engine_error;
+        IncomingConflictReport conflict_report;
+        SpeculativeTxMetrics metrics;
+        std::thread bg_thread;
+        std::thread dest_thread;
     };
 
     void ScheduleLoop();
@@ -312,6 +387,7 @@ private:
     std::map<std::string, TaskModel> m_tasks;
     std::set<std::string> m_deleted_tasks;
     std::map<std::string, std::shared_ptr<ActiveTaskControl>> m_active;
+    std::map<std::string, std::shared_ptr<SpeculativeTransaction>> m_pending_txs;
     std::atomic<uint32_t> m_max_concurrent{3};
     std::atomic<uint64_t> m_global_speed_limit_bps{0};
     std::shared_ptr<brisk::TokenBucketLimiter> m_global_limiter{std::make_shared<brisk::TokenBucketLimiter>()};
@@ -321,4 +397,4 @@ private:
     std::thread m_scheduler_thread;
 };
 
-} // namespace openidm
+} // namespace radium

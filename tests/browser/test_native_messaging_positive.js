@@ -51,8 +51,7 @@ async function runPositiveNativeMessagingTest() {
     throw new Error(`Manifest name mismatch: "${manifestData.name}"`);
   }
   let expectedNmh = path.join(installDir, "radium-nmh.exe");
-  if (!fs.existsSync(expectedNmh)) { expectedNmh = path.join(installDir, "flux-nmh.exe"); }
-  if (path.resolve(manifestData.path) !== path.resolve(expectedNmh)) {
+    if (path.resolve(manifestData.path) !== path.resolve(expectedNmh)) {
     throw new Error(`Manifest path "${manifestData.path}" != expected "${expectedNmh}"`);
   }
   const allowedOrigins = manifestData.allowed_origins || [];
@@ -62,23 +61,22 @@ async function runPositiveNativeMessagingTest() {
   }
   console.log(`  [OK] Manifest allowed_origins verified: ${expectedOrigin}`);
 
-  // 2. Start Flux Desktop in Daemon Mode
-  let fluxExe = path.join(installDir, "radium.exe");
-  if (!fs.existsSync(fluxExe)) { fluxExe = path.join(installDir, "flux.exe"); }
+  // 2. Start Radium Desktop in Daemon Mode
+  const radiumExe = path.join(installDir, "radium.exe");
   const testDb = path.join(installDir, "nm_test_state.db");
   const testDlDir = path.join(installDir, "nm_downloads");
   if (!fs.existsSync(testDlDir)) {
     fs.mkdirSync(testDlDir, { recursive: true });
   }
 
-  console.log(`  Starting Radium daemon: ${fluxExe}...`);
+  console.log(`  Starting Radium daemon: ${radiumExe}...`);
   const daemonEnv = Object.assign({}, process.env, {
     RADIUM_ALLOW_LOOPBACK: "1",
     FLUX_ALLOW_LOOPBACK: "1",
     OPENIDM_ALLOW_LOOPBACK: "1"
   });
 
-  const daemonProcess = spawn(fluxExe, [
+  const daemonProcess = spawn(radiumExe, [
     "--daemon",
     "--db", testDb,
     "--out", testDlDir,
@@ -193,7 +191,7 @@ async function runPositiveNativeMessagingTest() {
 
     // 6. Verify Task Recorded in Radium Database
     console.log("  [Step 3/3] Verifying task registration in Radium task queue...");
-    const listRes = execSync(`"${fluxExe}" --db "${testDb}" --list`, { encoding: "utf-8" });
+    const listRes = execSync(`"${radiumExe}" --db "${testDb}" --list`, { encoding: "utf-8" });
     console.log(`  Radium Queue Output:\n${listRes.trim()}`);
 
     if (!listRes.includes("nm_smoke_4mb.bin") && !listRes.includes(createdTaskId)) {
@@ -223,7 +221,7 @@ async function runPositiveNativeMessagingTest() {
       execSync(`taskkill /F /IM radium.exe`, { stdio: "ignore" });
     } catch (_) {}
     try {
-      execSync(`taskkill /F /IM flux.exe`, { stdio: "ignore" });
+      execSync(`taskkill /F /IM radium.exe`, { stdio: "ignore" });
     } catch (_) {}
   }
 }

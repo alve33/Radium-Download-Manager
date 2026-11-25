@@ -15,7 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace openidm::ui {
+namespace radium::ui {
 
 enum class ThemeMode {
     kDark,
@@ -421,4 +421,4 @@ struct NewDownloadDialogLayout {
     static constexpr int kButtonHeight = 36;
 };
 
-} // namespace openidm::ui
+} // namespace radium::ui

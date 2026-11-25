@@ -19,7 +19,7 @@
 #include <windows.h>
 #endif
 
-namespace openidm::platform {
+namespace radium::platform {
 
 class WindowsIntegrations {
 public:
@@ -63,4 +63,4 @@ public:
 #endif
 };
 
-} // namespace openidm::platform
+} // namespace radium::platform

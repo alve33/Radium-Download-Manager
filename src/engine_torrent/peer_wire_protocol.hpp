@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux â€” BitTorrent Peer Wire Protocol (BEP 3, BEP 23, BEP 52)
+// Radium Download Manager — BitTorrent Peer Wire Protocol (BEP 3, BEP 23, BEP 52)
 // Direct reuse of aria2 BitTorrent wire framing, handshake, and compact peer unpacking algorithms
 #pragma once
 
@@ -17,7 +17,7 @@
 #include "common/version.hpp"
 #include "engine_torrent/bencode.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 // Constants directly aligned with aria2 BtConstants.h
 constexpr size_t kInfoHashLength = 20;
@@ -455,4 +455,4 @@ public:
     }
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

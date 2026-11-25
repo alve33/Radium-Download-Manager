@@ -3,6 +3,7 @@
 #include "ui/extension_setup_dialog.hpp"
 
 #include "common/path_sanitizer.hpp"
+#include "common/version.hpp"
 
 #ifdef _WIN32
 #include <commctrl.h>
@@ -13,7 +14,7 @@
 #include <memory>
 #include <thread>
 
-namespace openidm::ui {
+namespace radium::ui {
 
 namespace {
 
@@ -692,7 +693,7 @@ void ShowExtensionInstalledDialogWin32(
 
     InstalledDialogContext ctx;
     ctx.install_dir = install_dir;
-    ctx.version_w = Utf8ToW(version.empty() ? "1.0.0" : version);
+    ctx.version_w = Utf8ToW(version.empty() ? RADIUM_VERSION_STRING : version);
     ctx.nmh_summary_w = Utf8ToW(nmh_status.summary);
     ctx.nmh_ok = nmh_status.host_executable_found && nmh_status.registry_configured && nmh_status.manifest_valid;
     ctx.palette = palette;
@@ -723,5 +724,5 @@ void ShowExtensionInstalledDialogWin32(
     RunModalLoop(hwnd_parent, hDlg);
 }
 
-} // namespace openidm::ui
+} // namespace radium::ui
 #endif

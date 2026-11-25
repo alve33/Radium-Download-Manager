@@ -27,11 +27,11 @@
 #include <unistd.h>
 #endif
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 namespace {
 
-// Cross-platform random-access .openidm.part file wrapper supporting concurrent thread writes at exact byte offsets
+// Cross-platform random-access .part file wrapper supporting concurrent thread writes at exact byte offsets
 class PlatformPartFile {
 public:
     PlatformPartFile() = default;
@@ -222,13 +222,13 @@ void EmitRuntimeTrace(const std::string& event) {
                 std::chrono::steady_clock::now().time_since_epoch()).count();
             timed_event += ",\"steady_tick_us\":" + std::to_string(steady_tick_us) + "}";
         }
-        OPENIDM_LOG_INFO("HttpRangeTrace", "HTTP_RUNTIME_TRACE " + timed_event);
+        RADIUM_LOG_INFO("HttpRangeTrace", "HTTP_RUNTIME_TRACE " + timed_event);
     }
 }
 
 void EmitHttpPhaseTrace(const char* phase, const std::chrono::steady_clock::time_point& origin) {
     if (HttpRangeTraceEnabled()) {
-        OPENIDM_LOG_INFO("HttpRangeTrace", std::string("HTTP_PHASE_TRACE phase=") + phase +
+        RADIUM_LOG_INFO("HttpRangeTrace", std::string("HTTP_PHASE_TRACE phase=") + phase +
             " elapsed_us=" + std::to_string(TraceElapsedMicroseconds(origin)));
     }
 }
@@ -356,7 +356,8 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     std::atomic<uint64_t>& task_speed_limit_bps,
     ProgressCallback on_progress,
     std::shared_ptr<TokenBucketLimiter> global_limiter,
-    std::atomic<uint64_t>* global_speed_limit_bps) {
+    std::atomic<uint64_t>* global_speed_limit_bps,
+    const SpeculativeHooks* speculative_hooks) {
 
     const bool http_trace_enabled = HttpRangeTraceEnabled();
     const auto engine_start_tp = std::chrono::steady_clock::now();
@@ -621,7 +622,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         if (meta.status_code == 200) {
                             server_ignored_range = true;
                             disable_splitting.store(true);
-                            OPENIDM_LOG_WARN("BriskEngine", "Server returned 200 OK to range request on worker (expected " +
+                            RADIUM_LOG_WARN("BriskEngine", "Server returned 200 OK to range request on worker (expected " +
                                 std::to_string(curr) + "-" + std::to_string(end) + "); aborting secondary stream");
                             return HeaderAction::kAbort;
                         }
@@ -634,7 +635,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         if (meta.range_start != curr) {
                             server_ignored_range = true;
                             disable_splitting.store(true);
-                            OPENIDM_LOG_WARN("BriskEngine", "Server range_start mismatch (got " +
+                            RADIUM_LOG_WARN("BriskEngine", "Server range_start mismatch (got " +
                                 std::to_string(meta.range_start) + ", expected " + std::to_string(curr) + "); aborting secondary stream");
                             return HeaderAction::kAbort;
                         }
@@ -884,7 +885,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         retry_after_ms = (captured_retry_after_sec_w > 0)
                                             ? (captured_retry_after_sec_w * 1000)
                                             : 2000;
-                        OPENIDM_LOG_WARN("BriskEngine", "Server overload/rate limit (HTTP " +
+                        RADIUM_LOG_WARN("BriskEngine", "Server overload/rate limit (HTTP " +
                             std::to_string(response_status) + ") on segment #" +
                             std::to_string(seg->segment_id) + "; reduced target concurrency to " +
                             std::to_string(scheduler->GetMaxConnections()) + ", waiting " +
@@ -1038,7 +1039,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                                              orig_u.value->host != final_u.value->host ||
                                              orig_u.value->port != final_u.value->port);
                         if (cross_origin) {
-                            OPENIDM_LOG_INFO("HttpEngine", "Cross-origin redirect detected (" + task.url + " -> " + meta.final_url + "); scrubbing credentials");
+                            RADIUM_LOG_INFO("HttpEngine", "Cross-origin redirect detected (" + task.url + " -> " + meta.final_url + "); scrubbing credentials");
                             static const char* kSensitiveHeaders[] = {
                                 "cookie", "cookie2", "authorization", "proxy-authorization",
                                 "Cookie", "Cookie2", "Authorization", "Proxy-Authorization"
@@ -1122,14 +1123,18 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 }
 
                 std::error_code ec;
-                std::filesystem::create_directories(task.save_dir, ec);
-
-                if (!task.part_path.empty() && std::filesystem::exists(task.part_path, ec) &&
-                    task.part_path.find(task.task_id) != std::string::npos) {
-                    part_path = task.part_path;
+                if (speculative_hooks && speculative_hooks->use_explicit_part_path && !task.part_path.empty()) {
+                    part_path = PathSanitizer::Utf8ToPath(task.part_path);
+                    std::filesystem::create_directories(part_path.parent_path(), ec);
                 } else {
-                    part_path = std::filesystem::path(task.save_dir) / (task.file_name + "." + task.task_id + ".part");
-                    task.part_path = part_path.string();
+                    std::filesystem::create_directories(task.save_dir, ec);
+                    if (!task.part_path.empty() && std::filesystem::exists(task.part_path, ec) &&
+                        task.part_path.find(task.task_id) != std::string::npos) {
+                        part_path = task.part_path;
+                    } else {
+                        part_path = std::filesystem::path(task.save_dir) / (task.file_name + "." + task.task_id + ".part");
+                        task.part_path = part_path.string();
+                    }
                 }
 
                 if (is_resume) {
@@ -1153,7 +1158,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     }
 
                     if (validator_mismatch) {
-                        OPENIDM_LOG_WARN("HttpEngine", "Validator mismatch detected (" + mismatch_reason + "); aborting stale resume stream and restarting from byte 0");
+                        RADIUM_LOG_WARN("HttpEngine", "Validator mismatch detected (" + mismatch_reason + "); aborting stale resume stream and restarting from byte 0");
                         task.segments.clear();
                         task.downloaded_bytes = 0;
                         is_resume = false;
@@ -1211,7 +1216,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     t_disk_alloc_ms.store(alloc_ms, std::memory_order_relaxed);
                     diagnostics::StartupDiagnosticRecorder::Instance().RecordEvent(
                         task.task_id, "Storage allocation completed", "Completed in " + std::to_string(alloc_ms) + " ms");
-                    OPENIDM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Storage allocation completed in " + std::to_string(alloc_ms) + " ms");
+                    RADIUM_LOG_INFO("HttpEngine", "Task " + task.task_id + ": Storage allocation completed in " + std::to_string(alloc_ms) + " ms");
                 }
 
                 task.state = TaskState::kDownloading;
@@ -1289,7 +1294,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         std::vector<uint8_t> disk_buf(overlap_bytes);
                         if (!part_file.PRead(disk_buf.data(), overlap_bytes, resume_start - overlap_bytes) ||
                             disk_buf != overlap_rx_buf) {
-                            OPENIDM_LOG_WARN("HttpEngine", "Resume overlap verification failed; restarting from byte 0");
+                            RADIUM_LOG_WARN("HttpEngine", "Resume overlap verification failed; restarting from byte 0");
                             task.segments.clear();
                             task.downloaded_bytes = 0;
                             is_resume = false;
@@ -1338,7 +1343,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - engine_start_tp).count();
                         t_first_byte_ms.store(first_byte_ms, std::memory_order_relaxed);
-                        OPENIDM_LOG_INFO("HttpStartupProfile",
+                        RADIUM_LOG_INFO("HttpStartupProfile",
                             "task=" + task.task_id +
                             " t_probe_ms=" + std::to_string(t_probe_ms.load(std::memory_order_relaxed)) +
                             " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms.load(std::memory_order_relaxed)) +
@@ -1375,7 +1380,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - engine_start_tp).count();
                         t_first_byte_ms.store(first_byte_ms, std::memory_order_relaxed);
-                        OPENIDM_LOG_INFO("HttpStartupProfile",
+                        RADIUM_LOG_INFO("HttpStartupProfile",
                             "task=" + task.task_id +
                             " t_probe_ms=" + std::to_string(t_probe_ms.load(std::memory_order_relaxed)) +
                             " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms.load(std::memory_order_relaxed)) +
@@ -1435,7 +1440,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
              (initial_res.error->code == "ERR_HTTP_429_RATE_LIMITED" || initial_res.error->code == "ERR_HTTP_5XX_TRANSIENT"))) {
             part_file.Close();
             if (captured_retry_after_sec > 30) {
-                OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Initial request received HTTP " +
+                RADIUM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Initial request received HTTP " +
                     (initial_res.error ? initial_res.error->code : "429") + " with Retry-After: " + std::to_string(captured_retry_after_sec) + "s > 30s");
                 task.state = TaskState::kPaused;
                 task.pause_reason = PauseReason::kError;
@@ -1445,7 +1450,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 return Result<std::filesystem::path>::Err(task.error_code, task.error_message, true, true);
             }
             int wait_sec = (captured_retry_after_sec > 0) ? captured_retry_after_sec : (initial_attempt * 2);
-            OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Initial request rate limited; waiting " + std::to_string(wait_sec) + "s before retry...");
+            RADIUM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Initial request rate limited; waiting " + std::to_string(wait_sec) + "s before retry...");
             for (int slept = 0; slept < wait_sec * 1000; slept += 50) {
                 if (pause_requested.load() || cancel_requested.load()) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(std::min(50, wait_sec * 1000 - slept)));
@@ -1473,7 +1478,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 last_progress_bytes = 0;
             }
             int backoff_ms = std::min(8000, 500 * (1 << (initial_attempt - 1)));
-            OPENIDM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Single-stream interrupted at " +
+            RADIUM_LOG_WARN("HttpEngine", "Task " + task.task_id + ": Single-stream interrupted at " +
                 std::to_string(single_stream_written) + "/" + std::to_string(task.total_bytes) +
                 " bytes; retrying in " + std::to_string(backoff_ms) + " ms (attempt " +
                 std::to_string(initial_attempt + 1) + "/" + std::to_string(kMaxInitialAttempts) + ")");
@@ -1598,6 +1603,19 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
         return Result<std::filesystem::path>::Err(fatal_error->code, fatal_error->message, fatal_error->retryable, fatal_error->user_action_resumable);
     }
 
+    if (speculative_hooks && speculative_hooks->wait_for_acceptance) {
+        if (!speculative_hooks->wait_for_acceptance(cancel_requested, task)) {
+            std::error_code ec;
+            std::filesystem::remove(part_path, ec);
+            task.state = TaskState::kCanceled;
+            task.status_detail = "Canceled";
+            return Result<std::filesystem::path>::Err("ERR_CANCELED", "Task canceled by user");
+        }
+    }
+    if (speculative_hooks && speculative_hooks->sync_before_commit) {
+        speculative_hooks->sync_before_commit(task);
+    }
+
     // -------------------------------------------------------------------------
     // Phase 3: File Verification & Atomic Rename (FR-007, FR-026)
     // -------------------------------------------------------------------------
@@ -1666,4 +1684,4 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     return Result<std::filesystem::path>::Ok(final_path);
 }
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

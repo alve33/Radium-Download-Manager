@@ -61,24 +61,24 @@ bool TestIpcPathPrecedenceAndFallbacks() {
     SetEnvVar("FLUX_IPC_SOCKET", "\\\\.\\pipe\\Flux_Secondary_Test");
     SetEnvVar("OPENIDM_IPC_SOCKET", "\\\\.\\pipe\\OpenIDM_Tertiary_Test");
 
-    TEST_ASSERT(openidm::ipc::GetDefaultIpcSocketPath() == "\\\\.\\pipe\\Radium_Primary_Test",
+    TEST_ASSERT(radium::ipc::GetDefaultIpcSocketPath() == "\\\\.\\pipe\\Radium_Primary_Test",
                 "RADIUM_IPC_SOCKET takes strict precedence when all three env vars are set");
     TEST_ASSERT(radium::ipc::GetDefaultIpcSocketPath() == "\\\\.\\pipe\\Radium_Primary_Test",
                 "radium::ipc namespace alias functions identically");
 
     // Case 2: RADIUM_IPC_SOCKET empty string -> FLUX_IPC_SOCKET fallback takes precedence
     SetEnvVar("RADIUM_IPC_SOCKET", "");
-    TEST_ASSERT(openidm::ipc::GetDefaultIpcSocketPath() == "\\\\.\\pipe\\Flux_Secondary_Test",
+    TEST_ASSERT(radium::ipc::GetDefaultIpcSocketPath() == "\\\\.\\pipe\\Flux_Secondary_Test",
                 "FLUX_IPC_SOCKET fallback selected when RADIUM_IPC_SOCKET is empty");
 
     // Case 3: RADIUM_IPC_SOCKET and FLUX_IPC_SOCKET empty -> OPENIDM_IPC_SOCKET fallback
     SetEnvVar("FLUX_IPC_SOCKET", "");
-    TEST_ASSERT(openidm::ipc::GetDefaultIpcSocketPath() == "\\\\.\\pipe\\OpenIDM_Tertiary_Test",
+    TEST_ASSERT(radium::ipc::GetDefaultIpcSocketPath() == "\\\\.\\pipe\\OpenIDM_Tertiary_Test",
                 "OPENIDM_IPC_SOCKET fallback selected when RADIUM and FLUX are empty");
 
     // Case 4: All env vars empty -> System default named pipe / Unix domain socket
     SetEnvVar("OPENIDM_IPC_SOCKET", "");
-    std::string default_path = openidm::ipc::GetDefaultIpcSocketPath();
+    std::string default_path = radium::ipc::GetDefaultIpcSocketPath();
     TEST_ASSERT(!default_path.empty(), "Default socket path is non-empty");
 
 #ifdef _WIN32

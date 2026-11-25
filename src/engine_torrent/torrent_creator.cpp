@@ -9,7 +9,7 @@
 #include <fstream>
 #include <algorithm>
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 uint32_t TorrentCreator::CalculateOptimalPieceLength(uint64_t total_size_bytes) {
     if (total_size_bytes < 512ULL * 1024 * 1024) {
@@ -194,4 +194,4 @@ std::string TorrentCreator::GenerateMagnetLink(
     return magnet;
 }
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

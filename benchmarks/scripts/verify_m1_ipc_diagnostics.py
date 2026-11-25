@@ -47,8 +47,7 @@ def main():
 
     env = os.environ.copy()
     env["RADIUM_IPC_SOCKET"] = pipe_path
-    env["FLUX_IPC_SOCKET"] = pipe_path
-    env["OPENIDM_IPC_SOCKET"] = pipe_path
+    env["RADIUM_IPC_SOCKET"] = pipe_path
 
     print(f"[TEST] Launching NMH: {NMH_BIN}")
     nmh = subprocess.Popen([str(NMH_BIN)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,

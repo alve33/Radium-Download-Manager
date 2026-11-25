@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — BitTorrent Metainfo & Magnet URI Parser & Piece Validator
+// Radium Download Manager — BitTorrent Metainfo & Magnet URI Parser & Piece Validator
 #include "engine_torrent/torrent_parser.hpp"
 
 #include <algorithm>
@@ -13,7 +13,7 @@
 #include "common/version.hpp"
 #include "brisk_engine/http_client.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 bool TorrentParser::GetBencodeValueRange(std::string_view s, size_t& pos, size_t depth) {
     if (depth > 64 || pos >= s.size()) return false;
@@ -472,4 +472,4 @@ bool TorrentParser::VerifyPieceHex(const uint8_t* piece_data, size_t piece_len, 
     return ToLower(computed) == ToLower(expected_sha1_hex);
 }
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

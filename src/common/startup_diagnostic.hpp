@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Startup Diagnostics Data Model & Recorder
+// Radium Download Manager — Startup Diagnostics Data Model & Recorder
 // Implements admin-only high-resolution download lifecycle tracking.
 #pragma once
 
@@ -16,7 +16,7 @@
 #include <filesystem>
 #include "common/json_mini.hpp"
 
-namespace openidm::diagnostics {
+namespace radium::diagnostics {
 
 struct StartupEvent {
     std::string event_name;
@@ -608,4 +608,4 @@ private:
     std::vector<StartupReport> m_stored_reports;
 };
 
-} // namespace openidm::diagnostics
+} // namespace radium::diagnostics

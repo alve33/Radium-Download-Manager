@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — BitTorrent Engine Coordinator
+// Radium Download Manager — BitTorrent Engine Coordinator
 #pragma once
 
 #include <atomic>
@@ -13,7 +13,7 @@
 #include "common/types.hpp"
 #include "engine_torrent/torrent_parser.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 struct TorrentProgress {
     std::string task_id;
@@ -134,4 +134,4 @@ public:
         const std::string& episode_filter);
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

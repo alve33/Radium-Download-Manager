@@ -71,22 +71,22 @@ void WriteConsoleOutput(const std::string& str, bool is_error = false) {
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (auto cm_args = openidm::remote::CrashMonitorArgs::Parse(argc, argv)) {
-        return openidm::remote::CrashWatchdog::RunMonitorLoop(*cm_args);
+    if (auto cm_args = radium::remote::CrashMonitorArgs::Parse(argc, argv)) {
+        return radium::remote::CrashWatchdog::RunMonitorLoop(*cm_args);
     }
 #if defined(__GLIBC__)
     // Cap glibc malloc arenas to 2 so 8-connection worker threads do not allocate 8 x 64 MiB virtual/resident arenas
     mallopt(M_ARENA_MAX, 2);
 #endif
-    std::filesystem::path exe_dir = openidm::PathSanitizer::GetExecutableDir(argc > 0 ? argv[0] : nullptr);
-    std::filesystem::path app_data_dir = openidm::PathSanitizer::GetDefaultAppDataDir();
+    std::filesystem::path exe_dir = radium::PathSanitizer::GetExecutableDir(argc > 0 ? argv[0] : nullptr);
+    std::filesystem::path app_data_dir = radium::PathSanitizer::GetDefaultAppDataDir();
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = app_data_dir / "state.db";
-    cfg.default_download_dir = openidm::PathSanitizer::GetDefaultDownloadsDir(exe_dir);
+    cfg.default_download_dir = radium::PathSanitizer::GetDefaultDownloadsDir(exe_dir);
     cfg.temp_root_dir = app_data_dir / "tmp";
-    cfg.nm3u8dl_binary_path = openidm::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", exe_dir);
-    cfg.ffmpeg_binary_path = openidm::PathSanitizer::FindWorkerBinary("ffmpeg", exe_dir);
+    cfg.nm3u8dl_binary_path = radium::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", exe_dir);
+    cfg.ffmpeg_binary_path = radium::PathSanitizer::FindWorkerBinary("ffmpeg", exe_dir);
     // SEC-04: Block public-to-loopback/private redirects by default unless explicitly configured
     cfg.allow_loopback = (std::getenv("RADIUM_ALLOW_LOOPBACK") != nullptr || std::getenv("FLUX_ALLOW_LOOPBACK") != nullptr || std::getenv("OPENIDM_ALLOW_LOOPBACK") != nullptr);
 
@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
     bool json_output = false;
     bool delete_files = false;
     uint32_t wait_timeout_ms = 300000;
-    std::string ipc_socket_path = openidm::ipc::IpcServer::DefaultSocketPath();
+    std::string ipc_socket_path = radium::ipc::IpcServer::DefaultSocketPath();
     uint32_t connections = 8;
 
     for (int i = 1; i < argc; ++i) {
@@ -157,7 +157,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--allow-loopback") {
             cfg.allow_loopback = true;
         } else if (arg.rfind("radium://", 0) == 0) {
-            auto parsed_uri = openidm::platform::WindowsIntegrations::ParseLaunchUri(arg);
+            auto parsed_uri = radium::platform::WindowsIntegrations::ParseLaunchUri(arg);
             if (parsed_uri.valid && !parsed_uri.wake_only && !parsed_uri.url.empty()) {
                 target_url = parsed_uri.url;
             }
@@ -172,7 +172,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    openidm::Logger::Instance().SetLogFile(cfg.state_db_path.parent_path() / "radium.log");
+    radium::Logger::Instance().SetLogFile(cfg.state_db_path.parent_path() / "radium.log");
     RADIUM_LOG_INFO("App", "Radium Download Manager v" + std::string(RADIUM_VERSION_STRING) + " initialized on Windows");
 
 #ifdef _WIN32
@@ -227,7 +227,7 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-    openidm::DownloadController controller(cfg);
+    radium::DownloadController controller(cfg);
     RADIUM_LOG_INFO("App", "Calling controller.Initialize()");
     auto init_res = controller.Initialize();
     if (!init_res.ok()) {
@@ -239,25 +239,30 @@ int main(int argc, char* argv[]) {
 
     // Default launch path: Launch the Desktop GUI Application + IPC Server (BUG-002 Fix)
     if (mode.empty() || mode == "minimized") {
-        if (std::getenv("RADIUM_NO_CRASH_MONITOR") == nullptr && argc > 0 && argv[0]) {
-            openidm::remote::CrashWatchdog::StartMonitorProcess(argv[0], app_data_dir);
-        }
-        openidm::platform::WindowsIntegrations::RegisterUrlScheme();
-        openidm::platform::WindowsIntegrations::RegisterTorrentAssociation();
+        std::string exe_arg0 = (argc > 0 && argv[0]) ? std::string(argv[0]) : std::string();
+        std::thread([exe_arg0, app_data_dir]() {
+            if (std::getenv("RADIUM_NO_CRASH_MONITOR") == nullptr && !exe_arg0.empty()) {
+                radium::remote::CrashWatchdog::StartMonitorProcess(exe_arg0.c_str(), app_data_dir);
+            }
+            radium::platform::WindowsIntegrations::RegisterUrlScheme();
+            radium::platform::WindowsIntegrations::RegisterTorrentAssociation();
+        }).detach();
         if (!target_url.empty()) {
-            openidm::TaskModel t;
+            radium::TaskModel t;
             t.url = target_url;
             controller.AddTask(std::move(t), true);
         }
         RADIUM_LOG_INFO("App", "Starting IpcServer on pipe=" + ipc_socket_path);
-        openidm::ipc::IpcServer server(controller, ipc_socket_path);
+        radium::ipc::IpcServer server(controller, ipc_socket_path);
         server.Start();
         RADIUM_LOG_INFO("App", "Creating DesktopView");
-        openidm::ui::DesktopView view(controller, &server);
+        radium::ui::DesktopView view(controller, &server);
         if (mode == "minimized") {
             view.SetStartVisible(false);
+            view.SetFirstLaunchOnboardingEligible(false);
         } else {
             view.SetStartVisible(true);
+            view.SetFirstLaunchOnboardingEligible(target_url.empty());
         }
         RADIUM_LOG_INFO("App", "Entering RunApplicationLoop");
         int rc = view.RunApplicationLoop(false);
@@ -269,22 +274,22 @@ int main(int argc, char* argv[]) {
 
     if (mode == "list") {
         if (json_output) {
-            openidm::json::Array arr;
+            radium::json::Array arr;
             for (const auto& t : controller.ListTasks()) {
-                openidm::json::Object obj;
+                radium::json::Object obj;
                 obj["id"] = t.task_id;
                 obj["url"] = t.url;
                 obj["file_name"] = t.file_name;
-                obj["state"] = openidm::TaskStateToString(t.state);
+                obj["state"] = radium::TaskStateToString(t.state);
                 obj["downloaded_bytes"] = static_cast<int64_t>(t.downloaded_bytes);
                 obj["total_bytes"] = static_cast<int64_t>(t.total_bytes);
-                arr.push_back(openidm::json::Value(std::move(obj)));
+                arr.push_back(radium::json::Value(std::move(obj)));
             }
-            openidm::json::Object out;
-            out["result"] = openidm::json::Value(std::move(arr));
-            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+            radium::json::Object out;
+            out["result"] = radium::json::Value(std::move(arr));
+            WriteConsoleOutput(radium::json::Value(std::move(out)).dump() + "\n", false);
         } else {
-            openidm::ui::DesktopView view(controller);
+            radium::ui::DesktopView view(controller);
             WriteConsoleOutput(view.RenderQueueTableText(), false);
         }
         controller.Shutdown();
@@ -293,7 +298,7 @@ int main(int argc, char* argv[]) {
 
     if (mode == "mcp") {
         std::atomic<bool> stop_mcp{false};
-        openidm::remote::McpStdioServer mcp(controller);
+        radium::remote::McpStdioServer mcp(controller);
         mcp.Run(std::cin, std::cout, stop_mcp);
         controller.Shutdown();
         return 0;
@@ -307,7 +312,7 @@ int main(int argc, char* argv[]) {
             controller.Shutdown();
             return 2;
         }
-        openidm::TaskModel t;
+        radium::TaskModel t;
         t.url = target_url;
         t.max_connections = connections;
         t.save_dir = cfg.default_download_dir.string();
@@ -321,12 +326,12 @@ int main(int argc, char* argv[]) {
         auto added = controller.AddTask(std::move(t), true, true);
         if (!added.ok()) {
             if (json_output) {
-                openidm::json::Object e;
+                radium::json::Object e;
                 e["code"] = added.error ? added.error->code : "ERR_ADD";
                 e["message"] = added.error ? added.error->message : "AddTask failed";
-                openidm::json::Object err;
-                err["error"] = openidm::json::Value(std::move(e));
-                WriteConsoleOutput(openidm::json::Value(std::move(err)).dump() + "\n", false);
+                radium::json::Object err;
+                err["error"] = radium::json::Value(std::move(e));
+                WriteConsoleOutput(radium::json::Value(std::move(err)).dump() + "\n", false);
             } else {
                 WriteConsoleOutput("ERROR: " + added.error->message + "\n", true);
             }
@@ -334,12 +339,12 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         if (json_output) {
-            openidm::json::Object res;
+            radium::json::Object res;
             res["id"] = added.value->task_id;
             res["file_name"] = added.value->file_name;
-            openidm::json::Object out;
-            out["result"] = openidm::json::Value(std::move(res));
-            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+            radium::json::Object out;
+            out["result"] = radium::json::Value(std::move(res));
+            WriteConsoleOutput(radium::json::Value(std::move(out)).dump() + "\n", false);
         } else {
             WriteConsoleOutput(added.value->task_id + "\n", false);
         }
@@ -349,20 +354,20 @@ int main(int argc, char* argv[]) {
 
     if (mode == "wait") {
         bool all_ok = !target_ids.empty();
-        openidm::json::Array arr;
+        radium::json::Array arr;
         for (const auto& tid : target_ids) {
             auto done = controller.WaitForTaskCompletion(tid, wait_timeout_ms);
-            bool ok = done.ok() && done.value->state == openidm::TaskState::kCompleted;
+            bool ok = done.ok() && done.value->state == radium::TaskState::kCompleted;
             if (!ok) all_ok = false;
-            openidm::json::Object item;
+            radium::json::Object item;
             item["id"] = tid;
-            item["state"] = done.ok() ? openidm::TaskStateToString(done.value->state) : "ERROR";
-            arr.push_back(openidm::json::Value(std::move(item)));
+            item["state"] = done.ok() ? radium::TaskStateToString(done.value->state) : "ERROR";
+            arr.push_back(radium::json::Value(std::move(item)));
         }
         if (json_output) {
-            openidm::json::Object out;
-            out["result"] = openidm::json::Value(std::move(arr));
-            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+            radium::json::Object out;
+            out["result"] = radium::json::Value(std::move(arr));
+            WriteConsoleOutput(radium::json::Value(std::move(out)).dump() + "\n", false);
         }
         controller.Shutdown();
         return all_ok ? 0 : 1;
@@ -370,29 +375,29 @@ int main(int argc, char* argv[]) {
 
     if (mode == "pause" || mode == "start" || mode == "remove") {
         bool all_ok = !target_ids.empty();
-        openidm::json::Array arr;
+        radium::json::Array arr;
         for (const auto& tid : target_ids) {
-            openidm::Result<void> r = openidm::Result<void>::Err("ERR_USAGE", "Unknown");
+            radium::Result<void> r = radium::Result<void>::Err("ERR_USAGE", "Unknown");
             if (mode == "pause") r = controller.PauseTask(tid);
             else if (mode == "start") r = controller.ResumeTask(tid);
             else if (mode == "remove") r = controller.RemoveTask(tid, delete_files);
             if (!r.ok()) all_ok = false;
-            openidm::json::Object item;
+            radium::json::Object item;
             item["id"] = tid;
             item["ok"] = r.ok();
-            arr.push_back(openidm::json::Value(std::move(item)));
+            arr.push_back(radium::json::Value(std::move(item)));
         }
         if (json_output) {
-            openidm::json::Object out;
-            out["result"] = openidm::json::Value(std::move(arr));
-            WriteConsoleOutput(openidm::json::Value(std::move(out)).dump() + "\n", false);
+            radium::json::Object out;
+            out["result"] = radium::json::Value(std::move(arr));
+            WriteConsoleOutput(radium::json::Value(std::move(out)).dump() + "\n", false);
         }
         controller.Shutdown();
         return all_ok ? 0 : 1;
     }
 
     if (mode == "gui-snapshot") {
-        openidm::ui::DesktopView view(controller, nullptr);
+        radium::ui::DesktopView view(controller, nullptr);
         view.SelectFirstRow();
         WriteConsoleOutput(view.RenderFullDesktopSnapshotText(), false);
         controller.Shutdown();
@@ -421,16 +426,16 @@ int main(int argc, char* argv[]) {
     }
 
     if (mode == "download" || mode == "stream") {
-        openidm::TaskModel t;
+        radium::TaskModel t;
         t.url = target_url;
         t.max_connections = connections;
         t.save_dir = cfg.default_download_dir.string();
         if (mode == "stream") {
             t.task_type = (target_url.find(".mpd") != std::string::npos)
-                              ? openidm::TaskType::kStreamDash
-                              : openidm::TaskType::kStreamHls;
+                              ? radium::TaskType::kStreamDash
+                              : radium::TaskType::kStreamHls;
         } else {
-            t.task_type = openidm::TaskType::kHttpFile;
+            t.task_type = radium::TaskType::kHttpFile;
         }
         auto added = controller.AddTask(std::move(t), true, true);
         if (!added.ok()) {
@@ -440,7 +445,7 @@ int main(int argc, char* argv[]) {
         }
         auto done = controller.WaitForTaskCompletion(added.value->task_id, 300000);
         controller.Shutdown();
-        if (!done.ok() || done.value->state != openidm::TaskState::kCompleted) {
+        if (!done.ok() || done.value->state != radium::TaskState::kCompleted) {
             std::string err_msg = "ERROR: Task failed: " + (done.ok() ? done.value->error_message : done.error->message) + "\n";
             WriteConsoleOutput(err_msg, true);
             return 2;
@@ -457,7 +462,7 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
         HANDLE hShutdownEvent = CreateEventW(nullptr, FALSE, FALSE, L"Local\\Radium_Daemon_Shutdown_Event");
 #endif
-        openidm::ipc::IpcServer server(controller, ipc_socket_path);
+        radium::ipc::IpcServer server(controller, ipc_socket_path);
         server.SetHeadlessDaemonMode(true);
         auto sres = server.Start();
         if (!sres.ok()) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Task Import & Export with Automated Credential Redaction
+// Radium Download Manager — Task Import & Export with Automated Credential Redaction
 #include "storage/import_export.hpp"
 
 #include <algorithm>
@@ -12,7 +12,7 @@
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 
-namespace openidm::storage {
+namespace radium::storage {
 
 namespace {
 
@@ -462,4 +462,4 @@ Result<std::vector<TaskModel>> TaskImportExport::ImportFromEf2(std::string_view 
     return Result<std::vector<TaskModel>>::Ok(std::move(out));
 }
 
-} // namespace openidm::storage
+} // namespace radium::storage

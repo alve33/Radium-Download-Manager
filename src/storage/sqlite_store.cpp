@@ -11,7 +11,7 @@
 
 #include "third_party/sqlite3/sqlite3.h"
 
-namespace openidm {
+namespace radium {
 
 namespace {
 std::string ColText(sqlite3_stmt* stmt, int col) {
@@ -895,4 +895,4 @@ Result<std::vector<QueueConfig>> SqliteStore::ListQueues() {
     return Result<std::vector<QueueConfig>>::Ok(std::move(out));
 }
 
-} // namespace openidm
+} // namespace radium

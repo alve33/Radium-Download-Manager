@@ -27,7 +27,7 @@
 #include <openssl/evp.h>
 #endif
 
-namespace openidm::packs {
+namespace radium::packs {
 
 namespace {
 
@@ -632,4 +632,4 @@ Result<Ed2kLinkInfo> SpecializedUrlPacks::ParseEd2kLink(const std::string& ed2k_
     return Result<Ed2kLinkInfo>::Ok(std::move(info));
 }
 
-} // namespace openidm::packs
+} // namespace radium::packs

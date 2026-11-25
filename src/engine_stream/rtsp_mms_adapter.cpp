@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — RTSP, MMS & Live Media Stream Adapter
+// Radium Download Manager — RTSP, MMS & Live Media Stream Adapter
 #include "engine_stream/rtsp_mms_adapter.hpp"
 
 #include <chrono>
@@ -23,7 +23,7 @@
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 
-namespace openidm::stream {
+namespace radium::stream {
 
 RtspMmsAdapter::RtspMmsAdapter(std::filesystem::path ffmpeg_path, bool allow_loopback)
     : m_ffmpeg_path(std::move(ffmpeg_path)), m_allow_loopback(allow_loopback) {
@@ -260,4 +260,4 @@ Result<std::filesystem::path> RtspMmsAdapter::ExecuteStreamCapture(
 #endif
 }
 
-} // namespace openidm::stream
+} // namespace radium::stream

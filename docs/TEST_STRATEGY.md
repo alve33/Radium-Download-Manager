@@ -77,12 +77,12 @@ flowchart TD
    - Downloads packaged release artifacts without sharing previous filesystem state.
    - Executes `python tests/test_installer_smoke.py`:
      - Installs Full setup installer silently (`/VERYSILENT /DIR=... /TYPE=full`).
-     - Verifies application version, PE32+ AMD64 headers, bundled stream workers (`N_m3u8DL-RE.exe`, `ffmpeg.exe`, `yt-dlp.exe`), extension assets, and native messaging manifests (`com.flux.downloadmanager.chromium.json`).
+     - Verifies application version, PE32+ AMD64 headers, bundled stream workers (`N_m3u8DL-RE.exe`, `ffmpeg.exe`, `yt-dlp.exe`), extension assets, and native messaging manifests (`com.radium.downloadmanager.chromium.json`).
      - Confirms HKCU registry bindings for Chrome and Edge.
      - Performs a real HTTP download through installed `radium.exe` against a controlled local test server and verifies exact byte size and SHA-256 digest.
      - Injects network reset to verify auto-resume, verifies 404 error exit code, checks zero leftover `.part` files, and verifies database restart persistence.
      - Launches installed application daemon and runs end-to-end positive Native Messaging exchange with Chromium, confirming `system.handshake`, `download.offer`, and SQLite task queue recording.
-     - Uninstalls silently (`unins000.exe /VERYSILENT`) and verifies binary removal while strictly preserving `%LOCALAPPDATA%\Flux` user data.
+     - Uninstalls silently (`unins000.exe /VERYSILENT`) and verifies binary removal while strictly preserving `%LOCALAPPDATA%\Radium Download Manager` user data.
 
 3. **Job 3: `browser-extension-runtime-test` (Playwright Chromium on Fresh Host):**
    - Downloads packaged extension and installs Playwright with Chromium.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — N_m3u8DL-RE Stream Download Adapter, YouTube Extractor & Managed Worker Process Supervisor
+// Radium Download Manager — N_m3u8DL-RE Stream Download Adapter, YouTube Extractor & Managed Worker Process Supervisor
 // Integrates nilaoda/N_m3u8DL-RE (v0.3.0-beta), yt-dlp & FFmpeg via Job Objects / Process Groups
 // and ACL-restricted @job.rsp response files.
 // Implements FR-019, FR-020, FR-021, FR-022, NFR-015, THREAT-002, THREAT-004, and Defect B Fix.
@@ -12,7 +12,7 @@
 #include <vector>
 #include "common/types.hpp"
 
-namespace openidm::stream {
+namespace radium::stream {
 
 struct StreamProbeResult {
     std::string manifest_url;
@@ -142,4 +142,4 @@ private:
     StreamAdapterConfig m_cfg;
 };
 
-} // namespace openidm::stream
+} // namespace radium::stream

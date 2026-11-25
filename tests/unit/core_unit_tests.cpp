@@ -55,7 +55,7 @@
 
 // 1. PathSanitizer Comprehensive Unit Tests
 bool TestDedicatedPathSanitizer() {
-    using openidm::PathSanitizer;
+    using radium::PathSanitizer;
 
     // Traversal attacks
     TEST_ASSERT(PathSanitizer::SanitizeFileName("../secret.txt") == "secret.txt", "Parent traversal 1");
@@ -90,7 +90,7 @@ bool TestDedicatedPathSanitizer() {
 
 // 2. JsonMini RFC 8259 Parser & Builder Tests
 bool TestDedicatedJsonMini() {
-    using namespace openidm::json;
+    using namespace radium::json;
 
     // Primitives
     TEST_ASSERT(Parse("null").is_null(), "Parse null");
@@ -151,7 +151,7 @@ bool TestDedicatedJsonMini() {
 
 // 3. Bencode & TorrentParser Tests
 bool TestDedicatedBencodeAndTorrentParser() {
-    using namespace openidm::torrent;
+    using namespace radium::torrent;
 
     // Bencode decoding
     auto i = BencodeParser::Decode("i999e");
@@ -194,7 +194,7 @@ bool TestDedicatedBencodeAndTorrentParser() {
 
 // 4. SegmentScheduler Comprehensive Invariant Tests
 bool TestDedicatedSegmentScheduler() {
-    using namespace openidm::brisk;
+    using namespace radium::brisk;
 
     // Test deterministic splitting of 100 MB file across 8 workers
     const uint64_t total_size = 100 * 1024 * 1024; // 100 MB
@@ -229,21 +229,21 @@ bool TestDedicatedSegmentScheduler() {
 
 // 5. IPC Message Handling, Correlation ID & Diagnostic Report Chronology Tests
 bool TestIpcDiagnosticAndCorrelationVerification() {
-    using namespace openidm;
-    using namespace openidm::ipc;
-    using namespace openidm::diagnostics;
+    using namespace radium;
+    using namespace radium::ipc;
+    using namespace radium::diagnostics;
 
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_emp_diag_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_emp_diag_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir);
     std::filesystem::create_directories(work_dir / "downloads");
     std::filesystem::create_directories(work_dir / "tmp");
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     TEST_ASSERT(ctrl.Initialize().ok(), "Initialize DownloadController");
 
     // Explicitly disable auto_start_downloads so the test does not trigger worker execution
@@ -252,7 +252,7 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
     auto set_res = ctrl.UpdateSettings(ctrl_settings);
     TEST_ASSERT(set_res.ok(), "Disable automatic downloads for IPC test");
 
-    openidm::ipc::IpcServer ipc_server(ctrl);
+    radium::ipc::IpcServer ipc_server(ctrl);
     // Do NOT enable headless daemon mode here, as that forces auto_start to true.
     ipc_server.SetHeadlessDaemonMode(false);
 
@@ -548,8 +548,8 @@ bool TestIpcDiagnosticAndCorrelationVerification() {
 
 // 6. Comprehensive Video Extraction & Website Compatibility Overhaul Unit Tests
 bool TestMultiSiteVideoExtractionOverhaul() {
-    using namespace openidm::engine_stream;
-    using openidm::PathSanitizer;
+    using namespace radium::engine_stream;
+    using radium::PathSanitizer;
 
     // 6.1 URL Detection & Classification (Bilibili, Facebook, Adult Sites, General Video Platforms)
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.bilibili.com/video/BV1xx411c7mD?p=2") == "bilibili", "Identify Bilibili BV watch URL");
@@ -752,7 +752,7 @@ var playerConfig = {
 }
 
 bool TestSchedulerCapacityWait() {
-    using namespace openidm;
+    using namespace radium;
     auto root = std::filesystem::temp_directory_path() / ("radium_capacity_" + GenerateUuidV4());
     std::filesystem::create_directories(root);
     std::atomic<unsigned> passes{0};
@@ -783,8 +783,8 @@ bool TestSchedulerCapacityWait() {
 }
 
 bool TestUnusualServerCompatibilityAndClassification() {
-    using openidm::PathSanitizer;
-    using openidm::engine_stream::VideoExtractionManager;
+    using radium::PathSanitizer;
+    using radium::engine_stream::VideoExtractionManager;
 
     // 1. Verify Azure SAS (?sv=) and download endpoints are never rejected as webpage watch URLs
     TEST_ASSERT(!PathSanitizer::IsWebpageWatchUrl(
@@ -876,19 +876,19 @@ bool TestUnusualServerCompatibilityAndClassification() {
     std::filesystem::create_directories(tmp_dir);
 
     {
-        openidm::brisk::EngineConfig cfg;
+        radium::brisk::EngineConfig cfg;
         cfg.allow_loopback_redirect = true;
         cfg.stall_timeout_ms = 3000;
         cfg.min_split_bytes = 1048576;
-        openidm::brisk::HttpDownloadEngine engine(cfg);
+        radium::brisk::HttpDownloadEngine engine(cfg);
 
-        openidm::TaskModel t1;
+        radium::TaskModel t1;
         t1.task_id = "compat-resume-1";
         t1.url = "http://127.0.0.1:" + std::to_string(port) + "/artifact.zip";
         t1.file_name = "artifact.zip";
         t1.save_dir = tmp_dir.string();
         t1.max_connections = 1;
-        t1.conflict_policy = openidm::ConflictPolicy::kOverwrite;
+        t1.conflict_policy = radium::ConflictPolicy::kOverwrite;
         std::atomic<bool> pause1{false}, cancel1{false};
         std::atomic<uint64_t> limit1{0};
         auto res1 = engine.ExecuteDownload(t1, pause1, cancel1, limit1, nullptr);
@@ -896,13 +896,13 @@ bool TestUnusualServerCompatibilityAndClassification() {
         TEST_ASSERT(t1.downloaded_bytes == full_payload.size(), "Resumed single-stream size must match full payload");
         TEST_ASSERT(drop_hits.load() >= 2, "Server must have observed retry/resume request");
 
-        openidm::TaskModel t2;
+        radium::TaskModel t2;
         t2.task_id = "compat-html-err-1";
         t2.url = "http://127.0.0.1:" + std::to_string(port) + "/html_error.zip";
         t2.file_name = "html_error.zip";
         t2.save_dir = tmp_dir.string();
         t2.max_connections = 1;
-        t2.conflict_policy = openidm::ConflictPolicy::kOverwrite;
+        t2.conflict_policy = radium::ConflictPolicy::kOverwrite;
         std::atomic<bool> pause2{false}, cancel2{false};
         std::atomic<uint64_t> limit2{0};
         auto res2 = engine.ExecuteDownload(t2, pause2, cancel2, limit2, nullptr);
@@ -921,7 +921,7 @@ bool TestUnusualServerCompatibilityAndClassification() {
 bool TestPhase1EngineAndNetworking() {
     // 1. FtpUrl::Parse("ftps://...")
     {
-        auto parsed = openidm::ftp::FtpUrl::Parse("ftps://example.com/a.bin");
+        auto parsed = radium::ftp::FtpUrl::Parse("ftps://example.com/a.bin");
         TEST_ASSERT(parsed.ok(), "FtpUrl::Parse must accept ftps://");
         TEST_ASSERT(parsed.value->scheme == "ftps", "Scheme must be ftps");
         TEST_ASSERT(parsed.value->host == "example.com", "Host must be example.com");
@@ -931,7 +931,7 @@ bool TestPhase1EngineAndNetworking() {
 
     // 2. HostLimits refusal learning and cap raising
     {
-        auto& hl = openidm::brisk::HostLimits::Global();
+        auto& hl = radium::brisk::HostLimits::Global();
         const std::string host = "phase1-unit-test.invalid";
         hl.RecordRefusal(host, 3);
         hl.RecordRefusal(host, 3);
@@ -942,7 +942,7 @@ bool TestPhase1EngineAndNetworking() {
 
     // 3. SegmentScheduler PREEMPT_TTFB & WaitForWork/NotifyAll
     {
-        openidm::brisk::SegmentScheduler sched(1024ULL * 1024ULL, 2, 262144);
+        radium::brisk::SegmentScheduler sched(1024ULL * 1024ULL, 2, 262144);
         sched.Initialize();
         sched.SetPreemptAfterMs(30);
         auto seg0 = sched.AcquireNextOrStealSegment(false);
@@ -1013,10 +1013,10 @@ bool TestPhase1EngineAndNetworking() {
         });
 
         auto t0 = std::chrono::steady_clock::now();
-        auto res = openidm::brisk::HttpClient::PerformGet(
+        auto res = radium::brisk::HttpClient::PerformGet(
             "http://127.0.0.1:" + std::to_string(port) + "/tarpit",
             {}, std::nullopt, std::nullopt, 15000, true, cancel_flag,
-            std::function<bool(const openidm::brisk::HttpResponseMeta&)>{},
+            std::function<bool(const radium::brisk::HttpResponseMeta&)>{},
             std::function<bool(const uint8_t*, size_t)>{});
         auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - t0).count();
@@ -1103,7 +1103,7 @@ bool TestPhase1EngineAndNetworking() {
             ofs.write(stale.data(), static_cast<std::streamsize>(stale.size()));
         }
 
-        openidm::TaskModel t;
+        radium::TaskModel t;
         t.task_id = "phase1-206-test";
         t.url = "http://127.0.0.1:" + std::to_string(port) + "/changed.bin";
         t.file_name = "changed.bin";
@@ -1113,13 +1113,13 @@ bool TestPhase1EngineAndNetworking() {
         t.downloaded_bytes = 64;
         t.etag = "\"v1\"";
         t.max_connections = 1;
-        t.conflict_policy = openidm::ConflictPolicy::kOverwrite;
-        t.segments.push_back(openidm::Segment{0, 0, 64, 127, false});
+        t.conflict_policy = radium::ConflictPolicy::kOverwrite;
+        t.segments.push_back(radium::Segment{0, 0, 64, 127, false});
 
-        openidm::brisk::EngineConfig cfg;
+        radium::brisk::EngineConfig cfg;
         cfg.allow_loopback_redirect = true;
         cfg.stall_timeout_ms = 3000;
-        openidm::brisk::HttpDownloadEngine engine(cfg);
+        radium::brisk::HttpDownloadEngine engine(cfg);
         std::atomic<bool> pause{false}, cancel{false};
         std::atomic<uint64_t> limit{0};
         auto res = engine.ExecuteDownload(t, pause, cancel, limit, nullptr);
@@ -1143,7 +1143,7 @@ bool TestPhase1EngineAndNetworking() {
 }
 
 bool TestPhase2StreamVideoAndGallery() {
-    using namespace openidm::engine_stream;
+    using namespace radium::engine_stream;
 
     // 1. In-process HLS Master Playlist parser (MDM manifest.rs port)
     {
@@ -1248,8 +1248,8 @@ bool TestPhase2StreamVideoAndGallery() {
 }
 
 bool TestPhase3SiteHandlersFreshlinkAndPost() {
-    using namespace openidm;
-    using namespace openidm::brisk;
+    using namespace radium;
+    using namespace radium::brisk;
 
     // 1. SiteHandlers: CheckNotAFile (Drive folder + GoFile share)
     auto df = SiteHandlers::CheckNotAFile("https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz123456");
@@ -1343,7 +1343,7 @@ bool TestPhase3SiteHandlersFreshlinkAndPost() {
 bool TestPhase4TorrentArchiveAndPacks() {
     // 1. TorrentIpBlocklist (PeerGuardian P2P & eMule .dat)
     {
-        auto& bl = openidm::torrent::TorrentIpBlocklist::Global();
+        auto& bl = radium::torrent::TorrentIpBlocklist::Global();
         bl.LoadFromText(
             "# comment\n"
             "BadISP:1.2.3.0-1.2.3.255\n"
@@ -1363,13 +1363,13 @@ bool TestPhase4TorrentArchiveAndPacks() {
             "<item><title>Show.Name.S01E05.1080p</title>"
             "<enclosure url=\"https://tracker.example/ep5.torrent\" type=\"application/x-bittorrent\" length=\"1048576\"/>"
             "</item></channel></rss>";
-        auto items = openidm::torrent::RssTorrentFeedParser::ParseFeedXml(rss);
+        auto items = radium::torrent::RssTorrentFeedParser::ParseFeedXml(rss);
         TEST_ASSERT(items.size() == 1 && items[0].torrent_url == "https://tracker.example/ep5.torrent", "RSS enclosure must parse");
-        auto ep = openidm::torrent::RssTorrentFeedParser::ExtractEpisode(items[0].title);
+        auto ep = radium::torrent::RssTorrentFeedParser::ExtractEpisode(items[0].title);
         TEST_ASSERT(ep.has_value() && ep->season == 1 && ep->episode == 5, "ExtractEpisode must parse S01E05");
-        TEST_ASSERT(openidm::torrent::RssTorrentFeedParser::MatchesFilter(items[0].title, "Show 1080p|720p", "CAM", "1x2;1x5-8"),
+        TEST_ASSERT(radium::torrent::RssTorrentFeedParser::MatchesFilter(items[0].title, "Show 1080p|720p", "CAM", "1x2;1x5-8"),
                     "RSS filter must match S01E05");
-        TEST_ASSERT(!openidm::torrent::RssTorrentFeedParser::MatchesFilter(items[0].title, "Show", "1080p", "1x5"),
+        TEST_ASSERT(!radium::torrent::RssTorrentFeedParser::MatchesFilter(items[0].title, "Show", "1080p", "1x5"),
                     "RSS exclude filter must reject 1080p");
     }
 
@@ -1405,10 +1405,10 @@ bool TestPhase4TorrentArchiveAndPacks() {
             std::ofstream ofs(zip_path, std::ios::binary);
             ofs.write(reinterpret_cast<const char*>(z.data()), static_cast<std::streamsize>(z.size()));
         }
-        TEST_ASSERT(openidm::archive::ArchiveExtractor::DetectFormat(zip_path) == openidm::archive::ArchiveFormat::kZip,
+        TEST_ASSERT(radium::archive::ArchiveExtractor::DetectFormat(zip_path) == radium::archive::ArchiveFormat::kZip,
                     "DetectFormat must identify ZIP");
         auto ext_dir = tmp_dir / "out";
-        auto ext_res = openidm::archive::ArchiveExtractor::ExtractArchive(zip_path, ext_dir, openidm::archive::SubfolderPolicy::kSmart);
+        auto ext_res = radium::archive::ArchiveExtractor::ExtractArchive(zip_path, ext_dir, radium::archive::SubfolderPolicy::kSmart);
         TEST_ASSERT(ext_res.ok(), "ExtractArchive must succeed on Stored ZIP");
         TEST_ASSERT(std::filesystem::exists(ext_dir / "hello.txt"), "Smart single-file ZIP must extract directly into dest_dir");
         std::filesystem::remove_all(tmp_dir);
@@ -1416,7 +1416,7 @@ bool TestPhase4TorrentArchiveAndPacks() {
 
     // 4. DebridManager & Cnl2Server
     {
-        using namespace openidm::packs;
+        using namespace radium::packs;
         TEST_ASSERT(DebridManager::ServiceName(DebridServiceKind::kRealDebrid) == "Real-Debrid", "Debrid service name");
         TEST_ASSERT(!DebridManager::SupportsMagnets(DebridServiceKind::kMegaDebrid), "Mega-Debrid magnet flag");
         std::atomic<bool> cflag{false};
@@ -1430,7 +1430,7 @@ bool TestPhase4TorrentArchiveAndPacks() {
 
     // 5. SpecializedUrlPacks (Wrapped links, GitHub, arXiv, Hugging Face, eD2k)
     {
-        using namespace openidm::packs;
+        using namespace radium::packs;
         auto th = SpecializedUrlPacks::DecodeWrappedLink("thunder://QUFodHRwczovL2V4YW1wbGUuY29tL2EuemlwWlo=");
         TEST_ASSERT(th.ok() && *th.value == "https://example.com/a.zip", "thunder:// decode must strip AA..ZZ");
 
@@ -1457,10 +1457,10 @@ bool TestPhase4TorrentArchiveAndPacks() {
 }
 
 bool TestPhase5IntegrationsBatchEf2AndQuota() {
-    using namespace openidm;
-    using namespace openidm::crawler;
-    using namespace openidm::platform;
-    using namespace openidm::storage;
+    using namespace radium;
+    using namespace radium::crawler;
+    using namespace radium::platform;
+    using namespace radium::storage;
 
     // 1. Category subfolder routing
     std::filesystem::path tmp_dir = std::filesystem::temp_directory_path() / "radium_phase5_test";
@@ -1528,8 +1528,8 @@ bool TestPhase5IntegrationsBatchEf2AndQuota() {
 }
 
 bool TestPhase6RemoteMcpAria2AndCrash() {
-    using namespace openidm;
-    using namespace openidm::remote;
+    using namespace radium;
+    using namespace radium::remote;
 
     auto tmp_dir = std::filesystem::temp_directory_path() / "radium_phase6_test";
     std::filesystem::remove_all(tmp_dir);
@@ -1608,9 +1608,9 @@ bool TestPhase6RemoteMcpAria2AndCrash() {
 }
 
 bool TestPhase7UiAndFaultInjection() {
-    using namespace openidm;
-    using namespace openidm::ui;
-    using namespace openidm::test;
+    using namespace radium;
+    using namespace radium::ui;
+    using namespace radium::test;
 
     // 1. Clickable & sortable table column headers in DesktopView
     {
@@ -1684,7 +1684,7 @@ bool TestPhase7UiAndFaultInjection() {
 }
 
 bool TestPhase8ExtensionSetupSettingsAndAbout() {
-    using namespace openidm;
+    using namespace radium;
     using namespace radium::core;
 
     const auto work_dir = std::filesystem::temp_directory_path() / "radium_phase8_ext_test";
@@ -1727,63 +1727,125 @@ bool TestPhase8ExtensionSetupSettingsAndAbout() {
         ctrl2.Shutdown();
     }
 
-    // 3. Mocked GitHub download, validation, update, and atomic failure preservation
+    // 3. Mocked GitHub Release ZIP download, fallback, caching, rate-limit, and atomic failure preservation
+    auto build_mock_zip = [&](const std::string& version, bool traversal, const std::string& prefix) -> std::string {
+        struct Entry { std::string name; std::string data; };
+        std::vector<Entry> entries;
+        if (traversal) {
+            entries.push_back({prefix + "../outside.txt", "evil"});
+        }
+        for (const auto& req : ExtensionInstaller::RequiredFiles()) {
+            std::string body = "// mock resource";
+            if (req == "manifest.json") {
+                body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version +
+                       "\",\"permissions\":[\"nativeMessaging\"],\"background\":{\"service_worker\":\"js/background.js\"},"
+                       "\"action\":{\"default_popup\":\"popup.html\"}}";
+            } else if (req == "manifest.firefox.json") {
+                body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version + "\"}";
+            }
+            entries.push_back({prefix + req, std::move(body)});
+        }
+
+        auto append_u16 = [](std::string& buf, uint16_t v) {
+            buf.push_back(static_cast<char>(v & 0xFF));
+            buf.push_back(static_cast<char>((v >> 8) & 0xFF));
+        };
+        auto append_u32 = [](std::string& buf, uint32_t v) {
+            buf.push_back(static_cast<char>(v & 0xFF));
+            buf.push_back(static_cast<char>((v >> 8) & 0xFF));
+            buf.push_back(static_cast<char>((v >> 16) & 0xFF));
+            buf.push_back(static_cast<char>((v >> 24) & 0xFF));
+        };
+
+        std::string zip_out;
+        std::string cd;
+        for (const auto& e : entries) {
+            uint32_t lfh_off = static_cast<uint32_t>(zip_out.size());
+            uint32_t sz = static_cast<uint32_t>(e.data.size());
+            uint16_t nlen = static_cast<uint16_t>(e.name.size());
+            append_u32(zip_out, 0x04034B50);
+            append_u16(zip_out, 20);
+            append_u16(zip_out, 0);
+            append_u16(zip_out, 0);
+            append_u16(zip_out, 0);
+            append_u16(zip_out, 0);
+            append_u32(zip_out, 0);
+            append_u32(zip_out, sz);
+            append_u32(zip_out, sz);
+            append_u16(zip_out, nlen);
+            append_u16(zip_out, 0);
+            zip_out.append(e.name);
+            zip_out.append(e.data);
+
+            append_u32(cd, 0x02014B50);
+            append_u16(cd, 20);
+            append_u16(cd, 20);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u32(cd, 0);
+            append_u32(cd, sz);
+            append_u32(cd, sz);
+            append_u16(cd, nlen);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u32(cd, 0);
+            append_u32(cd, lfh_off);
+            cd.append(e.name);
+        }
+        uint32_t cd_off = static_cast<uint32_t>(zip_out.size());
+        uint32_t cd_sz = static_cast<uint32_t>(cd.size());
+        zip_out.append(cd);
+        append_u32(zip_out, 0x06054B50);
+        append_u16(zip_out, 0);
+        append_u16(zip_out, 0);
+        append_u16(zip_out, static_cast<uint16_t>(entries.size()));
+        append_u16(zip_out, static_cast<uint16_t>(entries.size()));
+        append_u32(zip_out, cd_sz);
+        append_u32(zip_out, cd_off);
+        append_u16(zip_out, 0);
+        return zip_out;
+    };
+
     const std::string fake_sha = "0123456789abcdef0123456789abcdef01234567";
-    auto make_mock_fetcher = [&](std::string version, bool fail_mid_download, bool rate_limit, bool traversal) -> ExtensionFetchFn {
-        return [=](const std::string& url, const std::map<std::string, std::string>&) -> ExtensionFetchResponse {
+    int fetch_calls = 0;
+    auto make_mock_fetcher = [&](std::string version, int force_status, bool corrupt_zip, bool traversal, bool use_main_fallback) -> ExtensionFetchFn {
+        return [&, version, force_status, corrupt_zip, traversal, use_main_fallback](
+                   const std::string& url, const std::map<std::string, std::string>& req_headers) -> ExtensionFetchResponse {
+            ++fetch_calls;
             ExtensionFetchResponse r;
-            if (rate_limit) {
+            if (url.find("api.github.com") != std::string::npos) {
                 r.status_code = 403;
-                r.headers["X-RateLimit-Remaining"] = "0";
-                r.body = "{\"message\":\"API rate limit exceeded\"}";
+                r.body = "Unexpected api.github.com call";
                 return r;
             }
-            if (url.find("/releases/latest") != std::string::npos) {
-                r.status_code = 200;
-                r.body = "{\"tag_name\":\"v1.0.0\",\"assets\":[]}";
+            if (force_status == 403 || force_status == 429) {
+                r.status_code = force_status;
+                if (force_status == 403) r.headers["X-RateLimit-Remaining"] = "0";
+                r.body = "{\"message\":\"rate limit exceeded\"}";
                 return r;
             }
-            if (url.find("/branches/main") != std::string::npos) {
-                r.status_code = 200;
-                r.body = "{\"commit\":{\"sha\":\"" + fake_sha + "\"}}";
-                return r;
-            }
-            if (url.find("/git/trees/") != std::string::npos) {
-                json::Value tree = json::Array{};
-                if (traversal) {
-                    json::Value bad = json::Object{};
-                    bad["path"] = "extension/../outside.txt";
-                    bad["type"] = "blob";
-                    tree.mutable_array().push_back(std::move(bad));
+            if (url.find("/releases/latest/download/radium-extension.zip") != std::string::npos) {
+                if (use_main_fallback) {
+                    r.status_code = 404;
+                    return r;
                 }
-                for (const auto& req : ExtensionInstaller::RequiredFiles()) {
-                    json::Value item = json::Object{};
-                    item["path"] = "extension/" + req;
-                    item["type"] = "blob";
-                    tree.mutable_array().push_back(std::move(item));
-                }
-                json::Value root = json::Object{};
-                root["tree"] = std::move(tree);
-                r.status_code = 200;
-                r.body = root.dump();
-                return r;
-            }
-            if (url.find("raw.githubusercontent.com") != std::string::npos) {
-                if (fail_mid_download && url.find("js/popup.js") != std::string::npos) {
-                    r.status_code = 500;
-                    r.error_message = "Simulated HTTP 500";
+                auto inm = req_headers.find("If-None-Match");
+                if (inm != req_headers.end() && inm->second == ("\"etag-" + version + "\"")) {
+                    r.status_code = 304;
                     return r;
                 }
                 r.status_code = 200;
-                if (url.find("manifest.json") != std::string::npos) {
-                    r.body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version +
-                             "\",\"permissions\":[\"nativeMessaging\"],\"background\":{\"service_worker\":\"js/background.js\"},"
-                             "\"action\":{\"default_popup\":\"popup.html\"}}";
-                } else if (url.find("manifest.firefox.json") != std::string::npos) {
-                    r.body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version + "\"}";
-                } else {
-                    r.body = "// mock resource";
-                }
+                r.headers["ETag"] = "\"etag-" + version + "\"";
+                r.body = corrupt_zip ? std::string("NOT_A_ZIP") : build_mock_zip(version, traversal, "");
+                return r;
+            }
+            if (url.find("/archive/refs/heads/main.zip") != std::string::npos) {
+                r.status_code = 200;
+                r.body = build_mock_zip(version, traversal, "Radium-Download-Manager-main/extension/");
                 return r;
             }
             r.status_code = 404;
@@ -1791,27 +1853,31 @@ bool TestPhase8ExtensionSetupSettingsAndAbout() {
         };
     };
 
-    auto res1 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.0.0", false, false, false));
+    fetch_calls = 0;
+    auto res1 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.0.0", 200, false, false, false));
     TEST_ASSERT(res1.success, "Initial mocked extension download succeeds");
+    TEST_ASSERT(fetch_calls == 1, "Single direct release ZIP request");
     TEST_ASSERT(res1.version == "1.0.0", "Extracted version 1.0.0 from manifest.json");
     TEST_ASSERT(res1.install_dir == ExtensionInstaller::DefaultInstallDir(work_dir), "Installed into expected directory");
     TEST_ASSERT(ExtensionInstaller::ValidateExtensionDirectory(res1.install_dir), "All required files present and valid");
 
     // Failed download must NOT overwrite existing v1.0.0
-    auto res_fail = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("2.0.0", true, false, false));
-    TEST_ASSERT(!res_fail.success, "Mid-download failure returns error");
+    auto res_fail = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("2.0.0", 200, true, false, false));
+    TEST_ASSERT(!res_fail.success, "Corrupt ZIP failure returns error");
     std::string intact_ver;
     TEST_ASSERT(ExtensionInstaller::ValidateExtensionDirectory(res1.install_dir, &intact_ver) && intact_ver == "1.0.0",
                 "Existing v1.0.0 extension remains intact after failed download");
 
     // Rate limit and traversal rejection
-    auto res_rl = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, true, false));
-    TEST_ASSERT(!res_rl.success && res_rl.rate_limited, "GitHub rate limit handled cleanly");
-    auto res_trav = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, false, true));
-    TEST_ASSERT(!res_trav.success && res_trav.error_code == "ERR_UNSAFE_PATH", "Path traversal in tree rejected");
+    fetch_calls = 0;
+    auto res_rl = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", 403, false, false, false));
+    TEST_ASSERT(!res_rl.success && res_rl.rate_limited && fetch_calls == 1, "GitHub rate limit handled cleanly without retry loop");
+    auto res_trav = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", 200, false, true, false));
+    TEST_ASSERT(!res_trav.success && (res_trav.error_code == "ERR_ZIP_SLIP" || res_trav.error_code == "ERR_UNSAFE_PATH"),
+                "Path traversal in ZIP rejected");
 
-    // Settings update (v1.0.0 -> v1.1.0)
-    auto res2 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, false, false));
+    // Settings update (v1.0.0 -> v1.1.0) via fallback
+    auto res2 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", 200, false, false, true));
     TEST_ASSERT(res2.success && res2.version == "1.1.0", "Updating existing extension package succeeds");
 
     // 4. Settings & About UI view-model checks
@@ -1880,7 +1946,7 @@ bool TestPhase8ExtensionSetupSettingsAndAbout() {
 }
 
 bool TestDownloadExistenceAndConflictResolution13Scenarios() {
-    using namespace openidm;
+    using namespace radium;
 
     const auto work_dir = std::filesystem::temp_directory_path() / ("radium_phase1_conflict_13_" + GenerateUuidV4());
     std::error_code ec;
@@ -2110,8 +2176,8 @@ bool TestDownloadExistenceAndConflictResolution13Scenarios() {
 }
 
 bool TestRepeatedSameUrlThreeAttemptsAndRestart() {
-    using namespace openidm;
-    using namespace openidm::test;
+    using namespace radium;
+    using namespace radium::test;
 
     const auto work_dir = std::filesystem::temp_directory_path() / ("radium_repeat_3x_" + GenerateUuidV4());
     std::error_code ec;
@@ -2244,7 +2310,7 @@ bool TestRepeatedSameUrlThreeAttemptsAndRestart() {
 }
 
 bool TestStartupPausedRestorationDoesNotTriggerConflicts() {
-    using namespace openidm;
+    using namespace radium;
 
     const auto work_dir = std::filesystem::temp_directory_path() / ("radium_startup_paused_" + GenerateUuidV4());
     std::error_code ec;
@@ -2326,7 +2392,7 @@ bool TestStartupPausedRestorationDoesNotTriggerConflicts() {
 }
 
 bool TestConflictCheckLatencyWithManyTasks() {
-    using namespace openidm;
+    using namespace radium;
 
     const auto work_dir = std::filesystem::temp_directory_path() / ("radium_conflict_perf_" + GenerateUuidV4());
     std::error_code ec;

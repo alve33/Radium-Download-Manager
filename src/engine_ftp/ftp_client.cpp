@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — High-Performance Native WinSock2 FTP & FTPS Download Engine
+// Radium Download Manager — High-Performance Native WinSock2 FTP & FTPS Download Engine
 #include "engine_ftp/ftp_client.hpp"
 
 #include <chrono>
@@ -45,7 +45,7 @@ using SocketType = int;
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 
-namespace openidm::ftp {
+namespace radium::ftp {
 
 namespace {
 
@@ -781,12 +781,12 @@ Result<uint64_t> FtpClient::DownloadFile(
     std::error_code ec;
     if (resume_offset > 0) {
         if (!std::filesystem::exists(target_part_path, ec)) {
-            OPENIDM_LOG_WARN("FtpClient", "Part file missing on disk; resetting resume offset to 0");
+            RADIUM_LOG_WARN("FtpClient", "Part file missing on disk; resetting resume offset to 0");
             resume_offset = 0;
         } else {
             uint64_t actual_sz = std::filesystem::file_size(target_part_path, ec);
             if (actual_sz < resume_offset) {
-                OPENIDM_LOG_WARN("FtpClient", "Part file size (" + std::to_string(actual_sz) +
+                RADIUM_LOG_WARN("FtpClient", "Part file size (" + std::to_string(actual_sz) +
                     ") is smaller than resume offset (" + std::to_string(resume_offset) + "); resetting to 0");
                 resume_offset = 0;
             } else if (actual_sz > resume_offset) {
@@ -803,7 +803,7 @@ Result<uint64_t> FtpClient::DownloadFile(
         if (rest_res.ok() && rest_res.value->first == 350) {
             resume_accepted = true;
         } else {
-            OPENIDM_LOG_WARN("FtpClient", "FTP server rejected REST " + std::to_string(resume_offset) + "; restarting transfer from zero");
+            RADIUM_LOG_WARN("FtpClient", "FTP server rejected REST " + std::to_string(resume_offset) + "; restarting transfer from zero");
             resume_offset = 0;
             resume_accepted = false;
             if (std::filesystem::exists(target_part_path, ec)) {
@@ -936,4 +936,4 @@ Result<uint64_t> FtpClient::DownloadFile(
     return Result<uint64_t>::Ok(total_written);
 }
 
-} // namespace openidm::ftp
+} // namespace radium::ftp

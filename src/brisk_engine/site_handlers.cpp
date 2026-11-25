@@ -12,7 +12,7 @@
 #include <windows.h>
 #endif
 
-namespace openidm::brisk {
+namespace radium::brisk {
 
 namespace {
 
@@ -798,4 +798,4 @@ std::string SiteHandlers::FindCurlImpersonateBinary() {
     return {};
 }
 
-} // namespace openidm::brisk
+} // namespace radium::brisk

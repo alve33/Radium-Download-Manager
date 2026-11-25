@@ -57,14 +57,13 @@
 
 #endif
 
-namespace openidm::ui {
+namespace radium::ui {
 
 namespace {
 
 #ifdef _WIN32
 UINT g_msgTaskbarButtonCreated = 0;
 HICON CreateRadiumAppIcon();
-HICON CreateFluxAppIcon();
 
 bool ShowAddTorrentDialogWin32(
     HWND hwnd_parent,
@@ -2844,9 +2843,11 @@ std::vector<SettingItemView> DesktopView::BuildAllSettingItems() const {
     add_item(
         "check_for_updates", SettingsCategory::kAboutAndDiagnostics, "Application Updates",
         "Check for Updates",
-        "Query the latest stable GitHub Release and compare it with this installed version.",
+        m_update_check_in_progress
+            ? "Checking GitHub for the latest release..."
+            : "Query the latest stable GitHub Release and compare it with this installed version.",
         SettingControlType::kActionButton,
-        "Check now", "", false, false);
+        m_update_check_in_progress ? "Checking..." : "Check now", "", false, false);
     add_item(
         "diag_developer", SettingsCategory::kAboutAndDiagnostics, "Developer",
         "Developer",
@@ -3772,17 +3773,6 @@ std::string DesktopView::RenderFullDesktopSnapshotText() const {
 // -----------------------------------------------------------------------------
 namespace {
 
-constexpr UINT WM_OPENIDM_TRAYICON = WM_APP + 101;
-constexpr UINT WM_OPENIDM_SHOW_NEW_DOWNLOAD = WM_APP + 102;
-constexpr UINT WM_OPENIDM_SELECT_TORRENT_METADATA = WM_APP + 103;
-constexpr UINT WM_OPENIDM_PROBE_COMPLETE          = WM_APP + 104;
-constexpr UINT WM_OPENIDM_TORRENT_FETCH_COMPLETE = WM_APP + 105;
-constexpr UINT WM_OPENIDM_SHOW_CONFLICT = WM_APP + 106;
-constexpr UINT WM_OPENIDM_TASK_NOTIFICATION = WM_APP + 107;
-constexpr UINT WM_OPENIDM_UPDATE_CHECK_COMPLETE = WM_APP + 108;
-constexpr UINT WM_OPENIDM_CHECK_FIRST_LAUNCH_ONBOARDING = WM_APP + 109;
-constexpr UINT WM_OPENIDM_CONFLICT_COMMIT_COMPLETE = WM_APP + 110;
-
 struct ConflictCommitPayload {
     bool success{false};
     std::string task_id;
@@ -3823,6 +3813,56 @@ void StartGitHubUpdateCheck(HWND hwnd) {
                 response,
                 RADIUM_VERSION_STRING,
                 radium::core::UpdateManager::CurrentArchitecture());
+            if (eval.is_rate_limited || http_status == 403 || http_status == 429) {
+                // Fallback to direct github.com/releases/latest redirect (zero api.github.com calls)
+                std::string final_url;
+                int web_status = 0;
+                auto web_fetched = brisk::HttpClient::PerformGet(
+                    std::string(radium::config::UpdateAndReleaseConfig::kReleasePrefixUrl) + "latest",
+                    {{"User-Agent", std::string(radium::config::NetworkPoliciesConfig::kUserAgent)}},
+                    std::nullopt, std::nullopt, 15000, false, canceled,
+                    [&web_status, &final_url](const brisk::HttpResponseMeta& meta) {
+                        web_status = meta.status_code;
+                        final_url = meta.final_url;
+                        return brisk::HeaderAction::kAbort;
+                    },
+                    [](const uint8_t*, size_t) { return false; });
+                (void)web_fetched;
+                if (web_status == 200 || web_status == 301 || web_status == 302) {
+                    const std::string tag_marker = "/releases/tag/";
+                    auto pos = final_url.find(tag_marker);
+                    if (pos != std::string::npos) {
+                        std::string tag = final_url.substr(pos + tag_marker.size());
+                        auto qpos = tag.find_first_of("?#/");
+                        if (qpos != std::string::npos) tag.resize(qpos);
+                        auto cmp = radium::CompareSemanticVersions(tag, RADIUM_VERSION_STRING);
+                        if (cmp.has_value()) {
+                            if (*cmp <= 0) {
+                                result->available = false;
+                                result->message = Utf8ToW(
+                                    "Radium " + std::string(RADIUM_VERSION_STRING) +
+                                    " is up to date. Latest stable release: " + tag + ".");
+                            } else {
+                                result->available = true;
+                                result->matching_installer = true;
+                                result->release_url = Utf8ToW(final_url);
+                                result->message = Utf8ToW(
+                                    "A new version of Radium (" + tag + ") is available!\n\nOpen the official release page to download?");
+                            }
+                            if (!IsWindow(hwnd) || !PostMessageW(hwnd, WM_RADIUM_UPDATE_CHECK_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) delete result;
+                            return;
+                        }
+                    } else if (final_url.find("/releases") != std::string::npos) {
+                        result->message = L"No published GitHub releases were found for alve33/Radium-Download-Manager yet.";
+                        if (!IsWindow(hwnd) || !PostMessageW(hwnd, WM_RADIUM_UPDATE_CHECK_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) delete result;
+                        return;
+                    }
+                } else if (web_status == 404) {
+                    result->message = L"No published GitHub releases were found for alve33/Radium-Download-Manager yet.";
+                    if (!IsWindow(hwnd) || !PostMessageW(hwnd, WM_RADIUM_UPDATE_CHECK_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) delete result;
+                    return;
+                }
+            }
             result->available = eval.update_available;
             result->matching_installer = eval.matching_installer;
             result->release_url = Utf8ToW(eval.release_url);
@@ -3832,7 +3872,7 @@ void StartGitHubUpdateCheck(HWND hwnd) {
         } else {
             result->message = L"GitHub returned an unexpected empty response.";
         }
-        if (!IsWindow(hwnd) || !PostMessageW(hwnd, WM_OPENIDM_UPDATE_CHECK_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) delete result;
+        if (!IsWindow(hwnd) || !PostMessageW(hwnd, WM_RADIUM_UPDATE_CHECK_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) delete result;
     }).detach();
 }
 
@@ -3855,6 +3895,9 @@ struct OfferNotificationData {
     uint64_t file_size{0};
     std::map<std::string, std::string> headers;
     std::map<std::string, std::string> auth_headers;
+    std::string speculative_tx_id;
+    bool has_precomputed_conflict{false};
+    DownloadController::IncomingConflictReport precomputed_conflict;
 
     OfferNotificationData() = default;
     explicit OfferNotificationData(TaskModel t)
@@ -3919,7 +3962,7 @@ Result<std::string> FetchTorrentMetainfo(const OfferNotificationData& offer) {
     }
 
     std::error_code ec;
-    const std::filesystem::path torrent_root = openidm::PathSanitizer::GetDefaultAppDataDir() / L"tmp" / L"torrents";
+    const std::filesystem::path torrent_root = radium::PathSanitizer::GetDefaultAppDataDir() / L"tmp" / L"torrents";
     std::filesystem::create_directories(torrent_root, ec);
     if (ec) return Result<std::string>::Err("ERR_TORRENT_STORAGE", "Could not create the torrent metadata folder");
 
@@ -4201,7 +4244,7 @@ bool TryShowExistingConflictInsteadOfNewDownload(
             offer_task->file_name = filename;
             offer_task->save_dir = save_dir;
             if (!MarkTaskAsFileConflict(controller, *offer_task)) return false;
-            SendMessageW(main_hwnd, WM_OPENIDM_SHOW_CONFLICT, 0, 0);
+            SendMessageW(main_hwnd, WM_RADIUM_SHOW_CONFLICT, 0, 0);
             return true;
         }
     }
@@ -4213,7 +4256,7 @@ bool TryShowExistingConflictInsteadOfNewDownload(
     auto added = controller.AddTask(std::move(task), false, false);
     if (!added.ok() || added.value->state != TaskState::kPaused) return false;
     if (!MarkTaskAsFileConflict(controller, *added.value)) return false;
-    SendMessageW(main_hwnd, WM_OPENIDM_SHOW_CONFLICT, 0, 0);
+    SendMessageW(main_hwnd, WM_RADIUM_SHOW_CONFLICT, 0, 0);
     return true;
 }
 
@@ -4525,7 +4568,7 @@ bool ResolveConflictDialog(Win32WindowContext& ctx, ConflictPolicy choice) {
             }
 
             if (!IsWindow(target_hwnd) ||
-                !PostMessageW(target_hwnd, WM_OPENIDM_CONFLICT_COMMIT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload))) {
+                !PostMessageW(target_hwnd, WM_RADIUM_CONFLICT_COMMIT_COMPLETE, 0, reinterpret_cast<LPARAM>(payload))) {
                 delete payload;
             }
         }).detach();
@@ -5015,7 +5058,7 @@ bool SyncTaskbarProgress(HWND hwnd, ITaskbarList3* pTaskbar, const DesktopView& 
                 }
                 Sleep(10);
             }
-            OPENIDM_LOG_INFO("UI", "Taskbar progress cleared via TBPF_NOPROGRESS (hrState=" + 
+            RADIUM_LOG_INFO("UI", "Taskbar progress cleared via TBPF_NOPROGRESS (hrState=" + 
                              std::to_string(static_cast<long>(hrState)) + ", success=" + (reset_ok ? "true" : "false") + ")");
             break;
         }
@@ -5248,6 +5291,7 @@ struct NewDownloadDialogContext {
     HBRUSH hBgBrush{nullptr};
     HBRUSH hEditBrush{nullptr};
     std::string existing_task_id;
+    std::string speculative_tx_id;
     std::optional<TaskModel> draft_task;
     std::string initial_filename;
     std::string initial_save_dir;
@@ -5278,7 +5322,24 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     if (!ctx) return DefWindowProcW(hwnd, msg, wParam, lParam);
 
     switch (msg) {
-        case WM_OPENIDM_PROBE_COMPLETE: {
+        case WM_TIMER: {
+            if (wParam == 5020 && ctx && ctx->controller && !ctx->speculative_tx_id.empty()) {
+                if (auto snap = ctx->controller->GetSpeculativeSnapshot(ctx->speculative_tx_id)) {
+                    if (snap->total_bytes > 0 && ctx->hFileSizeLabel) {
+                        std::string sz_str = DesktopView::FormatSizePretty(snap->total_bytes);
+                        std::wstring txt = L"Download Size: " + Utf8ToW(sz_str);
+                        SetWindowTextW(ctx->hFileSizeLabel, txt.c_str());
+                    }
+                    if (snap->range_supported) {
+                        ctx->probed_has_range_info = true;
+                        ctx->probed_range_supported = true;
+                    }
+                }
+                return 0;
+            }
+            break;
+        }
+        case WM_RADIUM_PROBE_COMPLETE: {
             auto* p = reinterpret_cast<ProbeResultPayload*>(lParam);
             if (!p) return 0;
             std::unique_ptr<ProbeResultPayload> auto_cleanup(p);
@@ -5323,7 +5384,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                             item->draft_task = std::move(check_t);
                             item->report = std::move(report);
                             item->start_immediately = true;
-                            if (!PostMessageW(owner, WM_OPENIDM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item))) {
+                            if (!PostMessageW(owner, WM_RADIUM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item))) {
                                 delete item;
                             }
                         }
@@ -5434,7 +5495,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (existing_task.has_value() && !existing_task->stream_options.cached_manifest_body.empty() &&
                 (existing_task->stream_options.cached_manifest_body.front() == '{' || existing_task->stream_options.cached_manifest_body.front() == '[')) {
                 try {
-                    auto root = openidm::json::Parse(existing_task->stream_options.cached_manifest_body);
+                    auto root = radium::json::Parse(existing_task->stream_options.cached_manifest_body);
                     if (root.is_object() && root["qualities"].is_array()) {
                         for (const auto& q : root["qualities"].as_array()) {
                             QualityChoice qc;
@@ -5485,7 +5546,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (existing_task.has_value() && !existing_task->stream_options.cached_manifest_body.empty() &&
                 (existing_task->stream_options.cached_manifest_body.front() == '{' || existing_task->stream_options.cached_manifest_body.front() == '[')) {
                 try {
-                    auto mroot = openidm::json::Parse(existing_task->stream_options.cached_manifest_body);
+                    auto mroot = radium::json::Parse(existing_task->stream_options.cached_manifest_body);
                     if (mroot.is_object()) {
                         if (mroot["selectedItag"].as_int64(0) > 0) target_itag = static_cast<int>(mroot["selectedItag"].as_int64(0));
                         else if (mroot["itag"].as_int64(0) > 0) target_itag = static_cast<int>(mroot["itag"].as_int64(0));
@@ -5914,13 +5975,23 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 } else if (u.rfind("blob:", 0) == 0 && ctx->initial_file_size > 0) {
                     std::wstring s_sz = L"Download Size: " + Utf8ToW(DesktopView::FormatSizePretty(static_cast<uint64_t>(ctx->initial_file_size)));
                     SetWindowTextW(ctx->hFileSizeLabel, s_sz.c_str());
+                } else if (!ctx->speculative_tx_id.empty() && url_unchanged) {
+                    if (auto snap = ctx->controller->GetSpeculativeSnapshot(ctx->speculative_tx_id); snap && snap->total_bytes > 0) {
+                        std::wstring s_sz = L"Download Size: " + Utf8ToW(DesktopView::FormatSizePretty(snap->total_bytes));
+                        SetWindowTextW(ctx->hFileSizeLabel, s_sz.c_str());
+                    } else if (ctx->initial_file_size > 0) {
+                        std::wstring s_sz = L"Download Size: " + Utf8ToW(DesktopView::FormatSizePretty(static_cast<uint64_t>(ctx->initial_file_size)));
+                        SetWindowTextW(ctx->hFileSizeLabel, s_sz.c_str());
+                    } else {
+                        SetWindowTextW(ctx->hFileSizeLabel, L"Download Size: Receiving metadata…");
+                    }
                 } else if (u.rfind("http://", 0) == 0 || u.rfind("https://", 0) == 0) {
                     SetWindowTextW(ctx->hFileSizeLabel, L"Download Size: Checking size…");
                     uint64_t req_id = ++ctx->current_probe_id;
                     auto alive_flag = ctx->dlg_alive;
                     HWND target_hwnd = hwnd;
                     std::thread([target_hwnd, alive_flag, req_id, u]() {
-                        auto probe_res = openidm::brisk::HttpClient::ProbeResource(u, {}, {}, {}, false, 5000);
+                        auto probe_res = radium::brisk::HttpClient::ProbeResource(u, {}, {}, {}, false, 5000);
                         if (!alive_flag || !(*alive_flag) || !IsWindow(target_hwnd)) return;
                         auto* payload = new ProbeResultPayload();
                         payload->request_id = req_id;
@@ -5938,7 +6009,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                             payload->success = false;
                             payload->content_length = -1;
                         }
-                        PostMessageW(target_hwnd, WM_OPENIDM_PROBE_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
+                        PostMessageW(target_hwnd, WM_RADIUM_PROBE_COMPLETE, 0, reinterpret_cast<LPARAM>(payload));
                     }).detach();
                 } else if (u.empty()) {
                     SetWindowTextW(ctx->hFileSizeLabel, L"Download Size: Unknown size");
@@ -6173,8 +6244,13 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 else if (ctx->initial_file_size > 0 && candidate.total_bytes == 0) candidate.total_bytes = static_cast<uint64_t>(ctx->initial_file_size);
                 if (ctx->probed_has_range_info) candidate.range_supported = ctx->probed_range_supported;
 
-                auto report = ctx->controller->InspectIncomingDownload(candidate, ctx->existing_task_id);
+                auto report = ctx->controller->InspectIncomingDownload(
+                    candidate,
+                    !ctx->existing_task_id.empty() ? ctx->existing_task_id : ctx->speculative_tx_id);
                 if (report.kind == DownloadController::IncomingConflictKind::kActiveOrQueuedSameDownload && report.matched_task.has_value()) {
+                    if (!ctx->speculative_tx_id.empty()) {
+                        ctx->controller->CancelSpeculativeTransaction(ctx->speculative_tx_id);
+                    }
                     ctx->view->SelectTask(report.matched_task->task_id);
                     ctx->view->ScrollTaskIntoView(report.matched_task->task_id, true);
                     ctx->submitted = true;
@@ -6182,6 +6258,9 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 }
                 if (report.has_conflict() && conflict_pol == ConflictPolicy::kPrompt) {
+                    if (!ctx->speculative_tx_id.empty()) {
+                        ctx->controller->CancelSpeculativeTransaction(ctx->speculative_tx_id);
+                    }
                     HWND owner = GetWindow(hwnd, GW_OWNER);
                     if (owner && IsWindow(owner)) {
                         auto* item = new Win32WindowContext::PendingConflictItem;
@@ -6190,7 +6269,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         item->start_immediately = start_now;
                         item->is_from_new_download_dialog = true;
                         item->is_existing_controller_task = !ctx->existing_task_id.empty();
-                        if (!PostMessageW(owner, WM_OPENIDM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item))) {
+                        if (!PostMessageW(owner, WM_RADIUM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item))) {
                             delete item;
                         }
                     }
@@ -6199,7 +6278,26 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 }
 
-                OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_SUBMIT_ATTEMPT: url=" + u + " filename=" + fn + " quality=" + vfilter);
+                RADIUM_LOG_INFO("UI", "NEW_DOWNLOAD_SUBMIT_ATTEMPT: url=" + u + " filename=" + fn + " quality=" + vfilter);
+
+                if (!ctx->speculative_tx_id.empty() && ctx->existing_task_id.empty()) {
+                    auto acc_res = ctx->controller->AcceptSpeculativeTransaction(
+                        ctx->speculative_tx_id,
+                        final_fn,
+                        sd,
+                        start_now,
+                        sched,
+                        in.schedule_time_local,
+                        conflict_pol);
+                    if (acc_res.ok()) {
+                        ctx->controller->RememberDownloadDirectory(sd);
+                        ctx->view->SelectTask(acc_res.value->task_id);
+                        ctx->view->ScrollTaskIntoView(acc_res.value->task_id, true);
+                        ctx->submitted = true;
+                        DestroyWindow(hwnd);
+                        return 0;
+                    }
+                }
 
                 if (ctx->draft_task.has_value() && ctx->existing_task_id.empty()) {
                     if (candidate.url.rfind("blob:", 0) == 0 && !candidate.part_path.empty()) {
@@ -6287,7 +6385,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                             if (!t.stream_options.cached_manifest_body.empty() &&
                                 (t.stream_options.cached_manifest_body.front() == '{' || t.stream_options.cached_manifest_body.front() == '[')) {
                                 try {
-                                    auto jroot = openidm::json::Parse(t.stream_options.cached_manifest_body);
+                                    auto jroot = radium::json::Parse(t.stream_options.cached_manifest_body);
                                     if (jroot.is_object()) {
                                         if (!qc.video_url.empty()) jroot["videoUrl"] = qc.video_url;
                                         if (!qc.paired_audio_url.empty()) jroot["audioUrl"] = qc.paired_audio_url;
@@ -6329,8 +6427,8 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                             ctx->controller->UpdateTask(t);
                             ctx->submitted = true;
                             HWND owner = GetWindow(hwnd, GW_OWNER);
-                            if (owner && IsWindow(owner)) PostMessageW(owner, WM_OPENIDM_SHOW_CONFLICT, 0, 0);
-                            OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_CONFLICT_DETECTED: taskId=" + ctx->existing_task_id + " file=" + t.file_name);
+                            if (owner && IsWindow(owner)) PostMessageW(owner, WM_RADIUM_SHOW_CONFLICT, 0, 0);
+                            RADIUM_LOG_INFO("UI", "NEW_DOWNLOAD_CONFLICT_DETECTED: taskId=" + ctx->existing_task_id + " file=" + t.file_name);
                             DestroyWindow(hwnd);
                             return 0;
                         }
@@ -6348,7 +6446,7 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                             ctx->controller->StartTask(ctx->existing_task_id);
                         }
                         ctx->submitted = true;
-                        OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_UPDATED: taskId=" + ctx->existing_task_id);
+                        RADIUM_LOG_INFO("UI", "NEW_DOWNLOAD_UPDATED: taskId=" + ctx->existing_task_id);
                         DestroyWindow(hwnd);
                         return 0;
                     }
@@ -6371,18 +6469,21 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     }
                     ctx->submitted = true;
                     HWND owner = GetWindow(hwnd, GW_OWNER);
-                    if (owner && IsWindow(owner)) PostMessageW(owner, WM_OPENIDM_SHOW_CONFLICT, 0, 0);
+                    if (owner && IsWindow(owner)) PostMessageW(owner, WM_RADIUM_SHOW_CONFLICT, 0, 0);
                     DestroyWindow(hwnd);
                     return 0;
                 }
 
                 ctx->submitted = true;
-                OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_SUBMITTED: taskId=" + res.value->task_id + " file=" + res.value->file_name);
+                RADIUM_LOG_INFO("UI", "NEW_DOWNLOAD_SUBMITTED: taskId=" + res.value->task_id + " file=" + res.value->file_name);
                 DestroyWindow(hwnd);
                 return 0;
             }
 
             if ((id == 5009 || id == IDCANCEL) && (code == BN_CLICKED || code == 0 || code == 1)) { // Cancel
+                if (!ctx->speculative_tx_id.empty()) {
+                    ctx->controller->CancelSpeculativeTransaction(ctx->speculative_tx_id);
+                }
                 if (ctx->draft_task.has_value() && ctx->draft_task->url.rfind("blob:", 0) == 0 && !ctx->draft_task->part_path.empty()) {
                     std::error_code rm_ec;
                     std::filesystem::remove(PathSanitizer::Utf8ToPath(ctx->draft_task->part_path), rm_ec);
@@ -6403,6 +6504,12 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
         case WM_DESTROY: {
+            if (!ctx->speculative_tx_id.empty()) {
+                KillTimer(hwnd, 5020);
+                if (!ctx->submitted) {
+                    ctx->controller->CancelSpeculativeTransaction(ctx->speculative_tx_id);
+                }
+            }
             if (ctx && ctx->dlg_alive) {
                 *(ctx->dlg_alive) = false;
             }
@@ -6528,7 +6635,8 @@ void ShowNewDownloadDialogWin32(
     const std::string& save_dir = "",
     int64_t file_size = -1,
     const std::string& existing_task_id = "",
-    std::optional<TaskModel> draft_task = std::nullopt) {
+    std::optional<TaskModel> draft_task = std::nullopt,
+    const std::string& speculative_tx_id = "") {
 
     struct PendingOfferItem {
         std::string url;
@@ -6599,6 +6707,7 @@ void ShowNewDownloadDialogWin32(
     ctx.view = &view;
     ctx.controller = &controller;
     ctx.existing_task_id = existing_task_id;
+    ctx.speculative_tx_id = speculative_tx_id;
     ctx.draft_task = std::move(draft_task);
     ctx.initial_filename = suggested_filename;
     ctx.initial_save_dir = save_dir;
@@ -6662,7 +6771,7 @@ void ShowNewDownloadDialogWin32(
         }
     }
 
-    if (!candidate_url.empty() && existing_task_id.empty() &&
+    if (!candidate_url.empty() && existing_task_id.empty() && speculative_tx_id.empty() &&
         controller.GetSettings().conflict_policy == ConflictPolicy::kPrompt) {
         TaskModel check_t = ctx.draft_task.value_or(TaskModel{});
         check_t.url = candidate_url;
@@ -6682,7 +6791,7 @@ void ShowNewDownloadDialogWin32(
             item->draft_task = std::move(check_t);
             item->report = std::move(report);
             item->start_immediately = true;
-            SendMessageW(hwnd_parent, WM_OPENIDM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item));
+            SendMessageW(hwnd_parent, WM_RADIUM_SHOW_CONFLICT, 0, reinterpret_cast<LPARAM>(item));
             return;
         }
     }
@@ -6731,6 +6840,10 @@ void ShowNewDownloadDialogWin32(
 
     if (!hDlg) return;
     ctx.hDlg = hDlg;
+    if (!ctx.speculative_tx_id.empty()) {
+        controller.RecordSpeculativeDialogVisible(ctx.speculative_tx_id);
+        SetTimer(hDlg, 5020, 150, nullptr);
+    }
 
     HICON hDlgIcon = CreateRadiumAppIcon();
     if (hDlgIcon) {
@@ -6782,7 +6895,7 @@ void ShowNewDownloadDialogWin32(
     SetForegroundWindow(hDlg);
     SetActiveWindow(hDlg);
     SetFocus(ctx.hUrlEdit);
-    OPENIDM_LOG_INFO("UI", "NEW_DOWNLOAD_DIALOG_SHOWN: taskId=" + existing_task_id + " url=" + candidate_url + " filename=" + suggested_filename);
+    RADIUM_LOG_INFO("UI", "NEW_DOWNLOAD_DIALOG_SHOWN: taskId=" + existing_task_id + " url=" + candidate_url + " filename=" + suggested_filename);
 
     MSG msg{};
     while (IsWindow(hDlg) && GetMessageW(&msg, nullptr, 0, 0)) {
@@ -7675,14 +7788,33 @@ void PaintSettingsCenterOverlayWin32(HDC hdc, DesktopView& view, const RECT& cli
             } else {
                 // Modernized button / dropdown / text field
                 bool is_action = (item.control_type == SettingControlType::kActionButton);
-                ColorRgba ctrl_bg = is_action ? coral_red : pal.surface_primary;
-                ColorRgba ctrl_border = is_action ? coral_red : pal.border_subtle;
+                bool is_checking_updates = (is_action && item.key == "check_for_updates" && item.value_text == "Checking...");
+                ColorRgba ctrl_bg = is_action ? (is_checking_updates ? pal.surface_elevated : coral_red) : pal.surface_primary;
+                ColorRgba ctrl_border = is_action ? (is_checking_updates ? pal.border_focus : coral_red) : pal.border_subtle;
                 DrawRoundedBoxGdi(hdc, ctrl_rc, DesignSystem::ScaleForDpi(6, m.dpi), ctrl_bg, ctrl_border, 1);
 
                 SelectObject(hdc, is_action ? hFontBold : hFontBody);
-                SetTextColor(hdc, is_action ? RGB(255, 255, 255) : pal.text_primary.ToWin32ColorRef());
+                SetTextColor(hdc, is_action ? (is_checking_updates ? pal.text_primary.ToWin32ColorRef() : RGB(255, 255, 255)) : pal.text_primary.ToWin32ColorRef());
                 std::wstring wval = Utf8ToW(item.value_text);
-                if (item.control_type == SettingControlType::kDropdown) {
+                if (is_checking_updates) {
+                    int spin_sz = DesignSystem::ScaleForDpi(12, m.dpi);
+                    int spin_x = ctrl_rc.left + DesignSystem::ScaleForDpi(10, m.dpi);
+                    int spin_y = ctrl_rc.top + (ctrl_rc.bottom - ctrl_rc.top - spin_sz) / 2;
+                    float start_deg = static_cast<float>((GetTickCount64() / 3) % 360);
+                    Gdiplus::Graphics g(hdc);
+                    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                    Gdiplus::Pen track_pen(Gdiplus::Color(70, 255, 255, 255), 2.0f);
+                    g.DrawEllipse(&track_pen, spin_x, spin_y, spin_sz, spin_sz);
+                    Gdiplus::Pen arc_pen(Gdiplus::Color(255, coral_red.r, coral_red.g, coral_red.b), 2.0f);
+                    arc_pen.SetStartCap(Gdiplus::LineCapRound);
+                    arc_pen.SetEndCap(Gdiplus::LineCapRound);
+                    g.DrawArc(&arc_pen, spin_x, spin_y, spin_sz, spin_sz, start_deg, 250.0f);
+
+                    RECT txt_rc = ctrl_rc;
+                    txt_rc.left = spin_x + spin_sz + DesignSystem::ScaleForDpi(6, m.dpi);
+                    txt_rc.right -= DesignSystem::ScaleForDpi(8, m.dpi);
+                    DrawTextW(hdc, wval.c_str(), -1, &txt_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                } else if (item.control_type == SettingControlType::kDropdown) {
                     RECT txt_rc = ctrl_rc;
                     txt_rc.right -= DesignSystem::ScaleForDpi(18, m.dpi);
                     txt_rc.left += DesignSystem::ScaleForDpi(10, m.dpi);
@@ -8389,10 +8521,6 @@ HICON CreateRadiumAppIcon() {
     DeleteObject(hbmColor);
     DeleteObject(hbmMask);
     return s_cached_icon;
-}
-
-HICON CreateFluxAppIcon() {
-    return CreateRadiumAppIcon();
 }
 
 // -----------------------------------------------------------------------------
@@ -11869,8 +11997,11 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                     }
                     if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
                         hit.task_id == "check_for_updates") {
-                        StartGitHubUpdateCheck(hwnd);
-                        InvalidateRect(hwnd, nullptr, FALSE);
+                        if (!ctx->view->IsUpdateCheckInProgress()) {
+                            ctx->view->SetUpdateCheckInProgress(true);
+                            StartGitHubUpdateCheck(hwnd);
+                            InvalidateRect(hwnd, nullptr, FALSE);
+                        }
                         return 0;
                     }
                     if (clicked_itm && clicked_itm->control_type == SettingControlType::kActionButton &&
@@ -12329,7 +12460,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
-        case WM_OPENIDM_SHOW_CONFLICT: {
+        case WM_RADIUM_SHOW_CONFLICT: {
             if (lParam != 0) {
                 std::unique_ptr<Win32WindowContext::PendingConflictItem> incoming(
                     reinterpret_cast<Win32WindowContext::PendingConflictItem*>(lParam));
@@ -12349,7 +12480,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
-        case WM_OPENIDM_CONFLICT_COMMIT_COMPLETE: {
+        case WM_RADIUM_CONFLICT_COMMIT_COMPLETE: {
             std::unique_ptr<ConflictCommitPayload> payload(reinterpret_cast<ConflictCommitPayload*>(lParam));
             ctx->conflict_dialog_processing = false;
             ctx->conflict_dialog_processing_choice = ConflictPolicy::kPrompt;
@@ -12389,7 +12520,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
-        case WM_OPENIDM_TASK_NOTIFICATION: {
+        case WM_RADIUM_TASK_NOTIFICATION: {
             std::unique_ptr<TaskNotificationPayload> notice(reinterpret_cast<TaskNotificationPayload*>(lParam));
             if (notice && ctx->tray_added) {
                 if (!notice->success && !notice->task_id.empty() &&
@@ -12408,7 +12539,11 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             }
             return 0;
         }
-        case WM_OPENIDM_UPDATE_CHECK_COMPLETE: {
+        case WM_RADIUM_UPDATE_CHECK_COMPLETE: {
+            if (ctx && ctx->view) {
+                ctx->view->SetUpdateCheckInProgress(false);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             std::unique_ptr<UpdateCheckPayload> update(reinterpret_cast<UpdateCheckPayload*>(lParam));
             if (!update) return 0;
             const int choice = MessageBoxW(hwnd, update->message.c_str(), update->title.c_str(),
@@ -12420,16 +12555,23 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             }
             return 0;
         }
-        case WM_OPENIDM_CHECK_FIRST_LAUNCH_ONBOARDING: {
-            if (ctx && ctx->controller && ctx->view && ctx->controller->ShouldShowExtensionOnboarding()) {
+        case WM_RADIUM_CHECK_FIRST_LAUNCH_ONBOARDING: {
+            if (ctx && ctx->controller && ctx->view &&
+                ctx->view->IsFirstLaunchOnboardingEligible() &&
+                ctx->pending_conflicts.empty() &&
+                ctx->controller->ShouldShowExtensionOnboarding()) {
+                ctx->view->SetFirstLaunchOnboardingEligible(false);
                 ShowExtensionSetupDialogWin32(hwnd, *ctx->controller, ctx->view->GetPalette(), true /* is_first_launch */);
             }
             return 0;
         }
-        case WM_OPENIDM_SHOW_NEW_DOWNLOAD: {
+        case WM_RADIUM_SHOW_NEW_DOWNLOAD: {
+            if (ctx && ctx->view) {
+                ctx->view->SetFirstLaunchOnboardingEligible(false);
+            }
             auto* offer = reinterpret_cast<OfferNotificationData*>(lParam);
             if (offer) {
-                OPENIDM_LOG_INFO("UI", "DOWNLOAD_OFFER_RECEIVED: taskId=" + offer->task_id + " filename=" + offer->file_name);
+                RADIUM_LOG_INFO("UI", "DOWNLOAD_OFFER_RECEIVED: taskId=" + offer->task_id + " filename=" + offer->file_name);
 
                 // Immediately bring the full Radium application to the foreground
                 if (!IsWindowVisible(hwnd)) {
@@ -12466,7 +12608,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                             } catch (...) {
                                 payload->error_message = "Unexpected error while retrieving torrent metadata";
                             }
-                            if (!PostMessageW(hwnd, WM_OPENIDM_TORRENT_FETCH_COMPLETE, 0,
+                            if (!PostMessageW(hwnd, WM_RADIUM_TORRENT_FETCH_COMPLETE, 0,
                                               reinterpret_cast<LPARAM>(payload))) {
                                 std::error_code ignored;
                                 if (!payload->metainfo_path.empty()) {
@@ -12545,7 +12687,9 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                             static_cast<int64_t>(offer->file_size), "", offer->draft_task);
                     }
                 } else {
-                    auto report = ctx->controller->InspectIncomingDownload(offer->draft_task);
+                    auto report = offer->has_precomputed_conflict
+                        ? offer->precomputed_conflict
+                        : ctx->controller->InspectIncomingDownload(offer->draft_task, offer->speculative_tx_id);
                     if (report.kind == DownloadController::IncomingConflictKind::kActiveOrQueuedSameDownload &&
                         report.matched_task.has_value()) {
                         ctx->view->SelectTask(report.matched_task->task_id);
@@ -12571,7 +12715,8 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                             offer->save_dir,
                             initial_sz,
                             "",
-                            offer->draft_task);
+                            offer->draft_task,
+                            offer->speculative_tx_id);
                     }
                 }
                 if (ctx->ipc_server && !offer->task_id.empty()) {
@@ -12581,7 +12726,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             }
             return 0;
         }
-        case WM_OPENIDM_TORRENT_FETCH_COMPLETE: {
+        case WM_RADIUM_TORRENT_FETCH_COMPLETE: {
             std::unique_ptr<TorrentFetchPayload> payload(reinterpret_cast<TorrentFetchPayload*>(lParam));
             if (!payload) return 0;
 
@@ -12686,7 +12831,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             ctx->view->ScrollTaskIntoView(added.value->task_id, true);
             return 0;
         }
-        case WM_OPENIDM_SELECT_TORRENT_METADATA: {
+        case WM_RADIUM_SELECT_TORRENT_METADATA: {
             auto* request = reinterpret_cast<TorrentMetadataSelectionRequest*>(lParam);
             if (request && request->info) {
                 request->accepted = ShowAddTorrentDialogWin32(hwnd, *ctx->view, *ctx->controller, *request->info);
@@ -12710,7 +12855,8 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                         }
                     }
                 }
-                if (has_active || ctx->was_active_last_tick || !ctx->conflict_dialog_task_id.empty()) {
+                if (has_active || ctx->was_active_last_tick || !ctx->conflict_dialog_task_id.empty() ||
+                    (ctx->view && ctx->view->IsUpdateCheckInProgress() && ctx->view->IsSettingsCenterOpen())) {
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 ctx->was_active_last_tick = has_active;
@@ -12765,7 +12911,7 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
-        case WM_OPENIDM_TRAYICON: {
+        case WM_RADIUM_TRAYICON: {
             UINT tray_msg = LOWORD(lParam);
             if (tray_msg == WM_CONTEXTMENU || tray_msg == WM_RBUTTONUP) {
                 POINT pt{};
@@ -12981,7 +13127,7 @@ int DesktopView::RunWin32MessageLoop() {
 
     Win32WindowContext ctx{this, &m_controller, nullptr, nullptr, {}, false};
     ctx.ipc_server = m_ipc_server;
-    OPENIDM_LOG_INFO("UI", "Calling CreateWindowExW for Radium_MainWindowClass");
+    RADIUM_LOG_INFO("UI", "Calling CreateWindowExW for Radium_MainWindowClass");
     HWND hwnd = CreateWindowExW(
         0,
         wc.lpszClassName,
@@ -12992,10 +13138,10 @@ int DesktopView::RunWin32MessageLoop() {
         nullptr, nullptr, hInst, &ctx);
     if (!hwnd) {
         DWORD err = GetLastError();
-        OPENIDM_LOG_INFO("UI", "ERROR: CreateWindowExW failed with err=" + std::to_string(err));
+        RADIUM_LOG_INFO("UI", "ERROR: CreateWindowExW failed with err=" + std::to_string(err));
         return 1;
     }
-    OPENIDM_LOG_INFO("UI", "CreateWindowExW succeeded: hwnd=" + std::to_string(reinterpret_cast<uintptr_t>(hwnd)));
+    RADIUM_LOG_INFO("UI", "CreateWindowExW succeeded: hwnd=" + std::to_string(reinterpret_cast<uintptr_t>(hwnd)));
     ctx.hwnd = hwnd;
 
     ctx.hThemeTooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
@@ -13019,7 +13165,7 @@ int DesktopView::RunWin32MessageLoop() {
     ctx.nid.hWnd = hwnd;
     ctx.nid.uID = 1;
     ctx.nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    ctx.nid.uCallbackMessage = WM_OPENIDM_TRAYICON;
+    ctx.nid.uCallbackMessage = WM_RADIUM_TRAYICON;
     ctx.nid.hIcon = wc.hIcon;
     wcsncpy_s(ctx.nid.szTip, L"Radium Download Manager", _TRUNCATE);
     ctx.tray_added = (Shell_NotifyIconW(NIM_ADD, &ctx.nid) != FALSE);
@@ -13041,7 +13187,7 @@ int DesktopView::RunWin32MessageLoop() {
         payload->title = notice.success ? L"Download complete" : L"Download failed";
         const std::string body = notice.file_name + (notice.success ? " finished downloading" : ": " + notice.message);
         payload->message = Utf8ToW(body);
-        if (!PostMessageW(hwnd, WM_OPENIDM_TASK_NOTIFICATION, 0, reinterpret_cast<LPARAM>(payload))) delete payload;
+        if (!PostMessageW(hwnd, WM_RADIUM_TASK_NOTIFICATION, 0, reinterpret_cast<LPARAM>(payload))) delete payload;
     });
     m_controller.SetTorrentMetadataSelectionCallback(
         [hwnd](torrent::TorrentInfo& info) {
@@ -13049,18 +13195,28 @@ int DesktopView::RunWin32MessageLoop() {
             if (!IsWindow(hwnd)) {
                 return Result<void>::Err("ERR_TORRENT_SELECTION_UNAVAILABLE", "The torrent file-selection window is unavailable");
             }
-            SendMessageW(hwnd, WM_OPENIDM_SELECT_TORRENT_METADATA, 0, reinterpret_cast<LPARAM>(&request));
+            SendMessageW(hwnd, WM_RADIUM_SELECT_TORRENT_METADATA, 0, reinterpret_cast<LPARAM>(&request));
             return request.accepted
                 ? Result<void>::Ok()
                 : Result<void>::Err("ERR_TORRENT_SELECTION_CANCELED", "Torrent file selection canceled");
         });
     if (m_ipc_server) {
+        m_ipc_server->SetSpeculativeDecisionCallback(
+            [hwnd](const std::string& tx_id, const TaskModel& draft, const DownloadController::IncomingConflictReport& conflict) {
+                auto* offer = new OfferNotificationData(draft);
+                offer->speculative_tx_id = tx_id;
+                offer->has_precomputed_conflict = true;
+                offer->precomputed_conflict = conflict;
+                if (!PostMessageW(hwnd, WM_RADIUM_SHOW_NEW_DOWNLOAD, 0, reinterpret_cast<LPARAM>(offer))) {
+                    delete offer;
+                }
+            });
         m_ipc_server->SetOfferNotificationCallback(
             [hwnd, this](const TaskModel& task) {
                 // Browser file offers are held as pending drafts until the UI resolves any
                 // file conflict or confirms them; `.torrent` offers fetch metainfo first.
                 auto* offer = new OfferNotificationData(task);
-                PostMessageW(hwnd, WM_OPENIDM_SHOW_NEW_DOWNLOAD, 0, reinterpret_cast<LPARAM>(offer));
+                PostMessageW(hwnd, WM_RADIUM_SHOW_NEW_DOWNLOAD, 0, reinterpret_cast<LPARAM>(offer));
             });
     }
 
@@ -13070,7 +13226,9 @@ int DesktopView::RunWin32MessageLoop() {
     ShowWindow(hwnd, start_min ? SW_HIDE : SW_SHOWNORMAL);
     if (!start_min) {
         SetForegroundWindow(hwnd);
-        PostMessageW(hwnd, WM_OPENIDM_CHECK_FIRST_LAUNCH_ONBOARDING, 0, 0);
+        if (m_first_launch_onboarding_eligible) {
+            PostMessageW(hwnd, WM_RADIUM_CHECK_FIRST_LAUNCH_ONBOARDING, 0, 0);
+        }
     }
     UpdateWindow(hwnd);
 
@@ -13097,4 +13255,4 @@ int DesktopView::RunApplicationLoop(bool headless_exit_immediately) {
     return 0;
 }
 
-} // namespace openidm::ui
+} // namespace radium::ui

@@ -120,7 +120,7 @@ function cleanupContentScript() {
       g_videoObserver = null;
     }
     if (typeof document !== "undefined" && document.querySelectorAll) {
-      const badges = document.querySelectorAll("[data-radium-shadow-host], [data-flux-shadow-host]");
+      const badges = document.querySelectorAll("[data-radium-shadow-host]");
       badges.forEach(b => { try { b.remove(); } catch (_) {} });
     }
   } catch (_) {}
@@ -195,7 +195,7 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
 
   const removeDuplicateHosts = (keepHostEl = null) => {
     try {
-      const existingHosts = doc.querySelectorAll("[data-radium-shadow-host], [data-flux-shadow-host], .radium-download-btn");
+      const existingHosts = doc.querySelectorAll("[data-radium-shadow-host], .radium-download-btn");
       existingHosts.forEach((el) => {
         if (el !== keepHostEl && typeof el.remove === "function") {
           el.remove();
@@ -324,17 +324,12 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     removeDuplicateHosts(null);
 
     video.dataset.radiumOverlayAttached = "true";
-    video.dataset.fluxOverlayAttached = "true";
-    video.dataset.openidmOverlayAttached = "true";
 
     const hostEl = doc.createElement("div");
     hostEl.id = "radium-singleton-video-btn";
     hostEl.setAttribute("data-radium-shadow-host", "true");
-    hostEl.setAttribute("data-flux-shadow-host", "true");
-    hostEl.setAttribute("data-openidm-shadow-host", "true");
     if (isDrm) {
       hostEl.setAttribute("data-radium-drm", "true");
-      hostEl.setAttribute("data-flux-drm", "true");
     }
     positionOverlayHost(video, hostEl);
 
@@ -521,7 +516,7 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       const liveSrc = extractVideoElementSrc(video);
       const liveIsBlob = liveSrc.startsWith("blob:");
 
-      const cand = (typeof window !== "undefined") ? (window.__radiumLastCandidate || window.__fluxLastCandidate) : null;
+      const cand = (typeof window !== "undefined") ? window.__radiumLastCandidate : null;
       let chosenQ = hostEl.__radiumSelectedQuality || null;
       if (!chosenQ && selectEl && selectEl.value && cand && Array.isArray(cand.qualities)) {
         chosenQ = cand.qualities.find(q =>
@@ -569,7 +564,7 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
     selectEl.addEventListener("change", (ev) => {
       if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
       const val = selectEl.value;
-      const cand = (typeof window !== "undefined") ? (window.__radiumLastCandidate || window.__fluxLastCandidate) : null;
+      const cand = (typeof window !== "undefined") ? window.__radiumLastCandidate : null;
       if (cand && Array.isArray(cand.qualities)) {
         const found = cand.qualities.find(q =>
           String(q.id || "").toLowerCase() === String(val).toLowerCase() ||
@@ -600,12 +595,12 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
       targetContainer.appendChild(hostEl);
     }
 
-    video.__radiumHostEl = video.__fluxHostEl = hostEl;
-    video.__radiumBtn = video.__fluxBtn = btn;
-    video.__radiumSelect = video.__fluxSelect = selectEl;
-    hostEl.__radiumVideo = hostEl.__fluxVideo = video;
-    hostEl.__radiumBtn = hostEl.__fluxBtn = btn;
-    hostEl.__radiumSelect = hostEl.__fluxSelect = selectEl;
+    video.__radiumHostEl = hostEl;
+    video.__radiumBtn = btn;
+    video.__radiumSelect = selectEl;
+    hostEl.__radiumVideo = video;
+    hostEl.__radiumBtn = btn;
+    hostEl.__radiumSelect = selectEl;
 
     attached.push({
       video,
@@ -689,7 +684,7 @@ function observeDynamicVideosAndFullscreen(doc, win, onDownloadClick) {
     const observer = new MutationObserver((mutations) => {
       if (Array.isArray(mutations)) {
         const onlyOverlayChange = mutations.every(m =>
-          m.target && m.target.getAttribute && (m.target.getAttribute("data-radium-shadow-host") === "true" || m.target.getAttribute("data-flux-shadow-host") === "true")
+          m.target && m.target.getAttribute && m.target.getAttribute("data-radium-shadow-host") === "true"
         );
         if (onlyOverlayChange) return;
       }
@@ -731,7 +726,6 @@ function triggerBrowserFallback(anchor, href) {
   try {
     if (anchor && anchor.dataset) {
       anchor.dataset.radiumBypass = "true";
-      anchor.dataset.fluxBypass = "true";
     }
     safeSendRuntimeMessage({ action: "bypassNextDownload", url: href });
     if (anchor && typeof anchor.click === "function") {
@@ -762,9 +756,8 @@ function handleLinkClick(ev) {
     const anchor = findAnchorFromEvent(ev);
     if (!anchor) return;
 
-    if (anchor.dataset && (anchor.dataset.radiumBypass === "true" || anchor.dataset.radiumBypass === true || anchor.dataset.fluxBypass === "true" || anchor.dataset.fluxBypass === true)) {
+    if (anchor.dataset && (anchor.dataset.radiumBypass === "true" || anchor.dataset.radiumBypass === true)) {
       delete anchor.dataset.radiumBypass;
-      delete anchor.dataset.fluxBypass;
       return;
     }
 
@@ -1044,7 +1037,7 @@ function initContentScript() {
         // Dynamically update overlay badge label and quality selector with detected qualities and estimated size
         try {
           if (typeof document !== "undefined" && document.querySelectorAll) {
-            const hosts = document.querySelectorAll("[data-radium-shadow-host], [data-flux-shadow-host]");
+            const hosts = document.querySelectorAll("[data-radium-shadow-host]");
             const qualities = Array.isArray(ev.data.qualities) ? ev.data.qualities : [];
             const topQ = (qualities.length > 0)
               ? (qualities.find(q => !q.isAudioOnly && String(q.resolution || "").toLowerCase().includes("1080")) ||
@@ -1067,8 +1060,8 @@ function initContentScript() {
                 const chosenSz = chosen.size > 0 ? ` (~${(chosen.size / 1048576).toFixed(0)} MB)` : "";
 
                 if (h.__radiumBtn &&
-                    !h.getAttribute("data-radium-status") && !h.getAttribute("data-flux-status") &&
-                    !h.getAttribute("data-radium-drm") && !h.getAttribute("data-flux-drm")) {
+                    !h.getAttribute("data-radium-status") &&
+                    !h.getAttribute("data-radium-drm")) {
                   h.__radiumBtn.textContent = `Download [${chosenText}${chosenSz}]`;
                   h.__radiumBtn.title = `Download ${chosenText} with Radium Download Manager`;
                 }
@@ -1191,7 +1184,7 @@ function initContentScript() {
         } else {
           dispatchBlobToBackground(dataBase64, ev.data.mimeType, ev.data.size);
         }
-      } else if (ev.data.action === "fluxAnchorClicked" || ev.data.action === "radiumAnchorClicked") {
+      } else if (ev.data.action === "radiumAnchorClicked") {
         safeSendRuntimeMessage({
           action: "linkClicked",
           url: ev.data.url,
@@ -1217,14 +1210,14 @@ function initContentScript() {
         cleanupContentScript();
         return false;
       }
-      if (request && (request.action === "radiumFetchBlobData" || request.action === "fluxFetchBlobData")) {
+      if (request && request.action === "radiumFetchBlobData") {
         const blobUrl = request.blobUrl || "";
         const requestId = request.requestId || ("blob-req-" + Date.now().toString(36));
 
         const queryCatchScript = () => {
           let resolved = false;
           const handler = (ev) => {
-            if (!ev || !ev.data || (ev.data.action !== "radiumBlobDataResponse" && ev.data.action !== "fluxBlobDataResponse") || ev.data.requestId !== requestId) return;
+            if (!ev || !ev.data || ev.data.action !== "radiumBlobDataResponse" || ev.data.requestId !== requestId) return;
             if (resolved) return;
             resolved = true;
             window.removeEventListener("message", handler, true);
@@ -1232,7 +1225,7 @@ function initContentScript() {
           };
           window.addEventListener("message", handler, true);
           window.postMessage({ action: "radiumGetBlobData", blobUrl, requestId }, "*");
-          window.postMessage({ action: "fluxGetBlobData", blobUrl, requestId }, "*");
+          window.postMessage({ action: "radiumGetBlobData", blobUrl, requestId }, "*");
           setTimeout(() => {
             if (!resolved) {
               resolved = true;
@@ -1270,7 +1263,7 @@ function initContentScript() {
       if (request && (request.action === "probePageMedia" || request.action === "radiumProbePageMedia")) {
         try {
           window.postMessage({ action: "radiumScanPageMedia" }, "*");
-          window.postMessage({ action: "fluxScanPageMedia" }, "*");
+          window.postMessage({ action: "radiumScanPageMedia" }, "*");
           sendResponse({ success: true });
         } catch (e) {
           sendResponse({ success: false, error: e.message });
@@ -1304,7 +1297,6 @@ function initContentScript() {
     }
     if (hostEl && hostEl.setAttribute) {
       hostEl.setAttribute("data-radium-status", "starting");
-      hostEl.setAttribute("data-flux-status", "starting");
     }
 
     const lastCand = (typeof window !== "undefined" && window.__radiumLastCandidate) ? window.__radiumLastCandidate : null;
@@ -1367,9 +1359,7 @@ function initContentScript() {
         }
         if (hostEl && hostEl.setAttribute) {
           hostEl.setAttribute("data-radium-status", "error");
-          hostEl.setAttribute("data-flux-status", "error");
           hostEl.setAttribute("data-radium-error", errText);
-          hostEl.setAttribute("data-flux-error", errText);
         }
       } else {
         const isFallback = Boolean(resp.result && resp.result.fallbackToBrowser);
@@ -1382,10 +1372,8 @@ function initContentScript() {
         }
         if (hostEl && hostEl.setAttribute) {
           hostEl.setAttribute("data-radium-status", isFallback ? "browser_fallback" : "queued");
-          hostEl.setAttribute("data-flux-status", isFallback ? "browser_fallback" : "queued");
           if (taskId) {
             hostEl.setAttribute("data-radium-task-id", taskId);
-            hostEl.setAttribute("data-flux-task-id", taskId);
           }
         }
       }

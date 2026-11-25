@@ -32,6 +32,7 @@
 ### 2.2 Client UI & Browser Extension
 - **[UI_DESIGN_SYSTEM.md](UI_DESIGN_SYSTEM.md)** — Deep Charcoal design system, GDI/Direct2D rendering, Per-Monitor DPI v2, and dialog specifications.
 - **[RADIUM_BRANDING_SPECIFICATION.md](RADIUM_BRANDING_SPECIFICATION.md)** — Visual identity, Coral Red accent styling, typography, and iconography.
+- **[RADIUM_LEGACY_NAME_CLEANUP_REPORT.md](RADIUM_LEGACY_NAME_CLEANUP_REPORT.md)** — Repository-wide OpenIDM / Flux → Radium audit and cleanup report.
 - **[BROWSER_EXTENSION.md](BROWSER_EXTENSION.md)** — Manifest V3 browser extension architecture for Chromium and Firefox with closed Shadow DOM.
 - **[NATIVE_MESSAGING_AND_IPC.md](NATIVE_MESSAGING_AND_IPC.md)** — 32-bit length-prefixed stdio JSON wire protocol and ACL-restricted Windows Named Pipe.
 
@@ -51,6 +52,7 @@
 - **[WINDOWS_BUILD_AND_PACKAGING.md](WINDOWS_BUILD_AND_PACKAGING.md)** — MSVC/CMake compilation pipeline, binary size targets, and installer packaging.
 - **[WINDOWS_COMPATIBILITY_AND_CLOUD_TESTING.md](WINDOWS_COMPATIBILITY_AND_CLOUD_TESTING.md)** — Windows 10/11 compatibility matrix and CI verification.
 - **[RELEASE_AND_UPDATE_PROCESS.md](RELEASE_AND_UPDATE_PROCESS.md)** — Release workflow, checksum generation, and update channel policies.
+- **[RELEASE_NOTES_2.0.0.md](RELEASE_NOTES_2.0.0.md)** — Official release notes and upgrade guide for Radium Download Manager 2.0.0.
 - **[PERFORMANCE_AND_SIZE_BUDGET.md](PERFORMANCE_AND_SIZE_BUDGET.md)** — Resource budgets and binary footprint benchmarks.
 - **[ROADMAP.md](ROADMAP.md)** — Milestone definitions and future platform goals.
 - **[GLOSSARY.md](GLOSSARY.md)** — Technical domain terminology and definitions.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Task Import & Export with Automated Credential Redaction
+// Radium Download Manager — Task Import & Export with Automated Credential Redaction
 #pragma once
 
 #include <filesystem>
@@ -9,7 +9,7 @@
 
 #include "common/types.hpp"
 
-namespace openidm::storage {
+namespace radium::storage {
 
 enum class ExportFormat {
     kJson,
@@ -48,4 +48,4 @@ public:
     static Result<std::vector<TaskModel>> ImportFromEf2(std::string_view ef2_str);
 };
 
-} // namespace openidm::storage
+} // namespace radium::storage

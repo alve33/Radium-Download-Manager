@@ -20,7 +20,7 @@
 
 #include "common/startup_diagnostic.hpp"
 
-using namespace openidm::diagnostics;
+using namespace radium::diagnostics;
 
 #define STRESS_ASSERT(cond, msg) \
     do { \
@@ -460,7 +460,7 @@ bool TestPersistenceAndSerializationRoundTrip() {
     // Test JSON export parses back without errors
     std::string json_export = recorder.ExportToJson();
     STRESS_ASSERT(!json_export.empty(), "ExportToJson produced empty string");
-    auto parsed_json = openidm::json::Parse(json_export);
+    auto parsed_json = radium::json::Parse(json_export);
     STRESS_ASSERT(parsed_json.is_array(), "Parsed JSON export must be an array");
     STRESS_ASSERT(parsed_json.as_array().size() == 10, "JSON export array size mismatch");
 

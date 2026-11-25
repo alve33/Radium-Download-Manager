@@ -165,7 +165,7 @@ HANDLE ConnectToDesktopPipe(const std::string& pipe_path, const std::filesystem:
         // Auto-launch the desktop application in minimized tray mode so the Win32 message loop and New Download dialogs are active
         std::wstring cmd = L"\"" + daemon_bin_path.wstring() + L"\" --minimized --ipc-socket \"" + wpipe + L"\"";
         STARTUPINFOW si{sizeof(STARTUPINFOW)};
-        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.dwFlags = STARTF_FORCEOFFFEEDBACK | STARTF_USESHOWWINDOW;
         si.wShowWindow = SW_HIDE;
         DWORD creation_flags = DETACHED_PROCESS;
         PROCESS_INFORMATION pi{};
@@ -235,7 +235,7 @@ int main(int argc, char* argv[]) {
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
 
-    std::string sock_path = openidm::ipc::GetDefaultIpcSocketPath();
+    std::string sock_path = radium::ipc::GetDefaultIpcSocketPath();
     std::filesystem::path daemon_bin;
 #ifdef _WIN32
     {

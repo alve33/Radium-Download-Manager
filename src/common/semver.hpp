@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace openidm {
+namespace radium {
 
 struct SemanticVersion {
     uint64_t major{0}, minor{0}, patch{0};
@@ -85,4 +85,4 @@ inline std::optional<int> CompareSemanticVersions(std::string_view lhs, std::str
     return a->prerelease.size() < b->prerelease.size() ? -1 : 1;
 }
 
-} // namespace openidm
+} // namespace radium

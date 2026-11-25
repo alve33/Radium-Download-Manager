@@ -22,7 +22,7 @@
 
 <p align="center">
   <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/alve33/Radium-Download-Manager?style=flat-square"></a>
-  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v1.0.0)-0078D4?style=flat-square&logo=windows11"></a>
+  <a href="https://github.com/alve33/Radium-Download-Manager/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/Download-Windows%20x64%20(v2.0.0)-0078D4?style=flat-square&logo=windows11"></a>
   <img alt="Language: C++20" src="https://img.shields.io/badge/Language-ISO%20C%2B%2B20-00599C?style=flat-square&logo=c%2B%2B">
   <img alt="UI: Native Win32" src="https://img.shields.io/badge/UI-Native%20Win32-22c55e?style=flat-square">
   <img alt="Extension: Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-eab308?style=flat-square&logo=googlechrome">
@@ -85,19 +85,20 @@ Radium is a lightweight, high-speed Windows 10 / 11 download manager designed to
 
 ## Downloads & Installation
 
-The latest published release is **[v1.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v1.0.0)**. These packages are available for 64-bit Windows:
+The latest published release is **[v2.0.0](https://github.com/alve33/Radium-Download-Manager/releases/tag/v2.0.0)**. These packages are available for Windows 10 and Windows 11:
 
 | Package | Architecture | Format | Description |
 | :--- | :---: | :---: | :--- |
-| **Radium Installer (Standard)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-1.0.0.exe) | Recommended installer for Windows 11 / 10 x64 |
-| **Radium Portable Full** | x64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Full.zip) | Portable package bundling N_m3u8DL-RE & FFmpeg stream workers |
-| **Radium Portable Core** | x64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-x64-Core.zip) | Core package; stream tools must be available separately |
-| **Radium Core Installer** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-x64-Core-1.0.0.exe) | Lightweight installer without bundled stream binaries |
-| **Radium Installer (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-Setup-ARM64-1.0.0.exe) | Native installer for Windows 10 / 11 on ARM |
-| **Radium Portable Full (ARM64)** | ARM64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/Radium-v1.0.0-Windows-ARM64-Full.zip) | Portable package with ARM64 stream tools |
-| **Browser Extension** | Cross-browser | [extension source](extension/) | Manifest V3 extension for Chrome, Brave, Edge & Firefox |
+| **Radium Installer (Standard)** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/Radium-Setup-x64-2.0.0.exe) | Recommended installer for Windows 11 / 10 x64 |
+| **Radium Portable Full** | x64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/Radium-v2.0.0-Windows-x64-Full.zip) | Portable package bundling N_m3u8DL-RE & FFmpeg stream workers |
+| **Radium Portable Core** | x64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/Radium-v2.0.0-Windows-x64-Core.zip) | Core package; stream tools must be available separately |
+| **Radium Core Installer** | x64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/Radium-Setup-x64-Core-2.0.0.exe) | Lightweight installer without bundled stream binaries |
+| **Radium Installer (ARM64)** | ARM64 | [Setup (.exe)](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/Radium-Setup-ARM64-2.0.0.exe) | Native installer for Windows 10 / 11 on ARM |
+| **Radium Portable Full (ARM64)** | ARM64 | [ZIP Archive](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/Radium-v2.0.0-Windows-ARM64-Full.zip) | Portable package with ARM64 stream tools |
+| **Radium MSIX (x64 / ARM64 / Bundle)** | x64 / ARM64 | [MSIX (.msix / .msixbundle)](https://github.com/alve33/Radium-Download-Manager/releases/tag/v2.0.0) | Unsigned Store-ready MSIX packages (requires trusted cert or Store) |
+| **Browser Extension** | Cross-browser | [radium-extension.zip](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/radium-extension.zip) | Manifest V3 extension for Chrome, Brave, Edge & Firefox |
 
-Cryptographic checksums for published release binaries are available in [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v1.0.0/SHA256SUMS.txt).
+Cryptographic checksums for published release binaries are available in [SHA256SUMS.txt](https://github.com/alve33/Radium-Download-Manager/releases/download/v2.0.0/SHA256SUMS.txt).
 
 > [!IMPORTANT]
 > ### 🧩 Browser Extension Setup (Required Manual Step)
@@ -382,7 +383,7 @@ Radium includes a clean, lightweight Manifest V3 extension compatible with Googl
 ┌───────────────▼─────────────────┐
 │ radium-nmh.exe (Native Host)      │
 └───────────────┬─────────────────┘
-                │ Named Pipe: \\.\pipe\Radium_IPC_<UserSID> (legacy: Flux_IPC_*)
+                │ Named Pipe: \\.\pipe\Radium_IPC_<UserSID>
 ┌───────────────▼─────────────────┐
 │ radium.exe (Desktop Engine)     │
 │  ├── Native Win32 / GDI Desktop │
@@ -392,7 +393,7 @@ Radium includes a clean, lightweight Manifest V3 extension compatible with Googl
 ```
 
 - **Dual-Origin Security:** The Chromium native host manifest authorizes both store IDs and development keys, preventing native messaging connection failures when running unpacked.
-- **Zero Localhost Exposure:** Unlike legacy download managers that open an unauthenticated HTTP port on `localhost` (exposing users to drive-by website requests), Radium communicates exclusively via Native Messaging bridged to a local, user-ACL-restricted Windows Named Pipe (`\\.\pipe\Radium_IPC_<UserSID>`, with `Flux_IPC_<UserSID>` retained as a compatibility fallback).
+- **Zero Localhost Exposure:** Unlike legacy download managers that open an unauthenticated HTTP port on `localhost` (exposing users to drive-by website requests), Radium communicates exclusively via Native Messaging bridged to a local, user-ACL-restricted Windows Named Pipe (`\\.\pipe\Radium_IPC_<UserSID>`).
 - **Media Detection:** Sniffs `.mp4`, `.webm`, `.m3u8`, and `.mpd` URLs from network requests, deduplicates master and variant playlists, and ignores individual `.ts` and `.m4s` segment requests to prevent UI flooding.
 - **Reliable Fallback & Gesture Safety:** Link clicks retain user gesture context without destructive cancellation. In Chromium browsers, `onDeterminingFilename` holds the save prompt while querying the desktop; if Radium is offline or rejects, the browser download automatically resumes with zero data loss. Client-side generated files (`blob:`, `data:` URLs, ChatGPT exports) are safely preserved for native browser handling without DOM monkey-patching.
 

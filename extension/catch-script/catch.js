@@ -487,7 +487,7 @@
 
         const descriptor = {
           radiumType: "YOUTUBE_STREAM",
-          fluxType: "YOUTUBE_STREAM",
+          radiumType: "YOUTUBE_STREAM",
           sourceType: "YOUTUBE_EXTRACTION",
           videoId,
           title: cleanTitle,
@@ -532,7 +532,7 @@
         const resolution = primaryRes;
         const descriptor = {
           radiumType: "YOUTUBE_STREAM",
-          fluxType: "YOUTUBE_STREAM",
+          radiumType: "YOUTUBE_STREAM",
           sourceType: "YOUTUBE_EXTRACTION",
           videoId,
           title: cleanTitle,
@@ -654,7 +654,7 @@
           const primaryFallbackSize = fallbackQualities[0] ? fallbackQualities[0].size : 0;
           const descriptor = {
             radiumType: "YOUTUBE_STREAM",
-            fluxType: "YOUTUBE_STREAM",
+            radiumType: "YOUTUBE_STREAM",
             sourceType: "YOUTUBE_EXTRACTION",
             videoId: vid,
             title: rawTitle,
@@ -1267,9 +1267,8 @@
       if (!href || (!href.startsWith("blob:http://") && !href.startsWith("blob:https://"))) {
         return false;
       }
-      if (anchor.__radiumBypass === true || anchor.__fluxBypass === true) {
+      if (anchor.__radiumBypass === true) {
         delete anchor.__radiumBypass;
-        delete anchor.__fluxBypass;
         return false;
       }
       if (win.event && (win.event.altKey || win.event.metaKey)) {
@@ -1722,7 +1721,7 @@
       }
     }
 
-    win.__RadiumCatchTestHook = win.__FluxCatchTestHook = {
+    win.__RadiumCatchTestHook = {
       scanDomMediaElements,
       scanPageForYouTubeData,
       scanPerformanceResources
@@ -1751,13 +1750,13 @@
           } catch (_) {}
           return;
         }
-        if (ev.data.action === "radiumScanPageMedia" || ev.data.action === "fluxScanPageMedia") {
+        if (ev.data.action === "radiumScanPageMedia") {
           scanPerformanceResources();
           scanPageForYouTubeData();
           scanDomMediaElements();
           return;
         }
-        if (ev.data.action === "radiumGetBlobData" || ev.data.action === "fluxGetBlobData") {
+        if (ev.data.action === "radiumGetBlobData") {
           const blobUrl = ev.data.blobUrl || "";
           const requestId = ev.data.requestId || "";
           const blobEntry = blobRegistry.get(blobUrl);
@@ -1775,7 +1774,7 @@
           const processBlob = (blobObj, mimeType) => {
             if (!blobObj) {
               postToExtension({ action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "INVALID_BLOB" });
+                  requestId, blobUrl, success: false, error: "INVALID_BLOB" });
               return;
             }
             if (typeof win.FileReader === "function") {
@@ -1786,7 +1785,6 @@
                 const b64 = commaIdx >= 0 ? res.slice(commaIdx + 1) : res;
                 postToExtension({
                   action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse",
                   requestId,
                   blobUrl,
                   success: true,
@@ -1801,7 +1799,6 @@
                     const b64 = arrayBufferToBase64(buf);
                     postToExtension({
                       action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse",
                       requestId,
                       blobUrl,
                       success: true,
@@ -1811,11 +1808,11 @@
                     });
                   }).catch(err => {
                     postToExtension({ action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: String(err) });
+                  requestId, blobUrl, success: false, error: String(err) });
                   });
                 } else {
                   postToExtension({ action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "READER_ERROR" });
+                  requestId, blobUrl, success: false, error: "READER_ERROR" });
                 }
               };
               reader.readAsDataURL(blobObj);
@@ -1826,7 +1823,6 @@
                 const b64 = arrayBufferToBase64(buf);
                 postToExtension({
                   action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse",
                   requestId,
                   blobUrl,
                   success: true,
@@ -1836,11 +1832,11 @@
                 });
               }).catch(err => {
                 postToExtension({ action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: String(err) });
+                  requestId, blobUrl, success: false, error: String(err) });
               });
             } else {
               postToExtension({ action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "CANNOT_READ_BLOB" });
+                  requestId, blobUrl, success: false, error: "CANNOT_READ_BLOB" });
             }
           };
 
@@ -1848,11 +1844,11 @@
             processBlob(blobEntry.blob, blobEntry.mimeType);
           } else {
             postToExtension({ action: "radiumBlobDataResponse",
-                  legacyAction: "fluxBlobDataResponse", requestId, blobUrl, success: false, error: "BLOB_NOT_IN_REGISTRY" });
+                  requestId, blobUrl, success: false, error: "BLOB_NOT_IN_REGISTRY" });
           }
           return;
         }
-        if (ev.data.action !== "radiumDiscoverBlobSource" && ev.data.action !== "fluxDiscoverBlobSource") return;
+        if (ev.data.action !== "radiumDiscoverBlobSource") return;
         try {
           const blobUrl = ev.data.blobUrl || "";
           const correlationId = ev.data.correlationId || makeCorrelationId("blob");

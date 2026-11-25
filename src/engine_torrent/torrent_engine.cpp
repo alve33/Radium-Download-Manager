@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — BitTorrent Engine Coordinator
+// Radium Download Manager — BitTorrent Engine Coordinator
 // Concurrent peer swarm, BEP 9 metadata exchange, BEP 15 UDP trackers, DHT peer discovery, Seeding & Restart Recovery
 #include "engine_torrent/torrent_engine.hpp"
 
@@ -40,7 +40,7 @@
 #include "engine_torrent/tracker_client.hpp"
 #include "engine_torrent/torrent_rate_meter.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 namespace {
 
@@ -373,7 +373,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         task.error_code = "ERR_TORRENT_MALFORMED";
         task.error_message = "Invalid torrent metainfo: zero length or zero pieces";
         task.status_detail = "Failed: Invalid metainfo";
-        OPENIDM_LOG_ERROR("TorrentEngine", "Malformed metainfo for task " + task.task_id);
+        RADIUM_LOG_ERROR("TorrentEngine", "Malformed metainfo for task " + task.task_id);
         return Result<void>::Err("ERR_TORRENT_MALFORMED", "Invalid torrent metainfo: zero length or zero pieces");
     }
 
@@ -475,7 +475,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                     fastresume_applied = true;
                     task.completed_segments = static_cast<uint32_t>(piece_mgr->CompletedPieces());
                     task.downloaded_bytes = piece_mgr->DownloadedBytes();
-                    OPENIDM_LOG_INFO("TorrentEngine", "Fastresume verified instantaneously without disk re-hashing (" +
+                    RADIUM_LOG_INFO("TorrentEngine", "Fastresume verified instantaneously without disk re-hashing (" +
                                                       std::to_string(imported) + " pieces restored) for task " + task.task_id);
                 }
             }
@@ -486,12 +486,12 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
             if (recovered > 0) {
                 task.completed_segments = static_cast<uint32_t>(piece_mgr->CompletedPieces());
                 task.downloaded_bytes = piece_mgr->DownloadedBytes();
-                OPENIDM_LOG_INFO("TorrentEngine", "Recovered " + std::to_string(recovered) + " pieces from existing disk data for task " + task.task_id);
+                RADIUM_LOG_INFO("TorrentEngine", "Recovered " + std::to_string(recovered) + " pieces from existing disk data for task " + task.task_id);
             }
         }
     }
 
-    OPENIDM_LOG_INFO("TorrentEngine", "Starting BitTorrent download for task " + task.task_id +
+    RADIUM_LOG_INFO("TorrentEngine", "Starting BitTorrent download for task " + task.task_id +
                                       " (hash: " + torrent_info.info_hash_hex +
                                       ", pieces: " + std::to_string(torrent_info.num_pieces()) + ")");
 
@@ -537,7 +537,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         std::lock_guard<std::mutex> slk(active_session->session_lock);
         if (!active_session->peer_pool.empty()) {
             peer_swarm.assign(active_session->peer_pool.begin(), active_session->peer_pool.end());
-            OPENIDM_LOG_INFO("TorrentEngine", "Reusing " + std::to_string(peer_swarm.size()) +
+            RADIUM_LOG_INFO("TorrentEngine", "Reusing " + std::to_string(peer_swarm.size()) +
                                               " discovered peers from preserved session for task " + task.task_id);
         }
     }
@@ -580,7 +580,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                     tr.leechers = tr_res.value->incomplete;
                 }
             } else {
-                OPENIDM_LOG_WARN("TorrentEngine", "All announce trackers failed for task " + task.task_id + ": " + tr_res.error->message);
+                RADIUM_LOG_WARN("TorrentEngine", "All announce trackers failed for task " + task.task_id + ": " + tr_res.error->message);
                 std::lock_guard<std::mutex> slk(active_session->session_lock);
                 for (auto& tr : active_session->trackers) {
                     tr.status = "Failed: " + tr_res.error->message;
@@ -645,7 +645,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         bind_addr.sin_port = htons(6881);
         if (bind(listener.s, reinterpret_cast<sockaddr*>(&bind_addr), sizeof(bind_addr)) == SOCKET_ERROR ||
             listen(listener.s, 16) == SOCKET_ERROR) {
-            OPENIDM_LOG_WARN("TorrentEngine", "Incoming peer listener unavailable on port 6881");
+            RADIUM_LOG_WARN("TorrentEngine", "Incoming peer listener unavailable on port 6881");
             return;
         }
 
@@ -973,7 +973,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                     if (!first_torrent_byte_logged.exchange(true)) {
                         const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - torrent_engine_start_tp).count();
-                        OPENIDM_LOG_INFO("TorrentStartupProfile",
+                        RADIUM_LOG_INFO("TorrentStartupProfile",
                             "task=" + task.task_id +
                             " t_probe_ms=" + std::to_string(t_probe_ms) +
                             " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms) +
@@ -1868,4 +1868,4 @@ bool RssTorrentFeedParser::MatchesFilter(
     return true;
 }
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

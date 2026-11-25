@@ -20,7 +20,7 @@
 #include <openssl/sha.h>
 #endif
 
-namespace openidm {
+namespace radium {
 
 namespace {
 std::string BytesToHex(const unsigned char* buf, size_t len) {
@@ -327,4 +327,4 @@ std::vector<uint8_t> CryptoUtils::Base64Decode(std::string_view data) {
     return out;
 }
 
-} // namespace openidm
+} // namespace radium

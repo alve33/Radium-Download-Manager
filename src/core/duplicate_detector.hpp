@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Multi-Tier Duplicate Task Detector
+// Radium Download Manager — Multi-Tier Duplicate Task Detector
 // Inspired by XDM (subhra74/xdm DuplicateIndex):
 //   Checks matching in strict priority tiers:
 //     1. SAME_URL: Exact or normalized URL match (scheme/host lowercased, default port omitted, fragment dropped, query preserved)
@@ -21,7 +21,7 @@
 #include "common/path_sanitizer.hpp"
 #include "common/types.hpp"
 
-namespace openidm::core {
+namespace radium::core {
 
 enum class DuplicateKind {
     kNone = 0,
@@ -353,4 +353,4 @@ public:
     }
 };
 
-} // namespace openidm::core
+} // namespace radium::core

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Windows Administrator Privilege Check Helpers
+// Radium Download Manager — Windows Administrator Privilege Check Helpers
 // Implements secure, non-elevating check to verify if the current user/process
 // belongs to the local Administrators group.
 #pragma once
 
 #include <windows.h>
 
-namespace openidm::security {
+namespace radium::security {
 
 /**
  * Checks whether the current user is a member of the local Administrators group.
@@ -99,4 +99,4 @@ inline bool IsCurrentUserLocalAdmin() {
     return false;
 }
 
-} // namespace openidm::security
+} // namespace radium::security

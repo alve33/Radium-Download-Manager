@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Admin-Only Download Startup Log Dialog Implementation
+// Radium Download Manager — Admin-Only Download Startup Log Dialog Implementation
 #include "ui/startup_log_dialog.hpp"
 #include "common/startup_diagnostic.hpp"
 #include "security/admin_check.hpp"
@@ -14,7 +14,7 @@
 
 #ifdef _WIN32
 
-namespace openidm::ui {
+namespace radium::ui {
 
 namespace {
 
@@ -494,6 +494,6 @@ void ShowStartupLogDialogWin32(HWND hwnd_parent, DownloadController& controller,
     }
 }
 
-} // namespace openidm::ui
+} // namespace radium::ui
 
 #endif

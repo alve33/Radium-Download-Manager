@@ -29,7 +29,7 @@
 #include <openssl/evp.h>
 #endif
 
-namespace openidm::engine_stream {
+namespace radium::engine_stream {
 
 namespace {
 
@@ -3117,4 +3117,4 @@ std::string BilibiliHelper::ConvertDanmakuToAss(const std::vector<DanmakuItem>& 
     return oss.str();
 }
 
-} // namespace openidm::engine_stream
+} // namespace radium::engine_stream

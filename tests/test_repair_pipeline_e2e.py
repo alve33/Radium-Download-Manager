@@ -35,8 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 IS_WINDOWS = (os.name == "nt" or platform.system().lower().startswith("win"))
 EXE_EXT = ".exe" if IS_WINDOWS else ""
 os.environ["RADIUM_ALLOW_LOOPBACK"] = "1"
-os.environ["FLUX_ALLOW_LOOPBACK"] = "1"
-os.environ["OPENIDM_ALLOW_LOOPBACK"] = "1"
+os.environ["RADIUM_ALLOW_LOOPBACK"] = "1"
 
 
 def find_binary(name: str) -> Path:
@@ -60,8 +59,8 @@ def find_binary(name: str) -> Path:
     return candidates[0]
 
 
-FLUX_BIN = find_binary("Radium") if (ROOT / "dist" / f"Radium{EXE_EXT}").is_file() else find_binary("radium")
-NMH_BIN = find_binary("radium-nmh") if find_binary("radium-nmh").is_file() else find_binary("flux-nmh")
+RADIUM_BIN = find_binary("Radium") if (ROOT / "dist" / f"Radium{EXE_EXT}").is_file() else find_binary("radium")
+NMH_BIN = find_binary("radium-nmh")
 STREAM_WORKER = find_binary("N_m3u8DL-RE")
 FFMPEG_BIN = find_binary("ffmpeg")
 
@@ -94,7 +93,7 @@ def query_task_list_oneshot(env):
 
 def wait_for_task(nmh_proc, task_id: str, timeout_s: float = 25.0) -> dict:
     deadline = time.time() + timeout_s
-    env = getattr(nmh_proc, "_flux_env", None) or os.environ.copy()
+    env = getattr(nmh_proc, "_radium_env", None) or os.environ.copy()
     while time.time() < deadline:
         tlist = None
         if nmh_proc.poll() is None:
@@ -154,22 +153,22 @@ def create_all_deterministic_fixtures(fixture_dir: Path, base_url: str) -> dict:
     meta = {}
 
     # 1. Direct PDF (>= 128 KiB valid PDF document)
-    pdf_path = fixture_dir / "flux_architecture_guide.pdf"
+    pdf_path = fixture_dir / "radium_architecture_guide.pdf"
     pdf_body = (
         b"%PDF-1.4\n1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n"
         b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n"
         b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>endobj\n"
-        + (b"% Deterministic PDF padding line for Flux Download Manager test\n" * 2400)
+        + (b"% Deterministic PDF padding line for Radium Download Manager test\n" * 2400)
         + b"xref\n0 4\n0000000000 65535 f \ntrailer<< /Root 1 0 R /Size 4 >>\nstartxref\n9\n%%EOF\n"
     )
     pdf_path.write_bytes(pdf_body)
     meta["pdf_sha256"] = hashlib.sha256(pdf_body).hexdigest()
 
     # 2. Direct ZIP (>= 200 KiB valid ZIP archive)
-    zip_path = fixture_dir / "flux_portable_bundle.zip"
+    zip_path = fixture_dir / "radium_portable_bundle.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
-        zf.writestr("README.txt", "Flux Download Manager Deterministic ZIP Fixture\n" * 4000)
-        zf.writestr("config.json", json.dumps({"app": "Flux", "version": "0.3.0"}))
+        zf.writestr("README.txt", "Radium Download Manager Deterministic ZIP Fixture\n" * 4000)
+        zf.writestr("config.json", json.dumps({"app": "Radium", "version": "1.0.0"}))
     meta["zip_sha256"] = hashlib.sha256(zip_path.read_bytes()).hexdigest()
 
     # 3. Redirected file download target (with Content-Disposition filename)
@@ -284,11 +283,11 @@ def create_all_deterministic_fixtures(fixture_dir: Path, base_url: str) -> dict:
     # Create deterministic HTML test pages for browser verification (Fixtures 1..10)
     (pages_dir / "index.html").write_text(f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Flux Deterministic Fixture Test Suite</title></head>
+<head><meta charset="utf-8"><title>Radium Deterministic Fixture Test Suite</title></head>
 <body>
-  <h1>Flux Download Manager — Deterministic Test Pages</h1>
-  <a id="link-pdf" href="{base_url}/fixtures/flux_architecture_guide.pdf" download="flux_architecture_guide.pdf">Download PDF</a>
-  <a id="link-zip" href="{base_url}/fixtures/flux_portable_bundle.zip">Download ZIP</a>
+  <h1>Radium Download Manager — Deterministic Test Pages</h1>
+  <a id="link-pdf" href="{base_url}/fixtures/radium_architecture_guide.pdf" download="radium_architecture_guide.pdf">Download PDF</a>
+  <a id="link-zip" href="{base_url}/fixtures/radium_portable_bundle.zip">Download ZIP</a>
   <a id="link-redirect" href="{base_url}/redirect/latest-package">Download Redirected Package</a>
   <video id="video-mp4" width="640" height="360" controls src="{base_url}/fixtures/direct_sample.mp4"></video>
   <video id="video-webm" width="640" height="360" controls src="{base_url}/fixtures/direct_sample.webm"></video>
@@ -356,8 +355,8 @@ class DeterministicFixtureHandler(http.server.BaseHTTPRequestHandler):
             yt_player = {
                 "playabilityStatus": {"status": "OK"},
                 "videoDetails": {
-                    "videoId": "FluxTestYt01",
-                    "title": "Flux YouTube Adaptive Mux Test"
+                    "videoId": "RadiumTestYt01",
+                    "title": "Radium YouTube Adaptive Mux Test"
                 },
                 "streamingData": {
                     "adaptiveFormats": [
@@ -402,7 +401,7 @@ class DeterministicFixtureHandler(http.server.BaseHTTPRequestHandler):
                 }
             }
             html = (
-                "<!DOCTYPE html><html><head><title>Flux YouTube Adaptive Mux Test - YouTube</title></head>"
+                "<!DOCTYPE html><html><head><title>Radium YouTube Adaptive Mux Test - YouTube</title></head>"
                 "<body><div id='movie_player'><video id='yt-video' width='640' height='360' src='blob:https://www.youtube.com/1111'></video></div>"
                 f"<script>var ytInitialPlayerResponse = {json.dumps(yt_player)};</script></body></html>"
             ).encode("utf-8")
@@ -426,7 +425,7 @@ class DeterministicFixtureHandler(http.server.BaseHTTPRequestHandler):
                     ctype = "application/zip"
                 elif fpath.name == "redirected_payload.bin":
                     ctype = "application/octet-stream"
-                    cd = 'attachment; filename="Flux_Redirected_Release.zip"'
+                    cd = 'attachment; filename="Radium_Redirected_Release.zip"'
                 elif fpath.suffix == ".mp4":
                     ctype = "video/mp4"
                 elif fpath.suffix == ".m4a":
@@ -494,9 +493,8 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def run_extension_bridge_step(script_js: str, sock_path: str):
     env = os.environ.copy()
-    env["FLUX_IPC_SOCKET"] = sock_path
-    env["OPENIDM_IPC_SOCKET"] = sock_path
-    env["FLUX_NMH_BIN"] = str(NMH_BIN)
+    env["RADIUM_IPC_SOCKET"] = sock_path
+    env["RADIUM_NMH_BIN"] = str(NMH_BIN)
     res = subprocess.run(
         ["node", "-e", script_js],
         cwd=str(ROOT),
@@ -532,7 +530,7 @@ def run_offline_dom_simulation_verification(base_url: str, work_dir: Path):
 
     (async () => {{
       const html = await fetchHtml("{base_url}/pages/index.html");
-      if (!html.includes("Flux Download Manager")) throw new Error("Fixture HTML page not served");
+      if (!html.includes("Radium Download Manager")) throw new Error("Fixture HTML page not served");
 
       const messagesToBg = [];
       let dynamicCandidateRegistered = false;
@@ -559,11 +557,11 @@ def run_offline_dom_simulation_verification(base_url: str, work_dir: Path):
       let mutationCallback = null;
 
       const documentStub = {{
-        title: "Flux Deterministic Test Fixtures",
+        title: "Radium Deterministic Test Fixtures",
         documentElement: {{}},
         body: {{
           appendChild(el) {{
-            if (el && el.dataset && el.dataset.fluxShadowHost === "true") shadowHosts.push(el);
+            if (el && el.dataset && el.dataset.radiumShadowHost === "true") shadowHosts.push(el);
             if (el && el.tagName === "VIDEO") {{
               activeVideos.push(el);
               if (mutationCallback) mutationCallback([{{ addedNodes: [el] }}]);
@@ -578,7 +576,7 @@ def run_offline_dom_simulation_verification(base_url: str, work_dir: Path):
             children: [],
             classList: {{ add() {{}}, remove() {{}} }},
             setAttribute(k, v) {{
-              if (k === "data-flux-shadow-host") this.dataset.fluxShadowHost = v;
+              if (k === "data-radium-shadow-host") this.dataset.radiumShadowHost = v;
               this.dataset[k] = v;
             }},
             getAttribute(k) {{
@@ -595,7 +593,7 @@ def run_offline_dom_simulation_verification(base_url: str, work_dir: Path):
                 children: [],
                 appendChild(c) {{ this.children.push(c); }},
                 querySelector(sel) {{
-                  if (sel === ".flux-btn") {{
+                  if (sel === ".radium-btn") {{
                     return {{
                       style: {{}},
                       classList: {{ add() {{}}, remove() {{}} }},
@@ -695,14 +693,14 @@ def run_offline_dom_simulation_verification(base_url: str, work_dir: Path):
       vm.runInContext(fs.readFileSync("extension/js/content-script.js", "utf8"), sandbox);
 
       // Verify initial scan: emptyVideo must NOT have overlay; mp4Video MUST have overlay
-      if (emptyVideo.dataset.fluxOverlayAttached) throw new Error("Overlay falsely attached to empty video");
-      if (mp4Video.dataset.fluxOverlayAttached !== "true") throw new Error("Overlay missing on valid mp4Video");
+      if (emptyVideo.dataset.radiumOverlayAttached) throw new Error("Overlay falsely attached to empty video");
+      if (mp4Video.dataset.radiumOverlayAttached !== "true") throw new Error("Overlay missing on valid mp4Video");
 
       // Dynamically insert <video id="video-dynamic">
       documentStub.body.appendChild(dynamicVideo);
       documentStub.dispatchEvent({{ type: "loadedmetadata", target: dynamicVideo }});
 
-      if (dynamicVideo.dataset.fluxOverlayAttached !== "true") {{
+      if (dynamicVideo.dataset.radiumOverlayAttached !== "true") {{
         throw new Error("Overlay not attached to dynamically inserted video");
       }}
       if (!dynamicCandidateRegistered) {{
@@ -710,9 +708,9 @@ def run_offline_dom_simulation_verification(base_url: str, work_dir: Path):
       }}
       console.log(JSON.stringify({{
         ran: true,
-        emptyAttached: Boolean(emptyVideo.dataset.fluxOverlayAttached),
-        mp4Attached: mp4Video.dataset.fluxOverlayAttached === "true",
-        dynamicAttached: dynamicVideo.dataset.fluxOverlayAttached === "true",
+        emptyAttached: Boolean(emptyVideo.dataset.radiumOverlayAttached),
+        mp4Attached: mp4Video.dataset.radiumOverlayAttached === "true",
+        dynamicAttached: dynamicVideo.dataset.radiumOverlayAttached === "true",
         shadowHostsCreated: shadowHosts.length
       }}));
     }})();
@@ -727,11 +725,11 @@ def run_offline_dom_simulation_verification(base_url: str, work_dir: Path):
 
 
 def main():
-    work_dir = Path(tempfile.mkdtemp(prefix="flux_repair_e2e_"))
+    work_dir = Path(tempfile.mkdtemp(prefix="radium_repair_e2e_"))
     fixture_dir = work_dir / "fixtures"
     dl_dir = work_dir / "downloads"
     db_path = work_dir / "state.db"
-    sock_path = f"\\\\.\\pipe\\flux_repair_{os.getpid()}" if IS_WINDOWS else f"/tmp/flux_repair_{os.getpid()}.sock"
+    sock_path = f"\\\\.\\pipe\\radium_repair_{os.getpid()}" if IS_WINDOWS else f"/tmp/radium_repair_{os.getpid()}.sock"
 
     server = ThreadedHTTPServer(("127.0.0.1", 0), DeterministicFixtureHandler)
     port = server.server_address[1]
@@ -752,7 +750,7 @@ def main():
         meta = create_all_deterministic_fixtures(fixture_dir, base_url)
 
         daemon_proc = subprocess.Popen(
-            [str(FLUX_BIN), "--daemon", "--db", str(db_path), "--out", str(dl_dir), "--ipc-socket", sock_path, "--allow-loopback"],
+            [str(RADIUM_BIN), "--daemon", "--db", str(db_path), "--out", str(dl_dir), "--ipc-socket", sock_path, "--allow-loopback"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -760,8 +758,7 @@ def main():
 
         env = os.environ.copy()
         env["RADIUM_IPC_SOCKET"] = sock_path
-        env["FLUX_IPC_SOCKET"] = sock_path
-        env["OPENIDM_IPC_SOCKET"] = sock_path
+        env["RADIUM_IPC_SOCKET"] = sock_path
         nmh_proc = subprocess.Popen(
             [str(NMH_BIN)],
             stdin=subprocess.PIPE,
@@ -769,9 +766,9 @@ def main():
             stderr=subprocess.PIPE,
             env=env,
         )
-        nmh_proc._flux_env = env
+        nmh_proc._radium_env = env
 
-        # Node helper that runs the real extension background/content/catch modules and sends RPCs through flux-nmh
+        # Node helper that runs the real extension background/content/catch modules and sends RPCs through radium-nmh
         node_bridge_preamble = """
 const { spawn } = require("child_process");
 const struct = require("buffer");
@@ -784,7 +781,7 @@ const popup = require("./extension/js/popup.js");
 
 function callNativeHost(payload) {
   return new Promise((resolve, reject) => {
-    const p = spawn(process.env.FLUX_NMH_BIN, [], { env: process.env });
+    const p = spawn(process.env.RADIUM_NMH_BIN, [], { env: process.env });
     const raw = Buffer.from(JSON.stringify(payload), "utf8");
     const hdr = Buffer.alloc(4);
     hdr.writeUInt32LE(raw.length, 0);
@@ -822,12 +819,12 @@ function callNativeHost(payload) {
   globalThis.chrome = {{ runtime: {{ sendMessage: (m) => {{ sentMsg = m; }} }} }};
   cs.handleLinkClick({{
     altKey: false,
-    target: {{ closest: () => ({{ href: "{base_url}/fixtures/flux_architecture_guide.pdf", pathname: "/fixtures/flux_architecture_guide.pdf", download: "flux_architecture_guide.pdf", hasAttribute: (a) => a === "download" }}) }}
+    target: {{ closest: () => ({{ href: "{base_url}/fixtures/radium_architecture_guide.pdf", pathname: "/fixtures/radium_architecture_guide.pdf", download: "radium_architecture_guide.pdf", hasAttribute: (a) => a === "download" }}) }}
   }});
   fn.recordClickedLink(11, sentMsg);
   let canceledId = null;
   const offerRes = await bg.onDownloadCreatedHandler(
-    {{ id: 1001, tabId: 11, url: "{base_url}/fixtures/flux_architecture_guide.pdf", filename: "flux_architecture_guide.pdf", mime: "application/pdf", fileSize: 150000 }},
+    {{ id: 1001, tabId: 11, url: "{base_url}/fixtures/radium_architecture_guide.pdf", filename: "radium_architecture_guide.pdf", mime: "application/pdf", fileSize: 150000 }},
     callNativeHost,
     async (id) => {{ canceledId = id; }}
   );
@@ -849,20 +846,20 @@ function callNativeHost(payload) {
         res2 = run_extension_bridge_step(node_bridge_preamble + f"""
 (async () => {{
   // First verify Alt-bypass prevents interception across both onCreated and onDeterminingFilename
-  fn.recordBypassIntent(12, "{base_url}/fixtures/flux_portable_bundle.zip");
+  fn.recordBypassIntent(12, "{base_url}/fixtures/radium_portable_bundle.zip");
   const bypassCreated = await bg.onDownloadCreatedHandler(
-    {{ id: 1002, tabId: 12, url: "{base_url}/fixtures/flux_portable_bundle.zip", filename: "flux_portable_bundle.zip" }},
+    {{ id: 1002, tabId: 12, url: "{base_url}/fixtures/radium_portable_bundle.zip", filename: "radium_portable_bundle.zip" }},
     callNativeHost, null, null, "created"
   );
   const bypassDet = await bg.onDownloadCreatedHandler(
-    {{ id: 1002, tabId: 12, url: "{base_url}/fixtures/flux_portable_bundle.zip", filename: "flux_portable_bundle.zip" }},
+    {{ id: 1002, tabId: 12, url: "{base_url}/fixtures/radium_portable_bundle.zip", filename: "radium_portable_bundle.zip" }},
     callNativeHost, null, null, "determine"
   );
 
   // Now perform normal click and download interception
-  fn.recordClickedLink(12, {{ url: "{base_url}/fixtures/flux_portable_bundle.zip", filename: "flux_portable_bundle.zip", referrer: "{base_url}/pages/index.html" }});
+  fn.recordClickedLink(12, {{ url: "{base_url}/fixtures/radium_portable_bundle.zip", filename: "radium_portable_bundle.zip", referrer: "{base_url}/pages/index.html" }});
   const offerRes = await bg.onDownloadCreatedHandler(
-    {{ id: 1003, tabId: 12, url: "{base_url}/fixtures/flux_portable_bundle.zip", filename: "flux_portable_bundle.zip", mime: "application/zip" }},
+    {{ id: 1003, tabId: 12, url: "{base_url}/fixtures/radium_portable_bundle.zip", filename: "radium_portable_bundle.zip", mime: "application/zip" }},
     callNativeHost,
     async () => {{}}
   );
@@ -898,7 +895,7 @@ function callNativeHost(payload) {
     statusCode: 200,
     responseHeaders: [
       {{ name: "Content-Type", value: "application/octet-stream" }},
-      {{ name: "Content-Disposition", value: 'attachment; filename="Flux_Redirected_Release.zip"' }},
+      {{ name: "Content-Disposition", value: 'attachment; filename="Radium_Redirected_Release.zip"' }},
       {{ name: "Content-Length", value: "262144" }}
     ]
   }});
@@ -912,7 +909,7 @@ function callNativeHost(payload) {
 """, sock_path)
         assert res3["offerRes"]["intercepted"] is True
         t3 = wait_for_task(nmh_proc, res3["offerRes"]["taskId"])
-        assert t3["state"] == "COMPLETED" and t3["fileName"] == "Flux_Redirected_Release.zip"
+        assert t3["state"] == "COMPLETED" and t3["fileName"] == "Radium_Redirected_Release.zip"
         redir_out = Path(t3["saveDir"]) / t3["fileName"]
         assert redir_out.exists() and hashlib.sha256(redir_out.read_bytes()).hexdigest() == meta["redir_sha256"]
         print(f"  -> PASS (302 Redirect correlated -> {t3['fileName']} SHA-256 verified)")
@@ -936,7 +933,7 @@ function callNativeHost(payload) {
   }});
   const popupHtml = popup.renderDetectedMediaList(G.cacheData.get(14), {{ desktopConnected: true }});
   const resolved = bg.resolveCandidateForDownloadRequest(14, {{ url: "{base_url}/fixtures/direct_sample.mp4", pageTitle: "Direct MP4 Fixture" }}, {{}});
-  const submitRes = await bg.submitMediaCandidateToFlux(resolved.candidate, {{ pageTitle: "Direct MP4 Fixture" }}, callNativeHost);
+  const submitRes = await bg.submitMediaCandidateToRadium(resolved.candidate, {{ pageTitle: "Direct MP4 Fixture" }}, callNativeHost);
   console.log(JSON.stringify({{ added: det.added, sourceType: det.candidate.sourceType, inPopup: popupHtml.includes("direct_sample.mp4") || popupHtml.includes("MP4"), submitRes }}));
 }})();
 """, sock_path)
@@ -964,7 +961,7 @@ function callNativeHost(payload) {
       {{ name: "Content-Length", value: "{meta['webm_size']}" }}
     ]
   }});
-  const submitRes = await bg.submitMediaCandidateToFlux(det.candidate, {{ pageTitle: "WebM Fixture" }}, callNativeHost);
+  const submitRes = await bg.submitMediaCandidateToRadium(det.candidate, {{ pageTitle: "WebM Fixture" }}, callNativeHost);
   console.log(JSON.stringify({{ added: det.added, ext: det.candidate.ext, submitRes }}));
 }})();
 """, sock_path)
@@ -1002,7 +999,7 @@ function callNativeHost(payload) {
     statusCode: 200,
     responseHeaders: [{{ name: "Content-Type", value: "application/vnd.apple.mpegurl" }}]
   }});
-  const submitRes = await bg.submitMediaCandidateToFlux(masterDet.candidate, {{ pageTitle: "HLS_Fixture_Output" }}, callNativeHost);
+  const submitRes = await bg.submitMediaCandidateToRadium(masterDet.candidate, {{ pageTitle: "HLS_Fixture_Output" }}, callNativeHost);
   console.log(JSON.stringify({{ masterAdded: masterDet.added, childGrouped: childDet.groupedUnder === masterDet.candidate.candidateId, submitRes }}));
 }})();
 """, sock_path)
@@ -1029,7 +1026,7 @@ function callNativeHost(payload) {
     cachedManifestBody: {json.dumps(dash_xml)},
     pageTitle: "DASH_Fixture_Output"
   }};
-  const submitRes = await bg.submitMediaCandidateToFlux(dashCand, {{ pageTitle: "DASH_Fixture_Output" }}, callNativeHost);
+  const submitRes = await bg.submitMediaCandidateToRadium(dashCand, {{ pageTitle: "DASH_Fixture_Output" }}, callNativeHost);
   console.log(JSON.stringify({{ submitRes }}));
 }})();
 """, sock_path)
@@ -1100,8 +1097,8 @@ function callNativeHost(payload) {
       params: {{
         streamType: "HLS",
         sourceType: "HLS_MANIFEST",
-        manifestUrl: "https://www.youtube.com/watch?v=FluxTestYt01",
-        cachedManifestBody: JSON.stringify({{ fluxType: "YOUTUBE_STREAM", videoId: "FluxTestYt01" }})
+        manifestUrl: "https://www.youtube.com/watch?v=RadiumTestYt01",
+        cachedManifestBody: JSON.stringify({{ radiumType: "YOUTUBE_STREAM", videoId: "RadiumTestYt01" }})
       }}
     }});
   }} catch (e) {{
@@ -1110,14 +1107,14 @@ function callNativeHost(payload) {
 
   // 2. Submit controlled YouTube watch page through YOUTUBE_EXTRACTION pipeline
   const ytCand = {{
-    url: "{base_url}/watch?v=FluxTestYt01",
+    url: "{base_url}/watch?v=RadiumTestYt01",
     streamType: "YOUTUBE",
     sourceType: "YOUTUBE_EXTRACTION",
-    videoId: "FluxTestYt01",
-    pageTitle: "Flux YouTube Adaptive Mux Test",
-    tabUrl: "{base_url}/watch?v=FluxTestYt01"
+    videoId: "RadiumTestYt01",
+    pageTitle: "Radium YouTube Adaptive Mux Test",
+    tabUrl: "{base_url}/watch?v=RadiumTestYt01"
   }};
-  const submitRes = await bg.submitMediaCandidateToFlux(ytCand, {{ pageTitle: "Radium YouTube Adaptive Mux Test", qualityId: "360p", videoFilter: "360p" }}, callNativeHost);
+  const submitRes = await bg.submitMediaCandidateToRadium(ytCand, {{ pageTitle: "Radium YouTube Adaptive Mux Test", qualityId: "360p", videoFilter: "360p" }}, callNativeHost);
   console.log(JSON.stringify({{ jsonAsHlsRejected, submitRes }}));
 }})();
 """, sock_path)
@@ -1132,11 +1129,9 @@ function callNativeHost(payload) {
         assert "video" in streams10 and "audio" in streams10 and dur10 >= 3.5, f"Expected both video and audio in muxed YouTube output, got {streams10}, dur={dur10}"
         print(f"  -> PASS (YouTube watch page extracted adaptive video+audio tracks & muxed via FFmpeg -> {yt_out.name}, streams={streams10}, dur={dur10:.2f}s)")
 
-        # Verify correlation IDs in radium.log (or flux.log)
+        # Verify correlation IDs in radium.log
         log_path = db_path.parent / "radium.log"
-        if not log_path.exists():
-            log_path = db_path.parent / "flux.log"
-        assert log_path.exists(), "radium.log or flux.log should exist"
+        assert log_path.exists(), "radium.log should exist"
         log_text = log_path.read_text(encoding="utf-8")
         assert "Dispatching task=" in log_text and "YOUTUBE_EXTRACTION" in log_text, f"Expected correlation & dispatch logs in radium.log. Actual log contents:\n{log_text}"
 

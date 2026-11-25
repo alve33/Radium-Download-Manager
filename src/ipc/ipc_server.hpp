@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Local IPC Server & JSON-RPC 2.0 Dispatcher
-// Uses Windows Named Pipe (\\.\pipe\OpenIDM_IPC_<UserSID>) on Windows 10 / 11 and
-// user-ACL-restricted UNIX Domain Socket (/tmp/openidm_ipc_<uid>.sock, chmod 0600) on POSIX.
+// Radium Download Manager — Local IPC Server & JSON-RPC 2.0 Dispatcher
+// Uses Windows Named Pipe (\\.\pipe\Radium_IPC_<UserSID>) on Windows 10 / 11 and
+// user-ACL-restricted UNIX Domain Socket (/tmp/radium_ipc_<uid>.sock, chmod 0600) on POSIX.
 // Implements NATIVE_MESSAGING_AND_IPC.md, ADR-0003, NFR-007, NFR-008, Phase 6.
 #pragma once
 
@@ -26,7 +26,7 @@
 #include <vector>
 #include "core/download_controller.hpp"
 
-namespace openidm::ipc {
+namespace radium::ipc {
 
 class IpcServer {
 public:
@@ -59,6 +59,16 @@ public:
     }
 
     using OfferNotificationCallback = std::function<void(const TaskModel& task)>;
+    using SpeculativeDecisionCallback = std::function<void(
+        const std::string& tx_id,
+        const TaskModel& draft,
+        const DownloadController::IncomingConflictReport& conflict)>;
+
+    void SetSpeculativeDecisionCallback(SpeculativeDecisionCallback cb) {
+        std::lock_guard<std::mutex> lock(m_offer_mutex);
+        m_speculative_cb = std::move(cb);
+    }
+
     void SetOfferNotificationCallback(OfferNotificationCallback cb) {
         std::vector<TaskModel> pending;
         OfferNotificationCallback active_cb;
@@ -92,6 +102,7 @@ private:
     std::atomic<bool> m_is_headless{false};
     std::mutex m_offer_mutex;
     OfferNotificationCallback m_offer_cb;
+    SpeculativeDecisionCallback m_speculative_cb;
     std::vector<TaskModel> m_pending_offers;
     struct RecentOfferRecord {
         std::string task_id;
@@ -134,4 +145,4 @@ private:
     std::map<std::string, StagingSession> m_staging_sessions;
 };
 
-} // namespace openidm::ipc
+} // namespace radium::ipc

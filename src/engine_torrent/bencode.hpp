@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Ultra-Fast, Safe C++20 Bencode Parser & Serializer
+// Radium Download Manager — Ultra-Fast, Safe C++20 Bencode Parser & Serializer
 #pragma once
 
 #include <cstdint>
@@ -13,7 +13,7 @@
 
 #include "common/types.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 struct BencodeValue;
 using BencodeDict = std::map<std::string, BencodeValue>;
@@ -243,4 +243,4 @@ private:
     }
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

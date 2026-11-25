@@ -2,7 +2,7 @@
 
 ## 1. Visual Direction & Design Philosophy
 
-Flux Download Manager's desktop interface is engineered as a native, high-performance Windows 11 desktop application (`WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN`) rendered via double-buffered Win32 GDI and Direct2D primitives (`src/ui/design_system.hpp`, `src/ui/win32_main_window.cpp`) and backed by a platform-independent view-model (`openidm::ui::DesktopView`).
+Radium Download Manager's desktop interface is engineered as a native, high-performance Windows 11 desktop application (`WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN`) rendered via double-buffered Win32 GDI and Direct2D primitives (`src/ui/design_system.hpp`, `src/ui/win32_main_window.cpp`) and backed by a platform-independent view-model (`radium::ui::DesktopView`).
 
 Key design principles:
 - **Preserved Radium Brand Identity**: Warm matte charcoal canvas (`#161618`), dark charcoal surfaces (`#1E1E22`), elevated floating cards (`#28282E`), subtle architectural borders (`#35353D`), crisp light typography (`#F2F2F3` / `#B4B4BD`), and the signature **Coral Red** accent (`#FF4757`).
@@ -15,7 +15,7 @@ Key design principles:
 
 ---
 
-## 2. Color Tokens & Glass Palette (`openidm::ui::ThemePalette`)
+## 2. Color Tokens & Glass Palette (`radium::ui::ThemePalette`)
 
 Radium provides three theme modes (`ThemeMode::kDark`, `ThemeMode::kLight`, and `ThemeMode::kSystem`), persisted in SQLite (`settings.theme`) and synchronized with Windows 11 `DWMWA_USE_IMMERSIVE_DARK_MODE`. The default `coral_dark` and its `coral`, `charcoal`, and `dark` aliases resolve to the Coral Dark palette; `classic_blue` and `cosmic_blue` remain explicit legacy compatibility themes.
 
@@ -51,7 +51,7 @@ Radium provides three theme modes (`ThemeMode::kDark`, `ThemeMode::kLight`, and 
 
 ---
 
-## 3. Spacing, Layout Regions & High-DPI Scaling (`openidm::ui::LayoutMetrics`)
+## 3. Spacing, Layout Regions & High-DPI Scaling (`radium::ui::LayoutMetrics`)
 
 All layout dimensions use a **4px base grid** and scale proportionally across Per-Monitor V2 DPI settings (`96` DPI / 100%, `120` DPI / 125%, `144` DPI / 150%, `192` DPI / 200%, `240` DPI / 250%) via `DesignSystem::ScaleForDpi(base_px, dpi)`.
 
@@ -144,7 +144,7 @@ When a download row is selected, a details card stays at the bottom of the main 
    - Fluid Windows 11 pill switches with smooth track and circular thumbs.
    - Accessible category navigation pills with Coral Red active state indicators.
 6. **System Tray Integration (`Shell_NotifyIconW`)**:
-   - Supports `Show Flux`, `Hide to Tray`, `Pause All Downloads`, `Resume All Downloads`, and `Exit Flux`, honoring `close_to_tray` on `WM_CLOSE`.
+   - Supports `Show Radium`, `Hide to Tray`, `Pause All Downloads`, `Resume All Downloads`, and `Exit Radium`, honoring `close_to_tray` on `WM_CLOSE`.
 
 ### G. Download Setup Dialog Consistency
 - New Download, Add Torrent, and Remove Download share the matte charcoal canvas and `accent_primary` coral (`#FF4757`) for primary actions, focus borders, and selected-file indicators.

@@ -7,7 +7,7 @@
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     if (!data || size > 1024 * 1024) return 0;
     std::string_view sv(reinterpret_cast<const char*>(data), size);
-    auto res = openidm::torrent::BencodeParser::Decode(sv);
+    auto res = radium::torrent::BencodeParser::Decode(sv);
     (void)res;
     return 0;
 }

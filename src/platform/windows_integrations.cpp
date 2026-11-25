@@ -12,7 +12,7 @@
 #include <shlobj.h>
 #endif
 
-namespace openidm::platform {
+namespace radium::platform {
 
 namespace {
 
@@ -322,11 +322,32 @@ bool WindowsIntegrations::RegisterTorrentAssociation() {
     std::wstring exe = GetCurrentExePathW();
     if (exe.empty()) return false;
     const std::wstring prog_id = L"Radium.torrent";
+    const std::wstring expected_cmd = L"\"" + exe + L"\" \"%1\"";
+
+    auto read_default = [](const std::wstring& subkey) -> std::wstring {
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, subkey.c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+            return {};
+        }
+        wchar_t buf[1024]{};
+        DWORD sz = sizeof(buf);
+        DWORD type = 0;
+        LONG rc = RegQueryValueExW(hKey, nullptr, nullptr, &type, reinterpret_cast<LPBYTE>(buf), &sz);
+        RegCloseKey(hKey);
+        if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) return {};
+        return std::wstring(buf);
+    };
+
+    if (read_default(L"Software\\Classes\\.torrent") == prog_id &&
+        read_default(L"Software\\Classes\\" + prog_id + L"\\shell\\open\\command") == expected_cmd) {
+        return true;
+    }
+
     WriteRegString(HKEY_CURRENT_USER, L"Software\\Classes\\" + prog_id, nullptr, L"BitTorrent Metainfo File");
     WriteRegString(HKEY_CURRENT_USER, L"Software\\Classes\\" + prog_id + L"\\DefaultIcon", nullptr, L"\"" + exe + L"\",0");
-    WriteRegString(HKEY_CURRENT_USER, L"Software\\Classes\\" + prog_id + L"\\shell\\open\\command", nullptr, L"\"" + exe + L"\" \"%1\"");
+    WriteRegString(HKEY_CURRENT_USER, L"Software\\Classes\\" + prog_id + L"\\shell\\open\\command", nullptr, expected_cmd);
     WriteRegString(HKEY_CURRENT_USER, L"Software\\Classes\\.torrent", nullptr, prog_id);
-    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, nullptr, nullptr);
     return true;
 #else
     return false;
@@ -404,4 +425,4 @@ void WindowsIntegrations::RevokeWindowDropTarget(HWND hwnd) {
 }
 #endif
 
-} // namespace openidm::platform
+} // namespace radium::platform

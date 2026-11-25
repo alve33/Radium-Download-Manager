@@ -8,7 +8,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     if (!data || size > 1024 * 1024) return 0;
     std::string s(reinterpret_cast<const char*>(data), size);
     try {
-        auto v = openidm::json::Parse(s);
+        auto v = radium::json::Parse(s);
         (void)v.dump();
     } catch (...) {
     }

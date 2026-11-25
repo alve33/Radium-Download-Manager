@@ -2,8 +2,10 @@
 // Radium Download Manager — Shared Browser Extension Downloader, Validator & Installer
 #include "core/extension_installer.hpp"
 
+#include "archive/zip_preview.hpp"
 #include "brisk_engine/http_client.hpp"
 #include "common/central_config.hpp"
+#include "common/crypto_utils.hpp"
 #include "common/json_mini.hpp"
 #include "common/logger.hpp"
 #include "common/version.hpp"
@@ -27,12 +29,10 @@ namespace radium::core {
 
 namespace {
 
-constexpr std::string_view kGithubBranchesMainUrl =
-    "https://api.github.com/repos/alve33/Radium-Download-Manager/branches/main";
-constexpr std::string_view kGithubTreePrefixUrl =
-    "https://api.github.com/repos/alve33/Radium-Download-Manager/git/trees/";
-constexpr std::string_view kGithubRawPrefixUrl =
-    "https://raw.githubusercontent.com/alve33/Radium-Download-Manager/";
+constexpr std::string_view kReleaseExtensionZipUrl =
+    "https://github.com/alve33/Radium-Download-Manager/releases/latest/download/radium-extension.zip";
+constexpr std::string_view kMainBranchZipUrl =
+    "https://github.com/alve33/Radium-Download-Manager/archive/refs/heads/main.zip";
 
 std::string ToLowerAscii(std::string_view sv) {
     std::string out(sv);
@@ -40,6 +40,17 @@ std::string ToLowerAscii(std::string_view sv) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
     return out;
+}
+
+std::optional<std::string> FindHeaderCaseInsensitive(
+    const std::map<std::string, std::string>& headers,
+    std::string_view target_lower) {
+    for (const auto& [k, v] : headers) {
+        if (ToLowerAscii(k) == target_lower) {
+            return v;
+        }
+    }
+    return std::nullopt;
 }
 
 bool IsReservedDosName(std::string_view segment) {
@@ -56,17 +67,12 @@ bool IsReservedDosName(std::string_view segment) {
     return false;
 }
 
-bool IsValidHexSha40(std::string_view sha) {
-    if (sha.size() != 40) return false;
-    for (char c : sha) {
-        if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
-    }
-    return true;
-}
-
-bool IsTrustedGithubApiOrRawUrl(std::string_view url) {
-    return url.rfind("https://api.github.com/repos/alve33/Radium-Download-Manager/", 0) == 0 ||
-           url.rfind("https://raw.githubusercontent.com/alve33/Radium-Download-Manager/", 0) == 0;
+bool IsTrustedGithubDownloadUrl(std::string_view url) {
+    return url.rfind("https://github.com/alve33/Radium-Download-Manager/releases/latest/download/", 0) == 0 ||
+           url.rfind("https://github.com/alve33/Radium-Download-Manager/releases/download/", 0) == 0 ||
+           url.rfind("https://github.com/alve33/Radium-Download-Manager/archive/refs/heads/", 0) == 0 ||
+           url.rfind("https://codeload.github.com/alve33/Radium-Download-Manager/", 0) == 0 ||
+           url.rfind("https://objects.githubusercontent.com/", 0) == 0;
 }
 
 bool IsRateLimitedResponse(const ExtensionFetchResponse& resp) {
@@ -244,7 +250,7 @@ bool ExtensionInstaller::ValidateExtensionDirectory(
     }
 
     try {
-        auto manifest = openidm::json::Parse(manifest_raw);
+        auto manifest = radium::json::Parse(manifest_raw);
         if (!manifest.is_object()) {
             if (out_error) *out_error = "manifest.json is not a valid JSON object.";
             return false;
@@ -289,7 +295,7 @@ bool ExtensionInstaller::ValidateExtensionDirectory(
 
         // Validate manifest.firefox.json as well
         const std::string ff_raw = ReadFileUtf8(dir / "manifest.firefox.json");
-        auto ff = openidm::json::Parse(ff_raw);
+        auto ff = radium::json::Parse(ff_raw);
         if (!ff.is_object() || ff["manifest_version"].as_int64(0) != 3) {
             if (out_error) *out_error = "manifest.firefox.json is invalid.";
             return false;
@@ -332,7 +338,7 @@ InstalledExtensionInfo ExtensionInstaller::InspectInstalledExtension(
 ExtensionFetchFn ExtensionInstaller::DefaultHttpFetch() {
     return [](const std::string& url, const std::map<std::string, std::string>& extra_headers) -> ExtensionFetchResponse {
         ExtensionFetchResponse out;
-        if (!IsTrustedGithubApiOrRawUrl(url)) {
+        if (!IsTrustedGithubDownloadUrl(url)) {
             out.error_message = "Blocked untrusted download URL: " + url;
             return out;
         }
@@ -343,22 +349,22 @@ ExtensionFetchFn ExtensionInstaller::DefaultHttpFetch() {
         }
 
         std::atomic<bool> cancel{false};
-        auto res = openidm::brisk::HttpClient::PerformGet(
+        auto res = radium::brisk::HttpClient::PerformGet(
             url,
             headers,
             std::nullopt,
             std::nullopt,
-            20000,
+            30000,
             false,
             cancel,
-            [&out](const openidm::brisk::HttpResponseMeta& meta) {
+            [&out](const radium::brisk::HttpResponseMeta& meta) {
                 out.status_code = meta.status_code;
                 out.headers = meta.raw_headers;
-                return openidm::brisk::HeaderAction::kContinue;
+                return radium::brisk::HeaderAction::kContinue;
             },
             [&out](const uint8_t* data, size_t len) {
-                constexpr size_t kMaxFileBytes = 16 * 1024 * 1024;
-                if (out.body.size() + len > kMaxFileBytes) return false;
+                constexpr size_t kMaxPackageBytes = 64ULL * 1024ULL * 1024ULL;
+                if (out.body.size() + len > kMaxPackageBytes) return false;
                 out.body.append(reinterpret_cast<const char*>(data), len);
                 return true;
             });
@@ -383,200 +389,219 @@ ExtensionInstallResult ExtensionInstaller::DownloadAndInstall(
         if (on_progress) on_progress(pct, msg);
     };
 
-    const std::map<std::string, std::string> api_headers = {
-        {"Accept", "application/vnd.github+json"},
+    // 1. Inspect existing installation and cached package metadata
+    std::string existing_version;
+    const bool existing_valid = ValidateExtensionDirectory(install_dir, &existing_version);
+    const auto cache_path = app_data_dir / "extension_cache.json";
+    std::string cached_etag;
+    std::string cached_last_mod;
+    std::string cached_sha256;
+    std::string cached_source_url;
+    if (existing_valid) {
+        const std::string cache_raw = ReadFileUtf8(cache_path);
+        if (!cache_raw.empty()) {
+            try {
+                auto cj = radium::json::Parse(cache_raw);
+                if (cj.is_object()) {
+                    cached_etag = cj["etag"].as_string("");
+                    cached_last_mod = cj["lastModified"].as_string("");
+                    cached_sha256 = cj["sha256"].as_string("");
+                    cached_source_url = cj["sourceUrl"].as_string("");
+                }
+            } catch (...) {}
+        }
+    }
+
+    // 2. Prefer downloading prepackaged extension ZIP directly from official GitHub Release
+    //    (zero api.github.com calls, immune to the unauthenticated REST API rate limit).
+    std::map<std::string, std::string> req_headers = {
+        {"Accept", "application/zip, application/octet-stream"},
         {"User-Agent", std::string(radium::config::NetworkPoliciesConfig::kUserAgent)}
     };
+    if (existing_valid && cached_source_url == kReleaseExtensionZipUrl) {
+        if (!cached_etag.empty()) req_headers["If-None-Match"] = cached_etag;
+        if (!cached_last_mod.empty()) req_headers["If-Modified-Since"] = cached_last_mod;
+    }
 
-    // 1. Check latest GitHub release first; if no standalone extension zip asset is published,
-    //    proceed to fetch the pinned commit SHA from main and download extension/ files.
-    report(5, "Checking latest GitHub release...");
-    const auto rel_resp = fetcher(
-        std::string(radium::config::UpdateAndReleaseConfig::kApiLatestReleaseUrl),
-        api_headers);
-    if (IsRateLimitedResponse(rel_resp)) {
-        result.rate_limited = true;
-        result.error_code = "ERR_GITHUB_RATE_LIMIT";
-        result.error_message = "GitHub API rate limit exceeded. Please wait a few minutes and try again.";
+    report(10, "Downloading extension package from GitHub Release...");
+    std::string used_url(kReleaseExtensionZipUrl);
+    ExtensionFetchResponse resp = fetcher(used_url, req_headers);
+
+    if (resp.status_code == 304 && existing_valid) {
+        report(100, "Browser extension is already up to date (v" + existing_version + ").");
+        result.success = true;
+        result.already_up_to_date = true;
+        result.version = existing_version;
+        result.package_sha256 = cached_sha256;
+        result.installed_files = RequiredFiles();
         return result;
     }
 
-    // 2. Resolve consistent commit SHA from main branch so all files come from one exact revision.
-    report(12, "Resolving repository revision from GitHub...");
-    const auto branch_resp = fetcher(std::string(kGithubBranchesMainUrl), api_headers);
-    if (IsRateLimitedResponse(branch_resp)) {
+    // 3. If the release asset is missing (HTTP 404), fall back once to the main branch archive ZIP
+    //    (also zero api.github.com calls). Never loop or retry rate limits automatically.
+    if (resp.status_code == 404) {
+        report(20, "Release asset not found; downloading extension archive from main branch...");
+        used_url = std::string(kMainBranchZipUrl);
+        resp = fetcher(used_url, {
+            {"Accept", "application/zip, application/octet-stream"},
+            {"User-Agent", std::string(radium::config::NetworkPoliciesConfig::kUserAgent)}
+        });
+    }
+
+    if (IsRateLimitedResponse(resp)) {
         result.rate_limited = true;
         result.error_code = "ERR_GITHUB_RATE_LIMIT";
-        result.error_message = "GitHub API rate limit exceeded while resolving branch commit.";
+        result.error_message = "GitHub rate limit exceeded (HTTP " + std::to_string(resp.status_code) +
+                               "). Please wait a few minutes and click Retry Download.";
         return result;
     }
-    if (branch_resp.status_code != 200 || branch_resp.body.empty()) {
+
+    if (resp.status_code == 403) {
+        result.error_code = "ERR_GITHUB_FORBIDDEN";
+        result.error_message = "GitHub denied access to the extension package (HTTP 403). Please try again later.";
+        return result;
+    }
+
+    if (resp.status_code == 404) {
+        result.error_code = "ERR_EXTENSION_ASSET_NOT_FOUND";
+        result.error_message = "Extension package was not found on GitHub (HTTP 404).";
+        return result;
+    }
+
+    if (resp.status_code != 200 || resp.body.empty()) {
         result.error_code = "ERR_GITHUB_NETWORK";
-        result.error_message = branch_resp.error_message.empty()
-            ? ("Failed to query GitHub branch metadata (HTTP " + std::to_string(branch_resp.status_code) + ").")
-            : branch_resp.error_message;
+        result.error_message = resp.error_message.empty()
+            ? ("Failed to download extension package (HTTP " + std::to_string(resp.status_code) + ").")
+            : ("Failed to download extension package: " + resp.error_message);
         return result;
     }
 
-    std::string commit_sha;
-    try {
-        auto branch_json = openidm::json::Parse(branch_resp.body);
-        commit_sha = branch_json["commit"]["sha"].as_string("");
-    } catch (...) {
-        commit_sha.clear();
-    }
-    if (!IsValidHexSha40(commit_sha)) {
-        result.error_code = "ERR_GITHUB_INVALID_METADATA";
-        result.error_message = "GitHub returned an invalid commit SHA for the main branch.";
-        return result;
-    }
-    result.commit_sha = commit_sha;
+    const std::string zip_sha256 = radium::CryptoUtils::ComputeBufferSha256Hex(resp.body);
+    const std::string resp_etag = FindHeaderCaseInsensitive(resp.headers, "etag").value_or("");
+    const std::string resp_last_mod = FindHeaderCaseInsensitive(resp.headers, "last-modified").value_or("");
 
-    // 3. Fetch recursive tree at that exact commit SHA.
-    report(20, "Listing extension files from GitHub...");
-    const std::string tree_url = std::string(kGithubTreePrefixUrl) + commit_sha + "?recursive=1";
-    const auto tree_resp = fetcher(tree_url, api_headers);
-    if (IsRateLimitedResponse(tree_resp)) {
-        result.rate_limited = true;
-        result.error_code = "ERR_GITHUB_RATE_LIMIT";
-        result.error_message = "GitHub API rate limit exceeded while listing extension files.";
-        return result;
-    }
-    if (tree_resp.status_code != 200 || tree_resp.body.empty()) {
-        result.error_code = "ERR_GITHUB_TREE";
-        result.error_message = tree_resp.error_message.empty()
-            ? ("Failed to list repository files (HTTP " + std::to_string(tree_resp.status_code) + ").")
-            : tree_resp.error_message;
+    // 4. Skip redundant re-extraction if identical package SHA-256 is already installed & valid
+    if (existing_valid && !zip_sha256.empty() && zip_sha256 == cached_sha256) {
+        radium::json::Value cj = radium::json::Object{};
+        cj["version"] = existing_version;
+        cj["sha256"] = zip_sha256;
+        cj["etag"] = resp_etag.empty() ? cached_etag : resp_etag;
+        cj["lastModified"] = resp_last_mod.empty() ? cached_last_mod : resp_last_mod;
+        cj["sourceUrl"] = used_url;
+        WriteFileBinary(cache_path, cj.dump());
+
+        report(100, "Browser extension is already up to date (v" + existing_version + ").");
+        result.success = true;
+        result.already_up_to_date = true;
+        result.version = existing_version;
+        result.package_sha256 = zip_sha256;
+        result.installed_files = RequiredFiles();
         return result;
     }
 
-    std::vector<std::string> rel_files;
-    try {
-        auto tree_json = openidm::json::Parse(tree_resp.body);
-        if (!tree_json.contains("tree") || !tree_json["tree"].is_array()) {
-            result.error_code = "ERR_GITHUB_TREE";
-            result.error_message = "GitHub tree response is missing the 'tree' array.";
-            return result;
-        }
-        for (const auto& entry : tree_json["tree"].as_array()) {
-            if (entry["type"].as_string("") != "blob") continue;
-            std::string path = entry["path"].as_string("");
-            constexpr std::string_view kExtPrefix = "extension/";
-            if (path.rfind(kExtPrefix, 0) != 0) continue;
-            std::string rel = path.substr(kExtPrefix.size());
-            if (!IsSafeRelativeExtensionPath(rel)) {
-                result.error_code = "ERR_UNSAFE_PATH";
-                result.error_message = "Rejected unsafe file path in repository tree: " + rel;
-                return result;
-            }
-            rel_files.push_back(std::move(rel));
-        }
-    } catch (...) {
-        result.error_code = "ERR_GITHUB_TREE";
-        result.error_message = "Failed to parse GitHub repository tree JSON.";
-        return result;
-    }
-
-    // Ensure all required files are present in the remote tree before downloading.
-    std::set<std::string> remote_set(rel_files.begin(), rel_files.end());
-    for (const auto& req : RequiredFiles()) {
-        if (remote_set.find(req) == remote_set.end()) {
-            result.error_code = "ERR_MISSING_EXTENSION_FILES";
-            result.error_message = "GitHub repository is missing required extension file: " + req;
-            return result;
-        }
-    }
-
-    // 4. Create isolated staging directory inside app_data_dir/tmp
+    // 5. Write ZIP to isolated temp file and extract into staging directory
+    report(55, "Verifying and extracting extension package...");
     const auto now_ticks = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto stage_dir = app_data_dir / "tmp" / ("ext_stage_" + std::to_string(now_ticks));
-    std::error_code ec;
-    std::filesystem::remove_all(stage_dir, ec);
-    std::filesystem::create_directories(stage_dir, ec);
-    if (ec) {
-        result.error_code = "ERR_STAGE_DIR";
-        result.error_message = "Unable to create temporary staging directory: " + ec.message();
-        return result;
-    }
+    const auto tmp_dir = app_data_dir / "tmp";
+    const auto tmp_zip = tmp_dir / ("ext_pkg_" + std::to_string(now_ticks) + ".zip");
+    const auto extract_dir = tmp_dir / ("ext_stage_" + std::to_string(now_ticks));
 
-    const auto cleanup_stage = [&stage_dir]() {
+    const auto cleanup_tmp = [&tmp_zip, &extract_dir]() {
         std::error_code clean_ec;
-        std::filesystem::remove_all(stage_dir, clean_ec);
+        std::filesystem::remove(tmp_zip, clean_ec);
+        std::filesystem::remove_all(extract_dir, clean_ec);
     };
 
-    const auto canon_stage = std::filesystem::weakly_canonical(stage_dir, ec);
-    if (ec) {
-        cleanup_stage();
-        result.error_code = "ERR_STAGE_DIR";
-        result.error_message = "Unable to resolve staging directory path.";
+    if (!WriteFileBinary(tmp_zip, resp.body)) {
+        cleanup_tmp();
+        result.error_code = "ERR_WRITE_FILE";
+        result.error_message = "Failed to write downloaded extension package to temporary storage.";
         return result;
     }
 
-    // 5. Download each file from raw.githubusercontent.com/<commit_sha>/extension/<rel>
-    const size_t total_files = rel_files.size();
-    for (size_t i = 0; i < total_files; ++i) {
-        const std::string& rel = rel_files[i];
-        const int pct = 25 + static_cast<int>(((i + 1) * 60) / std::max<size_t>(1, total_files));
-        report(pct, "Downloading " + rel + " (" + std::to_string(i + 1) + "/" + std::to_string(total_files) + ")...");
+    auto extract_res = radium::archive::ArchiveExtractor::ExtractArchive(
+        tmp_zip,
+        extract_dir,
+        radium::archive::SubfolderPolicy::kNever,
+        64ULL * 1024ULL * 1024ULL,
+        500);
+    std::error_code rm_zip_ec;
+    std::filesystem::remove(tmp_zip, rm_zip_ec);
 
-        const std::string raw_url = std::string(kGithubRawPrefixUrl) + commit_sha + "/extension/" + rel;
-        const auto file_resp = fetcher(raw_url, {{"User-Agent", std::string(radium::config::NetworkPoliciesConfig::kUserAgent)}});
-        if (IsRateLimitedResponse(file_resp)) {
-            cleanup_stage();
-            result.rate_limited = true;
-            result.error_code = "ERR_GITHUB_RATE_LIMIT";
-            result.error_message = "GitHub rate limit exceeded while downloading " + rel + ".";
-            return result;
-        }
-        if (file_resp.status_code != 200 || file_resp.body.empty()) {
-            cleanup_stage();
-            result.error_code = "ERR_DOWNLOAD_FILE";
-            result.error_message = file_resp.error_message.empty()
-                ? ("Failed to download " + rel + " (HTTP " + std::to_string(file_resp.status_code) + ").")
-                : ("Failed to download " + rel + ": " + file_resp.error_message);
-            return result;
-        }
+    if (!extract_res.ok()) {
+        cleanup_tmp();
+        result.error_code = extract_res.error->code.empty() ? "ERR_ARCHIVE_EXTRACT_FAILED" : extract_res.error->code;
+        result.error_message = "Failed to extract extension package: " + extract_res.error->message;
+        return result;
+    }
 
-        const auto target_path = stage_dir / std::filesystem::path(rel);
-        const auto canon_target = std::filesystem::weakly_canonical(target_path, ec);
-        if (ec) {
-            cleanup_stage();
-            result.error_code = "ERR_UNSAFE_PATH";
-            result.error_message = "Failed to canonicalize staged file path: " + rel;
-            return result;
-        }
-        const auto rel_check = canon_target.lexically_relative(canon_stage);
-        if (rel_check.empty() || rel_check.is_absolute() || *rel_check.begin() == "..") {
-            cleanup_stage();
-            result.error_code = "ERR_UNSAFE_PATH";
-            result.error_message = "Path traversal detected for file: " + rel;
-            return result;
-        }
-
-        if (!WriteFileBinary(target_path, file_resp.body)) {
-            cleanup_stage();
-            result.error_code = "ERR_WRITE_FILE";
-            result.error_message = "Failed to write staged file: " + rel;
-            return result;
+    // 6. Locate extension root inside extracted directory (direct root, extension/, or <repo>-main/extension/)
+    std::error_code ec;
+    std::filesystem::path candidate_root;
+    if (std::filesystem::is_regular_file(extract_dir / "manifest.json", ec)) {
+        candidate_root = extract_dir;
+    } else if (std::filesystem::is_regular_file(extract_dir / "extension" / "manifest.json", ec)) {
+        candidate_root = extract_dir / "extension";
+    } else {
+        for (const auto& entry : std::filesystem::directory_iterator(extract_dir, ec)) {
+            if (!entry.is_directory(ec)) continue;
+            auto nested = entry.path() / "extension";
+            if (std::filesystem::is_regular_file(nested / "manifest.json", ec)) {
+                candidate_root = nested;
+                break;
+            }
         }
     }
 
-    // 6. Validate staged extension directory before touching any existing installation
-    report(90, "Validating extension manifest and resources...");
+    if (candidate_root.empty()) {
+        cleanup_tmp();
+        result.error_code = "ERR_MISSING_EXTENSION_FILES";
+        result.error_message = "Downloaded archive does not contain a valid Radium extension manifest.";
+        return result;
+    }
+
+    // 7. Verify all extracted relative paths are safe and collect installed file list
+    std::vector<std::string> rel_files;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(candidate_root, ec)) {
+        if (ec) {
+            cleanup_tmp();
+            result.error_code = "ERR_STAGE_DIR";
+            result.error_message = "Failed to enumerate extracted extension files.";
+            return result;
+        }
+        if (entry.is_symlink(ec)) {
+            cleanup_tmp();
+            result.error_code = "ERR_UNSAFE_PATH";
+            result.error_message = "Rejected symbolic link in extension archive.";
+            return result;
+        }
+        if (!entry.is_regular_file(ec)) continue;
+        auto rel = entry.path().lexically_relative(candidate_root).generic_string();
+        if (!IsSafeRelativeExtensionPath(rel)) {
+            cleanup_tmp();
+            result.error_code = "ERR_UNSAFE_PATH";
+            result.error_message = "Rejected unsafe file path in extension archive: " + rel;
+            return result;
+        }
+        rel_files.push_back(std::move(rel));
+    }
+
+    // 8. Validate staged extension directory before touching any existing installation
+    report(85, "Validating extension manifest and resources...");
     std::string ext_version;
     std::string val_err;
-    if (!ValidateExtensionDirectory(stage_dir, &ext_version, &val_err)) {
-        cleanup_stage();
+    if (!ValidateExtensionDirectory(candidate_root, &ext_version, &val_err)) {
+        cleanup_tmp();
         result.error_code = "ERR_INVALID_EXTENSION";
         result.error_message = val_err;
         return result;
     }
 
-    // 7. Atomic replacement of install_dir
+    // 9. Atomic replacement of install_dir
     report(95, "Installing extension files...");
     std::filesystem::create_directories(install_dir.parent_path(), ec);
     if (ec) {
-        cleanup_stage();
+        cleanup_tmp();
         result.error_code = "ERR_INSTALL_DIR";
         result.error_message = "Failed to create installation parent directory: " + ec.message();
         return result;
@@ -588,35 +613,54 @@ ExtensionInstallResult ExtensionInstaller::DownloadAndInstall(
     if (had_existing) {
         std::filesystem::rename(install_dir, backup_dir, ec);
         if (ec) {
-            cleanup_stage();
+            cleanup_tmp();
             result.error_code = "ERR_REPLACE_EXTENSION";
             result.error_message = "Could not move previous extension aside (close any file locks and retry): " + ec.message();
             return result;
         }
     }
 
-    std::filesystem::rename(stage_dir, install_dir, ec);
+    std::filesystem::rename(candidate_root, install_dir, ec);
     if (ec) {
-        // Restore backup so we never leave the user without a working extension
-        if (had_existing) {
-            std::error_code restore_ec;
-            std::filesystem::rename(backup_dir, install_dir, restore_ec);
+        std::error_code copy_ec;
+        std::filesystem::create_directories(install_dir, copy_ec);
+        std::filesystem::copy(
+            candidate_root, install_dir,
+            std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing,
+            copy_ec);
+        if (copy_ec) {
+            std::filesystem::remove_all(install_dir, copy_ec);
+            if (had_existing) {
+                std::error_code restore_ec;
+                std::filesystem::rename(backup_dir, install_dir, restore_ec);
+            }
+            cleanup_tmp();
+            result.error_code = "ERR_REPLACE_EXTENSION";
+            result.error_message = "Failed to finalize extension installation: " + copy_ec.message();
+            return result;
         }
-        cleanup_stage();
-        result.error_code = "ERR_REPLACE_EXTENSION";
-        result.error_message = "Failed to finalize extension installation: " + ec.message();
-        return result;
     }
 
     if (had_existing) {
         std::filesystem::remove_all(backup_dir, ec);
     }
+    cleanup_tmp();
+
+    // 10. Persist cache metadata for future updates
+    radium::json::Value cj = radium::json::Object{};
+    cj["version"] = ext_version;
+    cj["sha256"] = zip_sha256;
+    cj["etag"] = resp_etag;
+    cj["lastModified"] = resp_last_mod;
+    cj["sourceUrl"] = used_url;
+    WriteFileBinary(cache_path, cj.dump());
 
     report(100, "Extension downloaded and verified.");
     result.success = true;
     result.version = ext_version;
+    result.package_sha256 = zip_sha256;
     result.installed_files = std::move(rel_files);
-    OPENIDM_LOG_INFO("EXT", "Installed Radium browser extension v" + ext_version + " (" + commit_sha + ") to " + install_dir.string());
+    RADIUM_LOG_INFO("EXT", "Installed Radium browser extension v" + ext_version + " (sha256=" + zip_sha256 + ") to " + install_dir.string());
     return result;
 }
 
@@ -653,7 +697,7 @@ NativeMessagingStatus ExtensionInstaller::VerifyOrRepairNativeMessaging(
         std::string raw = ReadFileUtf8(mp);
         if (raw.empty()) return false;
         try {
-            auto j = openidm::json::Parse(raw);
+            auto j = radium::json::Parse(raw);
             if (j["name"].as_string("") != "com.radium.downloadmanager") return false;
             std::string host_path = j["path"].as_string("");
             if (host_path.empty() || !std::filesystem::exists(host_path, fec)) return false;
@@ -683,22 +727,22 @@ NativeMessagingStatus ExtensionInstaller::VerifyOrRepairNativeMessaging(
     const auto chromium_manifest_path = manifest_dir / "com.radium.downloadmanager.chromium.json";
     const auto firefox_manifest_path = manifest_dir / "com.radium.downloadmanager.firefox.json";
 
-    openidm::json::Value chromium_json = openidm::json::Object{};
+    radium::json::Value chromium_json = radium::json::Object{};
     chromium_json["name"] = "com.radium.downloadmanager";
     chromium_json["description"] = "Radium Download Manager Native Messaging Host";
     chromium_json["path"] = host_exe.string();
     chromium_json["type"] = "stdio";
-    chromium_json["allowed_origins"] = openidm::json::Array{
+    chromium_json["allowed_origins"] = radium::json::Array{
         std::string("chrome-extension://mdgmlcnpodoehidlplplfegngnjnilap/"),
         std::string("chrome-extension://chbojfoombcanhhpoclailollapkglma/")
     };
 
-    openidm::json::Value firefox_json = openidm::json::Object{};
+    radium::json::Value firefox_json = radium::json::Object{};
     firefox_json["name"] = "com.radium.downloadmanager";
     firefox_json["description"] = "Radium Download Manager Native Messaging Host";
     firefox_json["path"] = host_exe.string();
     firefox_json["type"] = "stdio";
-    firefox_json["allowed_extensions"] = openidm::json::Array{
+    firefox_json["allowed_extensions"] = radium::json::Array{
         std::string("radium-extension@radiumdownloadmanager.org"),
         std::string("flux-extension@fluxdownloadmanager.org")
     };

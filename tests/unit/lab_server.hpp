@@ -13,7 +13,7 @@
 #include <ws2tcpip.h>
 #endif
 
-namespace openidm::test {
+namespace radium::test {
 
 struct LabFaults {
     bool tarpit_headers{false};
@@ -172,4 +172,4 @@ private:
     uint64_t m_total_wait_ms{0};
 };
 
-} // namespace openidm::test
+} // namespace radium::test

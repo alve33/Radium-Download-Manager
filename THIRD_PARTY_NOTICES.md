@@ -36,7 +36,7 @@ SOFTWARE.
 - **License:** GNU Lesser General Public License v2.1 or later (LGPL-2.1-or-later) / GNU Lesser General Public License v3.0 (LGPL-3.0) via `--enable-version3`
 - **Copyright:** (C) 2000-2026 the FFmpeg developers
 - **Usage:** Out-of-process audio/video container remuxing, bitstream filtering (`aac_adtstoasc`, `h264_mp4toannexb`), subtitle conversion (`mov_text`, `subrip`), and duration probing.
-- **Architectural Isolation:** Executed strictly as an isolated worker child process via Win32 `CreateProcessW` inside a restricted Windows Job Object. There is zero static or dynamic linking against `avcodec`, `avformat`, or `avutil` within `radium.exe` (and legacy `flux.exe` / `openidm.exe`).
+- **Architectural Isolation:** Executed strictly as an isolated worker child process via Win32 `CreateProcessW` inside a restricted Windows Job Object. There is zero static or dynamic linking against `avcodec`, `avformat`, or `avutil` within `radium.exe`.
 - **Minimal Configuration & Licensing Implications:**
   - Configured without `--enable-gpl` and without `--enable-nonfree`, ensuring the binary operates strictly under the terms of the LGPL v2.1+ / v3.0.
   - Network protocols are completely disabled (`--disable-network`) so FFmpeg has zero socket creation or network attack surface; all network I/O is handled securely in-process by Radium's WinHTTP engine.

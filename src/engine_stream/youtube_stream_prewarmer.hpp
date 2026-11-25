@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Radium -- YouTube Stream Background Pre-warmer
+// Radium Download Manager — YouTube Stream Background Pre-warmer
 // Resolves deciphered googlevideo media URLs in the background while user browses,
 // enabling zero-wait (<10ms) direct native download dispatch on click.
 #pragma once
@@ -23,7 +23,7 @@
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 
-namespace openidm::stream {
+namespace radium::stream {
 
 struct PrewarmedQuality {
     std::string format_id;
@@ -93,19 +93,19 @@ public:
             entry.is_ready = false;
         }
 
-        OPENIDM_LOG_INFO("Prewarmer", "Starting background stream resolution for YouTube videoId: " + vid);
+        RADIUM_LOG_INFO("Prewarmer", "Starting background stream resolution for YouTube videoId: " + vid);
         std::thread([this, vid, url, cookie_str]() {
             try {
                 ExecuteResolution(vid, url, cookie_str);
             } catch (const std::exception& e) {
-                OPENIDM_LOG_ERROR("Prewarmer", "Exception in background prewarm for " + vid + ": " + e.what());
+                RADIUM_LOG_ERROR("Prewarmer", "Exception in background prewarm for " + vid + ": " + e.what());
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     m_cache[vid].is_fetching = false;
                 }
                 m_cv.notify_all();
             } catch (...) {
-                OPENIDM_LOG_ERROR("Prewarmer", "Unknown exception in background prewarm for " + vid);
+                RADIUM_LOG_ERROR("Prewarmer", "Unknown exception in background prewarm for " + vid);
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     m_cache[vid].is_fetching = false;
@@ -308,7 +308,7 @@ private:
         std::error_code ec;
         std::filesystem::path ytdlp = PathSanitizer::FindWorkerBinary("yt-dlp", PathSanitizer::GetExecutableDir());
         if (ytdlp.empty() || !std::filesystem::exists(ytdlp, ec)) {
-            OPENIDM_LOG_ERROR("Prewarmer", "yt-dlp binary not found in tools or PATH");
+            RADIUM_LOG_ERROR("Prewarmer", "yt-dlp binary not found in tools or PATH");
             std::lock_guard<std::mutex> lock(m_mutex);
             m_cache[vid].is_fetching = false;
             m_cv.notify_all();
@@ -385,14 +385,14 @@ private:
             si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
             PROCESS_INFORMATION pi{};
-            OPENIDM_LOG_INFO("Prewarmer", "Executing command: " + PathSanitizer::PathToUtf8(wcmd));
+            RADIUM_LOG_INFO("Prewarmer", "Executing command: " + PathSanitizer::PathToUtf8(wcmd));
             BOOL ok = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
             CloseHandle(hOutWrite);
             CloseHandle(hErrWrite);
 
             if (!ok) {
                 DWORD err = GetLastError();
-                OPENIDM_LOG_ERROR("Prewarmer", "CreateProcessW failed for yt-dlp prewarm: " + std::to_string(err));
+                RADIUM_LOG_ERROR("Prewarmer", "CreateProcessW failed for yt-dlp prewarm: " + std::to_string(err));
                 CloseHandle(hOutRead);
                 CloseHandle(hErrRead);
                 if (std::filesystem::exists(tmp_cookies, ec)) std::filesystem::remove(tmp_cookies, ec);
@@ -452,15 +452,15 @@ private:
         DWORD exitCode = 1;
         bool ok = run_ytdlp_json(cookies, json_str, err_str, exitCode);
         if (!ok && !cookies.empty()) {
-            OPENIDM_LOG_WARN("Prewarmer", "yt-dlp prewarm failed with cookies (exit=" + std::to_string(exitCode) +
+            RADIUM_LOG_WARN("Prewarmer", "yt-dlp prewarm failed with cookies (exit=" + std::to_string(exitCode) +
                              ", err=" + err_str + "), retrying without cookies...");
             ok = run_ytdlp_json("", json_str, err_str, exitCode);
         }
-        OPENIDM_LOG_INFO("Prewarmer", "yt-dlp exited with code " + std::to_string(exitCode) + " json bytes=" + std::to_string(json_str.size()) + (err_str.empty() ? "" : " stderr: " + err_str.substr(0, 200)));
+        RADIUM_LOG_INFO("Prewarmer", "yt-dlp exited with code " + std::to_string(exitCode) + " json bytes=" + std::to_string(json_str.size()) + (err_str.empty() ? "" : " stderr: " + err_str.substr(0, 200)));
 #endif
 
         if (json_str.empty()) {
-            OPENIDM_LOG_ERROR("Prewarmer", "yt-dlp output empty JSON for vid=" + vid + (!err_str.empty() ? " (stderr: " + err_str + ")" : ""));
+            RADIUM_LOG_ERROR("Prewarmer", "yt-dlp output empty JSON for vid=" + vid + (!err_str.empty() ? " (stderr: " + err_str + ")" : ""));
             std::lock_guard<std::mutex> lock(m_mutex);
             m_cache[vid].is_fetching = false;
             m_cv.notify_all();
@@ -561,7 +561,7 @@ private:
                 m_cache[vid] = std::move(entry);
             }
             m_cv.notify_all();
-            OPENIDM_LOG_INFO("Prewarmer", "Background stream pre-warm complete for vid=" + vid +
+            RADIUM_LOG_INFO("Prewarmer", "Background stream pre-warm complete for vid=" + vid +
                              ": resolved " + std::to_string(n_qualities) +
                              " qualities (best=" + best_res + ")");
         } catch (...) {
@@ -572,4 +572,4 @@ private:
     }
 };
 
-} // namespace openidm::stream
+} // namespace radium::stream

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Radium Download Manager — Unified Task Model, Application Settings & Common Types
-// Adapted from Brisk (lib/download_engine/model/download_item_model.dart) & OpenIDM PRS.
+// Adapted from Brisk (lib/download_engine/model/download_item_model.dart).
 #pragma once
 
 #include <cstdint>
@@ -23,23 +23,11 @@ constexpr unsigned int WM_RADIUM_TORRENT_FETCH_COMPLETE  = WM_APP + 105;
 constexpr unsigned int WM_RADIUM_SHOW_CONFLICT           = WM_APP + 106;
 constexpr unsigned int WM_RADIUM_TASK_NOTIFICATION       = WM_APP + 107;
 constexpr unsigned int WM_RADIUM_UPDATE_CHECK_COMPLETE   = WM_APP + 108;
-
-// Backward-Compatibility Aliases
-constexpr unsigned int WM_OPENIDM_TRAYICON               = WM_RADIUM_TRAYICON;
-constexpr unsigned int WM_OPENIDM_SHOW_NEW_DOWNLOAD      = WM_RADIUM_SHOW_NEW_DOWNLOAD;
-constexpr unsigned int WM_OPENIDM_SELECT_TORRENT_METADATA= WM_RADIUM_SELECT_TORRENT_METADATA;
-constexpr unsigned int WM_OPENIDM_PROBE_COMPLETE         = WM_RADIUM_PROBE_COMPLETE;
-constexpr unsigned int WM_OPENIDM_TORRENT_FETCH_COMPLETE = WM_RADIUM_TORRENT_FETCH_COMPLETE;
-constexpr unsigned int WM_OPENIDM_SHOW_CONFLICT          = WM_RADIUM_SHOW_CONFLICT;
-constexpr unsigned int WM_OPENIDM_TASK_NOTIFICATION      = WM_RADIUM_TASK_NOTIFICATION;
-constexpr unsigned int WM_OPENIDM_UPDATE_CHECK_COMPLETE  = WM_RADIUM_UPDATE_CHECK_COMPLETE;
+constexpr unsigned int WM_RADIUM_CHECK_FIRST_LAUNCH_ONBOARDING = WM_APP + 109;
+constexpr unsigned int WM_RADIUM_CONFLICT_COMMIT_COMPLETE = WM_APP + 110;
 #endif
 
 namespace radium {
-// Authoritative Radium root namespace
-}
-
-namespace openidm {
 
 enum class TaskType {
     kHttpFile,
@@ -374,14 +362,5 @@ std::string InferCategoryFromMime(const std::string& mime_type);
 int64_t NowEpochMs();
 std::string GenerateUuidV4();
 
-} // namespace openidm
-
-// Authoritative Radium root namespace and bidirectional compatibility (RDM-21)
-#if defined(RADIUM_CANONICAL_NAMESPACES)
-namespace openidm = radium;
-#else
-namespace radium {
-    using namespace openidm;
-}
-#endif
+} // namespace radium
 

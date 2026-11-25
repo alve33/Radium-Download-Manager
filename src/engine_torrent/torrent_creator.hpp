@@ -9,7 +9,7 @@
 
 #include "common/types.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 struct TorrentCreatorOptions {
     uint32_t piece_length{0}; // 0 = automatic selection (256 KiB - 4 MiB)
@@ -48,4 +48,4 @@ public:
     static uint32_t CalculateOptimalPieceLength(uint64_t total_size_bytes);
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

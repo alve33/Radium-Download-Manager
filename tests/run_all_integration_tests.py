@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# OpenIDM — Portable End-to-End Integration, HTTP Fault-Injection, Native Messaging IPC,
+# Radium — Portable End-to-End Integration, HTTP Fault-Injection, Native Messaging IPC,
 # Stream Pipeline (HLS/DASH/AES-128 + FFmpeg), UI Snapshot, and Enforced Benchmark Suite (8 Suites).
 
 import argparse
@@ -33,8 +33,8 @@ def resolve_project_root() -> Path:
     args, _ = parser.parse_known_args()
     if args.root:
         return Path(args.root).resolve()
-    if os.environ.get("OPENIDM_PROJECT_ROOT"):
-        return Path(os.environ["OPENIDM_PROJECT_ROOT"]).resolve()
+    if os.environ.get("RADIUM_PROJECT_ROOT"):
+        return Path(os.environ["RADIUM_PROJECT_ROOT"]).resolve()
     return Path(__file__).resolve().parent.parent
 
 
@@ -46,8 +46,7 @@ tools_dir = ROOT / "tools" / ("win-x64" if IS_WINDOWS else "")
 if tools_dir.is_dir():
     os.environ["PATH"] = str(tools_dir.resolve()) + os.pathsep + os.environ.get("PATH", "")
 os.environ["RADIUM_ALLOW_LOOPBACK"] = "1"
-os.environ["FLUX_ALLOW_LOOPBACK"] = "1"
-os.environ["OPENIDM_ALLOW_LOOPBACK"] = "1"
+os.environ["RADIUM_ALLOW_LOOPBACK"] = "1"
 
 
 def find_binary(name: str) -> Path:
@@ -69,19 +68,9 @@ def find_binary(name: str) -> Path:
     return candidates[0]
 
 
-FLUX_BIN = find_binary("radium")
-if not FLUX_BIN.is_file():
-    FLUX_BIN = find_binary("flux")
-if not FLUX_BIN.is_file():
-    FLUX_BIN = find_binary("openidm")
-OPENIDM_BIN = FLUX_BIN
+RADIUM_BIN = find_binary("radium")
 
-FLUX_NMH_BIN = find_binary("radium-nmh")
-if not FLUX_NMH_BIN.is_file():
-    FLUX_NMH_BIN = find_binary("flux-nmh")
-if not FLUX_NMH_BIN.is_file():
-    FLUX_NMH_BIN = find_binary("openidm-nmh")
-NMH_BIN = FLUX_NMH_BIN
+RADIUM_NMH_BIN = find_binary("radium-nmh")
 
 STREAM_WORKER = find_binary("N_m3u8DL-RE")
 FFMPEG_BIN = find_binary("ffmpeg")
@@ -295,7 +284,7 @@ def build_media_fixtures(fixture_dir: Path, base_url: str, aes_key: bytes):
         )
 
     (hls_dir / "sub_000.vtt").write_text(
-        "WEBVTT\n\n00:00:00.000 --> 00:00:04.000\nOpenIDM Automated Stream Test Subtitle\n",
+        "WEBVTT\n\n00:00:00.000 --> 00:00:04.000\nRadium Automated Stream Test Subtitle\n",
         encoding="utf-8",
     )
     (hls_dir / "subs_en.m3u8").write_text(
@@ -506,11 +495,11 @@ def measure_child_command_rusage(cmd_list):
 
 
 def main():
-    work_dir = Path(tempfile.mkdtemp(prefix="openidm_e2e_"))
+    work_dir = Path(tempfile.mkdtemp(prefix="radium_e2e_"))
     fixture_dir = work_dir / "fixtures"
     dl_dir = work_dir / "downloads"
     db_path = work_dir / "state.db"
-    sock_path = f"\\\\.\\pipe\\flux_test_{os.getpid()}" if IS_WINDOWS else f"/tmp/flux_test_{os.getpid()}.sock"
+    sock_path = f"\\\\.\\pipe\\radium_test_{os.getpid()}" if IS_WINDOWS else f"/tmp/radium_test_{os.getpid()}.sock"
     daemon_proc = None
     nmh_proc = None
 
@@ -529,9 +518,9 @@ def main():
         # ---------------------------------------------------------------------
         # Test 1: Platform-Aware Native Binary Verification
         # ---------------------------------------------------------------------
-        print(f"[1/8] IT-BIN-01: Verifying Platform-Aware Compiled Executables ({FLUX_BIN.stem}, {FLUX_NMH_BIN.stem}, N_m3u8DL-RE)...")
-        verify_platform_binary_format(OPENIDM_BIN)
-        verify_platform_binary_format(NMH_BIN)
+        print(f"[1/8] IT-BIN-01: Verifying Platform-Aware Compiled Executables ({RADIUM_BIN.stem}, {RADIUM_NMH_BIN.stem}, N_m3u8DL-RE)...")
+        verify_platform_binary_format(RADIUM_BIN)
+        verify_platform_binary_format(RADIUM_NMH_BIN)
         verify_platform_binary_format(STREAM_WORKER)
         ver_out = subprocess.run([str(STREAM_WORKER), "--version"], capture_output=True, text=True, check=True)
         ver_text = (ver_out.stdout + "\n" + ver_out.stderr)
@@ -544,7 +533,7 @@ def main():
         print("[2/8] IT-HTTP-01 & IT-HTTP-03: Segmented HTTP Range Download (8 Connections + 302 Redirect)...")
         subprocess.run(
             [
-                str(OPENIDM_BIN),
+                str(RADIUM_BIN),
                 "--db", str(db_path),
                 "--out", str(dl_dir),
                 "--connections", "8",
@@ -556,9 +545,9 @@ def main():
         )
         out_file1 = dl_dir / "Radium_Test_Archive.bin"
         if not out_file1.exists():
-            out_file1 = dl_dir / "Flux_Test_Archive.bin"
+            out_file1 = dl_dir / "Radium_Test_Archive.bin"
         if not out_file1.exists():
-            out_file1 = dl_dir / "OpenIDM_Test_Archive.bin"
+            out_file1 = dl_dir / "Radium_Test_Archive.bin"
         assert out_file1.exists(), f"Expected {out_file1} to exist"
         assert hashlib.sha256(out_file1.read_bytes()).hexdigest() == SHA256_4MB, "SHA-256 mismatch on 8-connection download"
         print("  -> PASS (4 MiB downloaded across 8 work-stealing connections, SHA-256 verified)")
@@ -569,7 +558,7 @@ def main():
         print("[3/8] IT-HTTP-02: Non-Range Server Single-Stream Fallback...")
         subprocess.run(
             [
-                str(OPENIDM_BIN),
+                str(RADIUM_BIN),
                 "--db", str(db_path),
                 "--out", str(dl_dir),
                 "--download", f"{base_url}/files/norange_1mb.bin",
@@ -589,7 +578,7 @@ def main():
         print("[4/8] IT-HTTP-04: Dropped Connection Reset & Resume from Exact Byte Offset...")
         subprocess.run(
             [
-                str(OPENIDM_BIN),
+                str(RADIUM_BIN),
                 "--db", str(db_path),
                 "--out", str(dl_dir),
                 "--connections", "4",
@@ -611,7 +600,7 @@ def main():
         print("[5/8] IT-STREAM-01 & IT-STREAM-02: HLS Master Manifest Probe & FFmpeg Container Muxing...")
         probe_out = subprocess.run(
             [
-                str(OPENIDM_BIN),
+                str(RADIUM_BIN),
                 "--db", str(db_path),
                 "--worker-binary", str(STREAM_WORKER),
                 "--ffmpeg-binary", str(FFMPEG_BIN),
@@ -627,7 +616,7 @@ def main():
 
         subprocess.run(
             [
-                str(OPENIDM_BIN),
+                str(RADIUM_BIN),
                 "--db", str(db_path),
                 "--out", str(dl_dir),
                 "--worker-binary", str(STREAM_WORKER),
@@ -653,7 +642,7 @@ def main():
         print("[6/8] IT-STREAM-03: MPEG-DASH (.mpd) Manifest Download & FFmpeg Muxing...")
         subprocess.run(
             [
-                str(OPENIDM_BIN),
+                str(RADIUM_BIN),
                 "--db", str(db_path),
                 "--out", str(dl_dir),
                 "--worker-binary", str(STREAM_WORKER),
@@ -672,11 +661,11 @@ def main():
         print(f"  -> PASS (Downloaded & muxed DASH MPD -> {muxed_dash.name}, duration={d_dur:.2f}s)")
 
         # ---------------------------------------------------------------------
-        # Test 7: End-to-End Native Messaging Host (openidm-nmh) + AES-128 Authenticated Stream + UI Snapshot
+        # Test 7: End-to-End Native Messaging Host (radium-nmh) + AES-128 Authenticated Stream + UI Snapshot
         # ---------------------------------------------------------------------
         print("[7/8] IT-IPC-01, IT-STREAM-06 & IT-UI-01: Native Messaging Host, AES-128 Decryption & Desktop UI Snapshot...")
         daemon_proc = subprocess.Popen(
-            [str(OPENIDM_BIN), "--daemon", "--db", str(db_path), "--out", str(dl_dir), "--ipc-socket", sock_path],
+            [str(RADIUM_BIN), "--daemon", "--db", str(db_path), "--out", str(dl_dir), "--ipc-socket", sock_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -700,10 +689,9 @@ def main():
 
         env = os.environ.copy()
         env["RADIUM_IPC_SOCKET"] = sock_path
-        env["FLUX_IPC_SOCKET"] = sock_path
-        env["OPENIDM_IPC_SOCKET"] = sock_path
+        env["RADIUM_IPC_SOCKET"] = sock_path
         nmh_proc = subprocess.Popen(
-            [str(NMH_BIN)],
+            [str(RADIUM_NMH_BIN)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -756,9 +744,9 @@ def main():
 
         log_file = db_path.parent / "radium.log"
         if not log_file.exists():
-            log_file = db_path.parent / "flux.log"
+            log_file = db_path.parent / "radium.log"
         if not log_file.exists():
-            log_file = db_path.parent / "openidm.log"
+            log_file = db_path.parent / "radium.log"
         if log_file.exists():
             log_text = log_file.read_text(encoding="utf-8")
             assert "authorized_777" not in log_text, "SECURITY VIOLATION: Cookie leaked into application log!"
@@ -769,7 +757,7 @@ def main():
         daemon_proc.wait(timeout=5)
 
         ui_snap = subprocess.run(
-            [str(OPENIDM_BIN), "--db", str(db_path), "--gui-snapshot"],
+            [str(RADIUM_BIN), "--db", str(db_path), "--gui-snapshot"],
             capture_output=True,
             text=True,
             check=True,
@@ -786,15 +774,15 @@ def main():
         bench_dir.mkdir(parents=True, exist_ok=True)
         bench_db = bench_dir / "bench_state.db"
 
-        openidm_size = OPENIDM_BIN.stat().st_size
-        nmh_size = NMH_BIN.stat().st_size
+        radium_size = RADIUM_BIN.stat().st_size
+        nmh_size = RADIUM_NMH_BIN.stat().st_size
         worker_size = STREAM_WORKER.stat().st_size
 
         # Metric 1: Cold startup latency (median of 5 runs on clean DB)
         startup_samples = []
         for _ in range(5):
             t0 = time.perf_counter()
-            subprocess.run([str(OPENIDM_BIN), "--db", str(bench_db), "--list"], capture_output=True, check=True)
+            subprocess.run([str(RADIUM_BIN), "--db", str(bench_db), "--list"], capture_output=True, check=True)
             startup_samples.append((time.perf_counter() - t0) * 1000.0)
         cold_start_ms = statistics.median(startup_samples)
 
@@ -808,7 +796,7 @@ def main():
             if bench_target_file.exists():
                 bench_target_file.unlink()
             res_stat = measure_child_command_rusage([
-                OPENIDM_BIN, "--db", run_db, "--out", bench_dir, "--connections", "8",
+                RADIUM_BIN, "--db", run_db, "--out", bench_dir, "--connections", "8",
                 "--allow-loopback",
                 "--download", f"{base_url}/files/bench_16mb.bin"
             ])
@@ -820,10 +808,10 @@ def main():
         throughput_mbps = statistics.median(http_tp_samples)
         cpu_time_16mb_ms = statistics.median(http_cpu_samples)
 
-        # Metric 4: Peak memory during HLS/DASH stream probing (OpenIDM + N_m3u8DL-RE worker)
+        # Metric 4: Peak memory during HLS/DASH stream probing (Radium + N_m3u8DL-RE worker)
         # and full muxing (including system /usr/bin/ffmpeg shared library footprint)
         probe_stat = measure_child_command_rusage([
-            OPENIDM_BIN, "--db", bench_dir / "probe_bench.db",
+            RADIUM_BIN, "--db", bench_dir / "probe_bench.db",
             "--worker-binary", str(STREAM_WORKER),
             "--ffmpeg-binary", str(FFMPEG_BIN),
             "--allow-loopback",
@@ -835,7 +823,7 @@ def main():
         ffmpeg_baseline_rss_mb = ffmpeg_base_stat["maxrss_kb"] / 1024.0
 
         stream_stat = measure_child_command_rusage([
-            OPENIDM_BIN, "--db", bench_dir / "stream_bench.db", "--out", bench_dir,
+            RADIUM_BIN, "--db", bench_dir / "stream_bench.db", "--out", bench_dir,
             "--worker-binary", str(STREAM_WORKER),
             "--ffmpeg-binary", str(FFMPEG_BIN),
             "--allow-loopback",
@@ -846,7 +834,7 @@ def main():
 
         # Metric 5: Large 1,000-Task List Responsiveness
         large_db = bench_dir / "large_1000.db"
-        subprocess.run([str(OPENIDM_BIN), "--db", str(large_db), "--list"], capture_output=True, check=True)
+        subprocess.run([str(RADIUM_BIN), "--db", str(large_db), "--list"], capture_output=True, check=True)
         conn = sqlite3.connect(str(large_db))
         now_ms = int(time.time() * 1000)
         rows_1000 = [
@@ -877,7 +865,7 @@ def main():
         conn.close()
 
         t_large0 = time.perf_counter()
-        snap_1000 = subprocess.run([str(OPENIDM_BIN), "--db", str(large_db), "--gui-snapshot"], capture_output=True, text=True, check=True)
+        snap_1000 = subprocess.run([str(RADIUM_BIN), "--db", str(large_db), "--gui-snapshot"], capture_output=True, text=True, check=True)
         large_1000_ms = (time.perf_counter() - t_large0) * 1000.0
         snap_1000_text = snap_1000.stdout + "\n" + snap_1000.stderr
         assert "[Sidebar Counts] All=1000" in snap_1000_text, "Expected 1000 tasks in snapshot"
@@ -886,13 +874,13 @@ def main():
         leftover_parts = sorted(set(
             list(dl_dir.rglob("*.part")) + list(bench_dir.rglob("*.part")) +
             list(dl_dir.rglob("*.radium.part")) + list(bench_dir.rglob("*.radium.part")) +
-            list(dl_dir.rglob("*.flux.part")) + list(bench_dir.rglob("*.flux.part")) +
-            list(dl_dir.rglob("*.openidm.part")) + list(bench_dir.rglob("*.openidm.part"))
+            list(dl_dir.rglob("*.part")) + list(bench_dir.rglob("*.part")) +
+            list(dl_dir.rglob("*.part")) + list(bench_dir.rglob("*.part"))
         ))
         leftover_temp_count = len(leftover_parts)
 
         # Enforce documented performance budgets (fail test if any limit is exceeded!)
-        assert (openidm_size + nmh_size) <= int(4.5 * 1048576), f"Core binary size exceeded 4.5 MB: {openidm_size + nmh_size}"
+        assert (radium_size + nmh_size) <= int(4.5 * 1048576), f"Core binary size exceeded 4.5 MB: {radium_size + nmh_size}"
         assert cold_start_ms <= 250.0, f"Cold startup {cold_start_ms:.2f} ms exceeded 250 ms limit"
         assert idle_daemon_rss_mb <= 25.0, f"Idle daemon RSS {idle_daemon_rss_mb:.2f} MB exceeded 25 MB limit"
         assert peak_http_rss_mb <= 65.0, f"Peak HTTP 8-conn RSS {peak_http_rss_mb:.2f} MB exceeded 65 MB limit"
@@ -912,11 +900,11 @@ def main():
             "product_name": "Radium Download Manager",
             "short_name": "Radium",
             "host_platform": f"{platform.system()} {platform.release()} ({platform.machine()})",
-            "flux_binary_bytes": openidm_size,
-            "flux_nmh_binary_bytes": nmh_size,
+            "radium_binary_bytes": radium_size,
+            "radium_nmh_binary_bytes": nmh_size,
             "nm3u8dl_re_worker_bytes": worker_size,
-            "combined_core_binaries_kb": round((openidm_size + nmh_size) / 1024.0, 1),
-            "total_all_three_binaries_kb": round((openidm_size + nmh_size + worker_size) / 1024.0, 1),
+            "combined_core_binaries_kb": round((radium_size + nmh_size) / 1024.0, 1),
+            "total_all_three_binaries_kb": round((radium_size + nmh_size + worker_size) / 1024.0, 1),
             "cold_startup_list_median_ms": round(cold_start_ms, 2),
             "idle_daemon_rss_mb": round(idle_daemon_rss_mb, 2),
             "peak_http_8conn_rss_mb": round(peak_http_rss_mb, 2),

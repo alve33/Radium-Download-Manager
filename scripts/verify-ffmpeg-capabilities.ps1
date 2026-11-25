@@ -323,7 +323,7 @@ Write-Host "`n================================================================="
 if ($MissingItems.Count -eq 0) {
     Write-Host "   Capability Audit PASSED -- All Required Features Present!    " -ForegroundColor Green
     Write-Host "=================================================================" -ForegroundColor Cyan
-    Write-Host "The binary at $FfmpegPath satisfies all Flux requirements.`n" -ForegroundColor Green
+    Write-Host "The binary at $FfmpegPath satisfies all Radium requirements.`n" -ForegroundColor Green
     exit 0
 } else {
     Write-Host "   Capability Audit FAILED -- $($MissingItems.Count) Feature(s) Missing!        " -ForegroundColor Red

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — RTSP, MMS & Live Media Stream Adapter (FFmpeg Out-of-Process Worker)
+// Radium Download Manager — RTSP, MMS & Live Media Stream Adapter (FFmpeg Out-of-Process Worker)
 #pragma once
 
 #include <atomic>
@@ -10,7 +10,7 @@
 
 #include "common/types.hpp"
 
-namespace openidm::stream {
+namespace radium::stream {
 
 struct RtspProgress {
     std::string task_id;
@@ -42,4 +42,4 @@ private:
     bool m_allow_loopback{false};
 };
 
-} // namespace openidm::stream
+} // namespace radium::stream

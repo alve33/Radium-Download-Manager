@@ -16,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-namespace openidm::remote {
+namespace radium::remote {
 
 // ============================================================================
 // 1. Stdio MCP Server (MDM crates/mcp port)
@@ -134,4 +134,4 @@ public:
         const std::string& reason);
 };
 
-} // namespace openidm::remote
+} // namespace radium::remote

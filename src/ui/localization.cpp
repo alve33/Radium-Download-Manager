@@ -17,11 +17,11 @@
 #include <windows.h>
 #endif
 
-namespace openidm::ui {
+namespace radium::ui {
 namespace {
 
 std::filesystem::path DefaultCatalogRoot() {
-    return openidm::PathSanitizer::GetExecutableDir() / "translations";
+    return radium::PathSanitizer::GetExecutableDir() / "translations";
 }
 
 const std::vector<LanguageOption> kLanguages{
@@ -99,7 +99,7 @@ bool LocalizationManager::LoadCatalog(std::string_view locale, std::map<std::str
     if (!file) return false;
     const std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     try {
-        const auto root = openidm::json::Parse(contents);
+        const auto root = radium::json::Parse(contents);
         const auto& messages = root["locales"][std::string(locale)];
         if (!messages.is_object()) return false;
         for (const auto& [key, value] : messages.as_object()) {
@@ -148,4 +148,4 @@ LocalizationManager& GetLocalizationManager() {
     return manager;
 }
 
-} // namespace openidm::ui
+} // namespace radium::ui

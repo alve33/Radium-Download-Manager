@@ -21,7 +21,7 @@
 
 #include "engine_torrent/peer_wire_protocol.hpp"
 
-namespace openidm::torrent::testing {
+namespace radium::torrent::testing {
 
 class MockPeerServer {
 public:
@@ -141,4 +141,4 @@ private:
     std::thread m_thread;
 };
 
-} // namespace openidm::torrent::testing
+} // namespace radium::torrent::testing

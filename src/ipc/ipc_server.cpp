@@ -23,7 +23,7 @@
 #include <unistd.h>
 #endif
 
-namespace openidm::ipc {
+namespace radium::ipc {
 
 namespace {
 
@@ -449,7 +449,7 @@ void IpcServer::HandleClientConnection(int client_fd) {
         ssize_t n = ::recv(client_fd, &msg_len, sizeof(msg_len), MSG_WAITALL);
         if (n != sizeof(msg_len)) break;
         if (msg_len == 0 || msg_len > 1048576) {
-            OPENIDM_LOG_WARN("IpcServer", "Rejected frame exceeding 1 MiB limit");
+            RADIUM_LOG_WARN("IpcServer", "Rejected frame exceeding 1 MiB limit");
             break;
         }
         std::string payload(msg_len, '\0');
@@ -678,12 +678,27 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
                 std::string fallback_ext = (t.task_type == TaskType::kHttpFile) ? "" : t.stream_options.output_format;
                 t.file_name = PathSanitizer::ExtractFromUrl(t.url, fallback_ext);
             }
+            SpeculativeDecisionCallback spec_cb;
             {
                 std::lock_guard<std::mutex> lock(m_offer_mutex);
                 if (!correlation_id.empty()) {
                     m_recent_offer_correlations[correlation_id] = {t.task_id, t.file_name, NowEpochMs()};
                 }
                 m_gui_pending_offers[t.task_id] = t;
+                spec_cb = m_speculative_cb;
+            }
+            if (spec_cb) {
+                auto spec_res = m_controller.BeginSpeculativeOffer(t, std::move(spec_cb));
+                if (!spec_res.ok()) {
+                    std::lock_guard<std::mutex> lock(m_offer_mutex);
+                    if (m_offer_cb) {
+                        m_offer_cb(t);
+                    } else {
+                        m_pending_offers.push_back(t);
+                    }
+                }
+            } else {
+                std::lock_guard<std::mutex> lock(m_offer_mutex);
                 if (m_offer_cb) {
                     m_offer_cb(t);
                 } else {
@@ -721,7 +736,7 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
         return MakeRpcResult(id, std::move(res)).dump();
     }
 
-    // 2b. download.getDecision (Query whether user confirmed or cancelled dialog in Flux)
+    // 2b. download.getDecision (Query whether user confirmed or cancelled dialog in Radium)
     if (method == "download.getDecision") {
         std::string tid = params["taskId"].as_string();
         {
@@ -1190,7 +1205,6 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
                 if (is_explicit_youtube) {
                     json::Object jdesc;
                     jdesc["radiumType"] = "YOUTUBE_STREAM";
-                    jdesc["fluxType"] = "YOUTUBE_STREAM";
                     jdesc["videoUrl"] = vu;
                     jdesc["audioUrl"] = au;
                     jdesc["watchUrl"] = params["tabUrl"].as_string();
@@ -1509,4 +1523,4 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
     return MakeRpcError(id, -32601, "Method not found: " + method).dump();
 }
 
-} // namespace openidm::ipc
+} // namespace radium::ipc

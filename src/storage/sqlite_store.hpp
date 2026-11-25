@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Persistent SQLite 3 Storage Layer (WAL Mode + DPAPI/AES Secret Protection)
+// Radium Download Manager — Persistent SQLite 3 Storage Layer (WAL Mode + DPAPI/AES Secret Protection)
 // Implements DATA_MODEL_AND_STORAGE.md, ADR-0007, NFR-005, NFR-009.
 #pragma once
 
@@ -11,7 +11,7 @@
 
 struct sqlite3;
 
-namespace openidm {
+namespace radium {
 
 class SqliteStore {
 public:
@@ -58,4 +58,4 @@ private:
     sqlite3* m_db{nullptr};
 };
 
-} // namespace openidm
+} // namespace radium

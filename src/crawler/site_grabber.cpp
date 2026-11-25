@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Whole-Site Crawler & Link Grabber with SSRF Protection
+// Radium Download Manager — Whole-Site Crawler & Link Grabber with SSRF Protection
 #include "crawler/site_grabber.hpp"
 
 #include <algorithm>
@@ -12,7 +12,7 @@
 #include "common/logger.hpp"
 #include "common/path_sanitizer.hpp"
 
-namespace openidm::crawler {
+namespace radium::crawler {
 
 namespace {
 
@@ -537,4 +537,4 @@ std::vector<std::string> SiteGrabber::ExpandBatchUrlTemplate(std::string_view tm
     return current;
 }
 
-} // namespace openidm::crawler
+} // namespace radium::crawler

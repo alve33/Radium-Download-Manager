@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — Native C++20 Stream Worker Executable (N_m3u8DL-RE Compatible + YouTube/Site Extractor)
+// Radium Download Manager — Native C++20 Stream Worker Executable (N_m3u8DL-RE Compatible + YouTube/Site Extractor)
 // Supports:
 //   - @args.rsp response file parsing with quoted arguments
 //   - HLS (#EXTM3U Master & Media playlists, #EXT-X-MEDIA Audio/Subtitles, #EXT-X-MAP, #EXT-X-KEY AES-128)
@@ -7,7 +7,7 @@
 //   - YouTube & Site Extraction (YOUTUBE_STREAM descriptors, ytInitialPlayerResponse HTML/JSON extraction,
 //     separate adaptive Video+Audio stream downloading & FFmpeg muxing, and external yt-dlp worker delegation)
 //   - DRM detection (SAMPLE-AES, CENC, Widevine, PlayReady, FairPlay) & meta.json emission
-//   - Multi-threaded HTTP/HTTPS segment downloading via OpenIDM's HttpClient
+//   - Multi-threaded HTTP/HTTPS segment downloading via Radium's HttpClient
 //   - Native in-process AES-128-CBC segment decryption (OpenSSL EVP / Windows CNG BCrypt)
 //   - FFmpeg container muxing (-M format=mp4|mkv:muxer=ffmpeg)
 
@@ -476,7 +476,7 @@ bool FetchBytes(
 
     out_bytes.clear();
     std::atomic<bool> cancel{false};
-    auto res = openidm::brisk::HttpClient::PerformGet(
+    auto res = radium::brisk::HttpClient::PerformGet(
         url_or_path,
         headers,
         std::nullopt,
@@ -484,7 +484,7 @@ bool FetchBytes(
         timeout_ms,
         allow_loopback,
         cancel,
-        [&](const openidm::brisk::HttpResponseMeta& meta) -> bool {
+        [&](const radium::brisk::HttpResponseMeta& meta) -> bool {
             out_resolved_url = meta.final_url;
             return true;
         },
@@ -826,7 +826,7 @@ bool TryExtractViaYtDlp(const std::string& url, ManifestMeta& meta) {
 #endif
 
     try {
-        auto root = openidm::json::Parse(out);
+        auto root = radium::json::Parse(out);
         if (!root.is_object()) return false;
         std::string direct_url = root["url"].as_string();
         if (!direct_url.empty()) {
@@ -852,10 +852,10 @@ bool TryExtractViaYtDlp(const std::string& url, ManifestMeta& meta) {
 
 bool ExtractManifestInfo(const WorkerOptions& opts, ManifestMeta& meta);
 
-bool ParseYouTubeJsonIntoMeta(const openidm::json::Value& root, const WorkerOptions& opts, ManifestMeta& meta) {
+bool ParseYouTubeJsonIntoMeta(const radium::json::Value& root, const WorkerOptions& opts, ManifestMeta& meta) {
     if (!root.is_object()) return false;
 
-    // Case A: Structured YOUTUBE_STREAM descriptor emitted by Flux extension catch.js
+    // Case A: Structured YOUTUBE_STREAM descriptor emitted by Radium extension catch.js
     if (root["radiumType"].as_string() == "YOUTUBE_STREAM" || root["fluxType"].as_string() == "YOUTUBE_STREAM") {
         std::string hls_url = root["hlsManifestUrl"].as_string();
         if (!hls_url.empty()) {
@@ -1379,7 +1379,7 @@ bool ExtractManifestInfo(const WorkerOptions& opts, ManifestMeta& meta) {
     // 3. JSON Stream Descriptor (YOUTUBE_STREAM or ytInitialPlayerResponse JSON)
     if (!text.empty() && text.front() == '{') {
         try {
-            auto root = openidm::json::Parse(text);
+            auto root = radium::json::Parse(text);
             if (ParseYouTubeJsonIntoMeta(root, opts, meta)) {
                 return true;
             }
@@ -1392,7 +1392,7 @@ bool ExtractManifestInfo(const WorkerOptions& opts, ManifestMeta& meta) {
         std::string json_str = ExtractBalancedJsonObject(text, yt_pos);
         if (!json_str.empty()) {
             try {
-                auto root = openidm::json::Parse(json_str);
+                auto root = radium::json::Parse(json_str);
                 if (ParseYouTubeJsonIntoMeta(root, opts, meta)) {
                     return true;
                 }
@@ -2202,14 +2202,14 @@ int main(int argc, char* argv[]) {
     }
 
     if (opts.write_meta_json) {
-        openidm::json::Value root = openidm::json::Object{};
+        radium::json::Value root = radium::json::Object{};
         root["url"] = meta.url;
         root["isLive"] = meta.is_live;
         root["drmProtected"] = meta.drm_protected;
         root["drmSystem"] = meta.drm_system;
-        openidm::json::Array tarr;
+        radium::json::Array tarr;
         for (const auto& tr : meta.tracks) {
-            openidm::json::Value tobj = openidm::json::Object{};
+            radium::json::Value tobj = radium::json::Object{};
             tobj["id"] = tr.id;
             tobj["mediaType"] = tr.media_type;
             tobj["groupId"] = tr.group_id;

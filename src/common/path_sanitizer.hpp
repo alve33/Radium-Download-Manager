@@ -7,7 +7,7 @@
 #include <string>
 #include "common/types.hpp"
 
-namespace openidm {
+namespace radium {
 
 class PathSanitizer {
 public:
@@ -83,4 +83,4 @@ public:
     static bool PathsEquivalent(const std::filesystem::path& p1, const std::filesystem::path& p2);
 };
 
-} // namespace openidm
+} // namespace radium

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Post-Download Antivirus Scanner Integration (Windows Defender & Custom Scanners)
+// Radium Download Manager — Post-Download Antivirus Scanner Integration (Windows Defender & Custom Scanners)
 #pragma once
 
 #include <filesystem>
@@ -8,7 +8,7 @@
 
 #include "common/types.hpp"
 
-namespace openidm::security {
+namespace radium::security {
 
 enum class ScanStatus {
     kClean,
@@ -51,4 +51,4 @@ public:
         int timeout_ms = 30000);
 };
 
-} // namespace openidm::security
+} // namespace radium::security

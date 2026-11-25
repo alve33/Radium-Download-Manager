@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM / Flux — Multi-File Storage Adaptor
+// Radium Download Manager — Multi-File Storage Adaptor
 // Direct reuse of aria2 MultiDiskAdaptor mapping and boundary offset calculation algorithms
 #pragma once
 
@@ -18,7 +18,7 @@
 #include "common/types.hpp"
 #include "engine_torrent/torrent_parser.hpp"
 
-namespace openidm::torrent {
+namespace radium::torrent {
 
 class MultiFileStorage {
 public:
@@ -267,4 +267,4 @@ private:
     }
 };
 
-} // namespace openidm::torrent
+} // namespace radium::torrent

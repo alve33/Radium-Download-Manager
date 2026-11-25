@@ -79,7 +79,7 @@ bool TestMultiPeerTransferAndSeedingControls();
 namespace {
 
 bool TestPathSanitizerAndContentDisposition() {
-    using openidm::PathSanitizer;
+    using radium::PathSanitizer;
 
     ASSERT_TRUE(PathSanitizer::SanitizeFileName("../../../etc/passwd") == "passwd", "Strip ../ traversal");
     ASSERT_TRUE(PathSanitizer::SanitizeFileName("..\\..\\Windows\\System32\\cmd.exe") == "cmd.exe", "Strip ..\\ traversal");
@@ -95,21 +95,21 @@ bool TestPathSanitizerAndContentDisposition() {
     std::string cd1 = "attachment; filename=\"fallback.mp4\"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%E8%A7%86%E9%A2%91_1080p.mp4";
     ASSERT_TRUE(PathSanitizer::ExtractFromContentDisposition(cd1) == "测试视频_1080p.mp4", "RFC 5987 UTF-8 filename*");
 
-    std::filesystem::path tmp_dir = "/tmp/openidm_test_san_" + openidm::GenerateUuidV4();
+    std::filesystem::path tmp_dir = "/tmp/openidm_test_san_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(tmp_dir);
     {
         std::ofstream(tmp_dir / "archive.zip") << "1";
     }
-    auto res = PathSanitizer::ResolveSafeOutputPath(tmp_dir, "archive.zip", openidm::ConflictPolicy::kAutoRename);
+    auto res = PathSanitizer::ResolveSafeOutputPath(tmp_dir, "archive.zip", radium::ConflictPolicy::kAutoRename);
     ASSERT_TRUE(res.ok() && res.value->filename() == "archive (1).zip", "Auto-Rename (1) conflict resolution");
-    auto prompt = PathSanitizer::ResolveSafeOutputPath(tmp_dir, "archive.zip", openidm::ConflictPolicy::kPrompt);
+    auto prompt = PathSanitizer::ResolveSafeOutputPath(tmp_dir, "archive.zip", radium::ConflictPolicy::kPrompt);
     ASSERT_TRUE(!prompt.ok() && prompt.error->code == "ERR_FILE_EXISTS", "Prompt policy surfaces a destination conflict");
     std::filesystem::remove_all(tmp_dir);
     return true;
 }
 
 bool TestTorrentRateMeterUsesPayloadDeltas() {
-    using Meter = openidm::torrent::TorrentRateMeter;
+    using Meter = radium::torrent::TorrentRateMeter;
     const auto t0 = Meter::Clock::time_point{};
     Meter download;
     ASSERT_TRUE(download.Update(100, t0) == 0, "First payload counter establishes a baseline");
@@ -151,7 +151,7 @@ bool TestTorrentRateMeterUsesPayloadDeltas() {
 }
 
 bool TestDynamicWorkerAndDiskSpaceGuard() {
-    using openidm::PathSanitizer;
+    using radium::PathSanitizer;
 
     std::filesystem::path exe_dir = PathSanitizer::GetExecutableDir();
     ASSERT_TRUE(!exe_dir.empty(), "GetExecutableDir resolves non-empty path");
@@ -174,8 +174,8 @@ bool TestDynamicWorkerAndDiskSpaceGuard() {
 }
 
 bool TestLoggerRedactionAndCrypto() {
-    using openidm::CryptoUtils;
-    using openidm::Logger;
+    using radium::CryptoUtils;
+    using radium::Logger;
 
     std::string raw_log = "Request -H \"Cookie: sid=super_secret_123\" -H \"Authorization: Bearer tok_999\" https://cdn.example/v.m3u8?token=abc12345&res=1080";
     std::string redacted = Logger::RedactSensitiveData(raw_log);
@@ -205,7 +205,7 @@ bool TestLoggerRedactionAndCrypto() {
 
 bool TestBriskSegmentSchedulerWorkStealingAndRollback() {
     const uint64_t kTotalSize = 100ULL * 1048576ULL; // 100 MiB
-    openidm::brisk::SegmentScheduler sched(kTotalSize, 4, 1048576ULL);
+    radium::brisk::SegmentScheduler sched(kTotalSize, 4, 1048576ULL);
     sched.Initialize();
 
     auto seg0 = sched.AcquireNextOrStealSegment(true);
@@ -246,14 +246,14 @@ bool TestBriskSegmentSchedulerWorkStealingAndRollback() {
 }
 
 bool TestSqliteStoreAndCrashRecovery() {
-    std::filesystem::path db_path = "/tmp/openidm_test_db_" + openidm::GenerateUuidV4() + ".db";
-    openidm::SqliteStore store;
+    std::filesystem::path db_path = "/tmp/openidm_test_db_" + radium::GenerateUuidV4() + ".db";
+    radium::SqliteStore store;
     ASSERT_TRUE(store.Open(db_path).ok(), "Open SQLite WAL database");
 
-    openidm::TaskModel t;
-    t.task_id = openidm::GenerateUuidV4();
-    t.task_type = openidm::TaskType::kHttpFile;
-    t.state = openidm::TaskState::kDownloading;
+    radium::TaskModel t;
+    t.task_id = radium::GenerateUuidV4();
+    t.task_type = radium::TaskType::kHttpFile;
+    t.state = radium::TaskState::kDownloading;
     t.url = "https://example.com/large.iso";
     t.file_name = "large.iso";
     t.save_dir = "/tmp";
@@ -263,13 +263,13 @@ bool TestSqliteStoreAndCrashRecovery() {
     t.headers["Referer"] = "https://example.com/";
     t.auth_headers["Cookie"] = "auth_session=secret_cookie_value_777";
     t.segments = {
-        openidm::Segment{0, 0, 524288, 5242879, false},
-        openidm::Segment{1, 5242880, 5242880, 10485759, false}
+        radium::Segment{0, 0, 524288, 5242879, false},
+        radium::Segment{1, 5242880, 5242880, 10485759, false}
     };
-    t.pause_reason = openidm::PauseReason::kQueueSchedule;
+    t.pause_reason = radium::PauseReason::kQueueSchedule;
     t.correlation_id = "corr-12345";
     t.uploaded_bytes = 4096;
-    t.conflict_policy = openidm::ConflictPolicy::kAutoRename;
+    t.conflict_policy = radium::ConflictPolicy::kAutoRename;
     t.scheduled = true;
     t.schedule_time_local = "03:15";
     t.schedule_stop_time_local = "07:30";
@@ -287,18 +287,18 @@ bool TestSqliteStoreAndCrashRecovery() {
 
     auto loaded = store.GetTask(t.task_id);
     ASSERT_TRUE(loaded.ok() && loaded.value->has_value(), "Loaded recovered task");
-    ASSERT_TRUE((*loaded.value)->state == openidm::TaskState::kPaused, "State transitioned to PAUSED");
+    ASSERT_TRUE((*loaded.value)->state == radium::TaskState::kPaused, "State transitioned to PAUSED");
     ASSERT_TRUE((*loaded.value)->segments[0].current_offset == 524288 - 65536, "64 KiB safety rollback applied");
     ASSERT_TRUE((*loaded.value)->auth_headers["Cookie"] == "auth_session=secret_cookie_value_777", "Decrypted Cookie restored on resume");
     ASSERT_TRUE((*loaded.value)->correlation_id == "corr-12345", "correlation_id persisted and restored");
     ASSERT_TRUE((*loaded.value)->uploaded_bytes == 4096, "uploaded_bytes persisted and restored");
-    ASSERT_TRUE((*loaded.value)->pause_reason == openidm::PauseReason::kQueueSchedule, "pause_reason persisted and restored");
-    ASSERT_TRUE((*loaded.value)->conflict_policy == openidm::ConflictPolicy::kAutoRename, "conflict_policy persisted and restored");
+    ASSERT_TRUE((*loaded.value)->pause_reason == radium::PauseReason::kQueueSchedule, "pause_reason persisted and restored");
+    ASSERT_TRUE((*loaded.value)->conflict_policy == radium::ConflictPolicy::kAutoRename, "conflict_policy persisted and restored");
     ASSERT_TRUE((*loaded.value)->scheduled == true, "scheduled flag persisted and restored");
     ASSERT_TRUE((*loaded.value)->schedule_time_local == "03:15", "schedule_time_local persisted and restored");
     ASSERT_TRUE((*loaded.value)->schedule_stop_time_local == "07:30", "schedule_stop_time_local persisted and restored");
 
-    (*loaded.value)->state = openidm::TaskState::kCompleted;
+    (*loaded.value)->state = radium::TaskState::kCompleted;
     ASSERT_TRUE(store.UpsertTask(**loaded.value).ok(), "Upsert completed task");
     auto after_comp = store.GetTask(t.task_id);
     ASSERT_TRUE(after_comp.ok() && after_comp.value->has_value(), "Reload completed task");
@@ -310,7 +310,7 @@ bool TestSqliteStoreAndCrashRecovery() {
 }
 
 bool TestStreamMetaJsonAndDrmRejection() {
-    std::filesystem::path tmp_dir = "/tmp/openidm_test_meta_" + openidm::GenerateUuidV4();
+    std::filesystem::path tmp_dir = "/tmp/openidm_test_meta_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(tmp_dir);
 
     std::filesystem::path valid_meta = tmp_dir / "valid_meta.json";
@@ -323,7 +323,7 @@ bool TestStreamMetaJsonAndDrmRejection() {
             {"id": "aud_0", "mediaType": "AUDIO", "language": "en", "bandwidth": 128000, "codecs": "mp4a", "segmentsCount": 10}
         ]
     })";
-    auto res1 = openidm::stream::Nm3u8dlReAdapter::ParseMetaJson(valid_meta);
+    auto res1 = radium::stream::Nm3u8dlReAdapter::ParseMetaJson(valid_meta);
     ASSERT_TRUE(res1.ok() && res1.value->tracks.size() == 2, "Parsed 2 tracks from valid meta.json");
 
     std::filesystem::path drm_meta = tmp_dir / "drm_meta.json";
@@ -336,11 +336,11 @@ bool TestStreamMetaJsonAndDrmRejection() {
             {"id": "vid_0", "mediaType": "VIDEO", "encryptionMethod": "CENC"}
         ]
     })";
-    auto res2 = openidm::stream::Nm3u8dlReAdapter::ParseMetaJson(drm_meta);
+    auto res2 = radium::stream::Nm3u8dlReAdapter::ParseMetaJson(drm_meta);
     ASSERT_TRUE(!res2.ok() && res2.error->code == "ERR_STREAM_DRM_PROTECTED", "Rejected Widevine DRM stream");
 
-    openidm::stream::StreamAdapterConfig scfg{"/bin/true", "/usr/bin/ffmpeg", tmp_dir, false};
-    openidm::stream::Nm3u8dlReAdapter adapter(scfg);
+    radium::stream::StreamAdapterConfig scfg{"/bin/true", "/usr/bin/ffmpeg", tmp_dir, false};
+    radium::stream::Nm3u8dlReAdapter adapter(scfg);
     auto ssrf1 = adapter.ValidateManifestSafety("https://cdn.example.com/a.m3u8", "#EXTM3U\nfile:///etc/passwd\n");
     ASSERT_TRUE(!ssrf1.ok() && ssrf1.error->code == "ERR_SEC_HOSTILE_MANIFEST", "Blocked file:// URI in manifest");
     auto flag_inj = adapter.ValidateManifestSafety("--decryption-binary-path=/tmp/evil", "");
@@ -351,43 +351,43 @@ bool TestStreamMetaJsonAndDrmRejection() {
 }
 
 bool TestControllerLifecycleAndDeletedTaskRace() {
-    std::filesystem::path work_dir = "/tmp/openidm_test_ctrl_" + openidm::GenerateUuidV4();
+    std::filesystem::path work_dir = "/tmp/openidm_test_ctrl_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(work_dir);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
-    cfg.nm3u8dl_binary_path = openidm::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", openidm::PathSanitizer::GetExecutableDir());
-    cfg.ffmpeg_binary_path = openidm::PathSanitizer::FindWorkerBinary("ffmpeg", openidm::PathSanitizer::GetExecutableDir());
+    cfg.nm3u8dl_binary_path = radium::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", radium::PathSanitizer::GetExecutableDir());
+    cfg.ffmpeg_binary_path = radium::PathSanitizer::FindWorkerBinary("ffmpeg", radium::PathSanitizer::GetExecutableDir());
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize DownloadController");
 
     // Add task in paused mode
-    openidm::TaskModel t;
+    radium::TaskModel t;
     t.url = "https://example.com/sdk_setup.exe";
     t.file_name = "sdk_setup.exe";
     t.save_dir = cfg.default_download_dir.string();
     auto added = ctrl.AddTask(t, false, false);
-    ASSERT_TRUE(added.ok() && added.value->state == openidm::TaskState::kPaused, "Added paused task");
+    ASSERT_TRUE(added.ok() && added.value->state == radium::TaskState::kPaused, "Added paused task");
     std::string tid = added.value->task_id;
 
     // Cancel task and verify RetryTask increments retry_count and transitions back to QUEUED (or PAUSED on pause)
     ASSERT_TRUE(ctrl.CancelTask(tid).ok(), "CancelTask succeeds");
     auto canceled = ctrl.GetTask(tid);
-    ASSERT_TRUE(canceled.has_value() && canceled->state == openidm::TaskState::kCanceled, "Task is CANCELED");
+    ASSERT_TRUE(canceled.has_value() && canceled->state == radium::TaskState::kCanceled, "Task is CANCELED");
 
     // Simulate completed file on disk and verify RemoveTask(id, false) NEVER deletes completed user file!
     std::filesystem::create_directories(cfg.default_download_dir);
     std::filesystem::path user_file = cfg.default_download_dir / "completed_doc.pdf";
     std::ofstream(user_file) << "important user content";
 
-    openidm::TaskModel t_comp;
+    radium::TaskModel t_comp;
     t_comp.url = "https://example.com/completed_doc.pdf";
     t_comp.file_name = "completed_doc.pdf";
     t_comp.save_dir = cfg.default_download_dir.string();
-    t_comp.state = openidm::TaskState::kCompleted;
+    t_comp.state = radium::TaskState::kCompleted;
     auto added_comp = ctrl.AddTask(t_comp, false, true);
     ASSERT_TRUE(added_comp.ok(), "Added second task");
 
@@ -401,14 +401,14 @@ bool TestControllerLifecycleAndDeletedTaskRace() {
     ASSERT_TRUE(!ctrl.GetTask(tid).has_value(), "Cleared task no longer in controller");
 
     // Verify Webpage Watch URL rejection
-    ASSERT_TRUE(openidm::PathSanitizer::IsWebpageWatchUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "YouTube watch URL recognized as webpage");
-    ASSERT_TRUE(openidm::PathSanitizer::IsWebpageWatchUrl("https://youtu.be/dQw4w9WgXcQ"), "youtu.be URL recognized as webpage");
-    ASSERT_TRUE(openidm::PathSanitizer::IsWebpageWatchUrl("https://vimeo.com/12345678"), "Vimeo watch URL recognized as webpage");
-    ASSERT_TRUE(!openidm::PathSanitizer::IsWebpageWatchUrl("https://example.com/archive.zip"), "Archive URL is not a webpage");
-    ASSERT_TRUE(!openidm::PathSanitizer::IsWebpageWatchUrl("https://example.com/video.mp4"), "MP4 URL is not a webpage");
+    ASSERT_TRUE(radium::PathSanitizer::IsWebpageWatchUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "YouTube watch URL recognized as webpage");
+    ASSERT_TRUE(radium::PathSanitizer::IsWebpageWatchUrl("https://youtu.be/dQw4w9WgXcQ"), "youtu.be URL recognized as webpage");
+    ASSERT_TRUE(radium::PathSanitizer::IsWebpageWatchUrl("https://vimeo.com/12345678"), "Vimeo watch URL recognized as webpage");
+    ASSERT_TRUE(!radium::PathSanitizer::IsWebpageWatchUrl("https://example.com/archive.zip"), "Archive URL is not a webpage");
+    ASSERT_TRUE(!radium::PathSanitizer::IsWebpageWatchUrl("https://example.com/video.mp4"), "MP4 URL is not a webpage");
 
-    openidm::TaskModel yt_task;
-    yt_task.task_type = openidm::TaskType::kHttpFile;
+    radium::TaskModel yt_task;
+    yt_task.task_type = radium::TaskType::kHttpFile;
     yt_task.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
     yt_task.file_name = "watch";
     auto yt_res = ctrl.AddTask(yt_task, false, false);
@@ -421,8 +421,8 @@ bool TestControllerLifecycleAndDeletedTaskRace() {
 }
 
 bool TestDesktopUiDesignSystemAndHighDpiLayout() {
-    using openidm::ui::DesignSystem;
-    using openidm::ui::ThemeMode;
+    using radium::ui::DesignSystem;
+    using radium::ui::ThemeMode;
 
     // Verify Radium Coral/Charcoal palette helpers
     auto dark = DesignSystem::ResolvePalette("classic_blue", false);
@@ -457,17 +457,17 @@ bool TestDesktopUiDesignSystemAndHighDpiLayout() {
 
     // Verify graceful filename truncation preserves extension
     std::string long_name = "OpenIDM_Enterprise_Windows_11_x64_Offline_Installer_Package_2026.msi";
-    std::string trunc = openidm::ui::DesktopView::TruncateFilenameGracefully(long_name, 32);
+    std::string trunc = radium::ui::DesktopView::TruncateFilenameGracefully(long_name, 32);
     ASSERT_TRUE(trunc.size() <= 32 && trunc.find("...") != std::string::npos && trunc.substr(trunc.size() - 4) == ".msi",
                 "Graceful middle-ellipsis filename truncation preserves .msi extension");
     return true;
 }
 
 bool TestNativeAnimationsAndTaskbarProgress() {
-    using openidm::ui::DesignSystem;
-    using openidm::ui::UiAnimationState;
-    using openidm::ui::TaskbarProgressState;
-    using openidm::ui::TaskbarProgressInfo;
+    using radium::ui::DesignSystem;
+    using radium::ui::UiAnimationState;
+    using radium::ui::TaskbarProgressState;
+    using radium::ui::TaskbarProgressInfo;
 
     // 1. UiAnimationState reduced_motion flag
     UiAnimationState anim;
@@ -507,18 +507,18 @@ bool TestNativeAnimationsAndTaskbarProgress() {
     ASSERT_TRUE(anim.icon_pulses["task_abc"].action == "pause", "Pulse action type matches");
 
     // 6. Taskbar progress computation logic (via DesktopView::ComputeTaskbarProgress)
-    std::filesystem::path work_dir = "/tmp/openidm_anim_taskbar_" + openidm::GenerateUuidV4();
+    std::filesystem::path work_dir = "/tmp/openidm_anim_taskbar_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(work_dir);
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
-    cfg.nm3u8dl_binary_path = openidm::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", openidm::PathSanitizer::GetExecutableDir());
-    cfg.ffmpeg_binary_path = openidm::PathSanitizer::FindWorkerBinary("ffmpeg", openidm::PathSanitizer::GetExecutableDir());
+    cfg.nm3u8dl_binary_path = radium::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", radium::PathSanitizer::GetExecutableDir());
+    cfg.ffmpeg_binary_path = radium::PathSanitizer::FindWorkerBinary("ffmpeg", radium::PathSanitizer::GetExecutableDir());
     {
-        openidm::DownloadController ctrl(cfg);
+        radium::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initializes for taskbar progress test");
-        openidm::ui::DesktopView view(ctrl);
+        radium::ui::DesktopView view(ctrl);
         view.SetWindowDimensions(1280, 720, 96);
 
         // Empty task list -> no progress
@@ -526,12 +526,12 @@ bool TestNativeAnimationsAndTaskbarProgress() {
         ASSERT_TRUE(info.state == TaskbarProgressState::kNoProgress, "Empty task list -> kNoProgress");
 
         // Add a downloading task with known size
-        openidm::TaskModel t;
-        t.task_id = openidm::GenerateUuidV4();
+        radium::TaskModel t;
+        t.task_id = radium::GenerateUuidV4();
         t.url = "https://example.com/file.bin";
         t.file_name = "file.bin";
         t.save_dir = (work_dir / "downloads").string();
-        t.state = openidm::TaskState::kDownloading;
+        t.state = radium::TaskState::kDownloading;
         t.total_bytes = 1000;
         t.downloaded_bytes = 500;
         ctrl.AddTask(t, false, false);
@@ -540,7 +540,7 @@ bool TestNativeAnimationsAndTaskbarProgress() {
         auto tasks = ctrl.ListTasks();
         ASSERT_TRUE(!tasks.empty(), "Task was added");
         auto& task_ref = tasks[0];
-        task_ref.state = openidm::TaskState::kDownloading;
+        task_ref.state = radium::TaskState::kDownloading;
         task_ref.total_bytes = 1000;
         task_ref.downloaded_bytes = 500;
         ctrl.UpdateTask(task_ref);
@@ -552,23 +552,23 @@ bool TestNativeAnimationsAndTaskbarProgress() {
 
         // Paused task when no downloads are active -> must evaluate to kNoProgress so paused downloads
         // do not leave a stale colored line on the Windows taskbar
-        task_ref.state = openidm::TaskState::kPaused;
+        task_ref.state = radium::TaskState::kPaused;
         ctrl.UpdateTask(task_ref);
         info = view.ComputeTaskbarProgress();
         ASSERT_TRUE(info.state == TaskbarProgressState::kNoProgress, "Paused task with no active downloads -> kNoProgress");
 
         // Multiple downloads aggregation: add second downloading task
-        openidm::TaskModel t2;
-        t2.task_id = openidm::GenerateUuidV4();
+        radium::TaskModel t2;
+        t2.task_id = radium::GenerateUuidV4();
         t2.url = "https://example.com/file2.bin";
         t2.file_name = "file2.bin";
         t2.save_dir = (work_dir / "downloads").string();
-        t2.state = openidm::TaskState::kDownloading;
+        t2.state = radium::TaskState::kDownloading;
         t2.total_bytes = 2000;
         t2.downloaded_bytes = 1000;
         ctrl.AddTask(t2, false, false);
 
-        task_ref.state = openidm::TaskState::kDownloading;
+        task_ref.state = radium::TaskState::kDownloading;
         ctrl.UpdateTask(task_ref);
 
         info = view.ComputeTaskbarProgress();
@@ -582,9 +582,9 @@ bool TestNativeAnimationsAndTaskbarProgress() {
         auto tasks_after = ctrl.ListTasks();
         // Set one task to failed and one to canceled in history
         if (tasks_after.size() >= 2) {
-            tasks_after[0].state = openidm::TaskState::kFailed;
+            tasks_after[0].state = radium::TaskState::kFailed;
             ctrl.UpdateTask(tasks_after[0]);
-            tasks_after[1].state = openidm::TaskState::kCanceled;
+            tasks_after[1].state = radium::TaskState::kCanceled;
             ctrl.UpdateTask(tasks_after[1]);
         }
         info = view.ComputeTaskbarProgress();
@@ -592,12 +592,12 @@ bool TestNativeAnimationsAndTaskbarProgress() {
                     "Historical failed and canceled tasks -> kNoProgress");
 
         // Complete a download while older failed/canceled tasks remain in history
-        openidm::TaskModel t3;
-        t3.task_id = openidm::GenerateUuidV4();
+        radium::TaskModel t3;
+        t3.task_id = radium::GenerateUuidV4();
         t3.url = "https://example.com/file3.bin";
         t3.file_name = "file3.bin";
         t3.save_dir = (work_dir / "downloads").string();
-        t3.state = openidm::TaskState::kDownloading;
+        t3.state = radium::TaskState::kDownloading;
         t3.total_bytes = 5000;
         t3.downloaded_bytes = 2500;
         ctrl.AddTask(t3, false, false);
@@ -610,7 +610,7 @@ bool TestNativeAnimationsAndTaskbarProgress() {
         auto all_now = ctrl.ListTasks();
         for (auto& item : all_now) {
             if (item.task_id == t3.task_id) {
-                item.state = openidm::TaskState::kCompleted;
+                item.state = radium::TaskState::kCompleted;
                 item.downloaded_bytes = 5000;
                 ctrl.UpdateTask(item);
             }
@@ -621,12 +621,12 @@ bool TestNativeAnimationsAndTaskbarProgress() {
 
         // Verify scenario where all tasks finish (all kCompleted, kFailed, kCanceled)
         // Ensure no stale indicator remains and taskbar state evaluates to kNoProgress
-        openidm::TaskModel t4;
-        t4.task_id = openidm::GenerateUuidV4();
+        radium::TaskModel t4;
+        t4.task_id = radium::GenerateUuidV4();
         t4.url = "https://example.com/file4.bin";
         t4.file_name = "file4.bin";
         t4.save_dir = (work_dir / "downloads").string();
-        t4.state = openidm::TaskState::kDownloading;
+        t4.state = radium::TaskState::kDownloading;
         t4.total_bytes = 10000;
         t4.downloaded_bytes = 4000;
         ctrl.AddTask(t4, false, false);
@@ -639,12 +639,12 @@ bool TestNativeAnimationsAndTaskbarProgress() {
         ASSERT_TRUE(info.state == TaskbarProgressState::kNoProgress, "Canceling last active task resets taskbar to kNoProgress");
 
         // Add t5 and fail it -> taskbar must reset to kNoProgress
-        openidm::TaskModel t5;
-        t5.task_id = openidm::GenerateUuidV4();
+        radium::TaskModel t5;
+        t5.task_id = radium::GenerateUuidV4();
         t5.url = "https://example.com/file5.bin";
         t5.file_name = "file5.bin";
         t5.save_dir = (work_dir / "downloads").string();
-        t5.state = openidm::TaskState::kDownloading;
+        t5.state = radium::TaskState::kDownloading;
         t5.total_bytes = 8000;
         t5.downloaded_bytes = 1000;
         ctrl.AddTask(t5, false, false);
@@ -652,7 +652,7 @@ bool TestNativeAnimationsAndTaskbarProgress() {
         ASSERT_TRUE(info.state == TaskbarProgressState::kNormal, "Active download is kNormal");
 
         auto t5_task = ctrl.GetTask(t5.task_id).value();
-        t5_task.state = openidm::TaskState::kFailed;
+        t5_task.state = radium::TaskState::kFailed;
         t5_task.error_code = "ERR_CONNECTION_RESET";
         ctrl.UpdateTask(t5_task);
         info = view.ComputeTaskbarProgress();
@@ -664,15 +664,15 @@ bool TestNativeAnimationsAndTaskbarProgress() {
 
     // 7. Verify Settings dropdowns: max_concurrent_tasks selectable to 6 directly
     {
-        std::filesystem::path work_dir2 = "/tmp/openidm_dropdown_" + openidm::GenerateUuidV4();
+        std::filesystem::path work_dir2 = "/tmp/openidm_dropdown_" + radium::GenerateUuidV4();
         std::filesystem::create_directories(work_dir2);
-        openidm::ControllerConfig cfg2;
+        radium::ControllerConfig cfg2;
         cfg2.state_db_path = work_dir2 / "state.db";
         cfg2.default_download_dir = work_dir2 / "downloads";
         cfg2.temp_root_dir = work_dir2 / "tmp";
-        openidm::DownloadController ctrl2(cfg2);
+        radium::DownloadController ctrl2(cfg2);
         ASSERT_TRUE(ctrl2.Initialize().ok(), "Controller initializes for dropdown test");
-        openidm::ui::DesktopView view2(ctrl2);
+        radium::ui::DesktopView view2(ctrl2);
         view2.SetWindowDimensions(1280, 720, 96);
         ASSERT_TRUE(view2.SetDraftSettingByKey("max_concurrent_tasks", "6").ok(),
                     "max_concurrent_tasks = 6 is valid (dropdown reachable in 1 click)");
@@ -693,18 +693,18 @@ bool TestNativeAnimationsAndTaskbarProgress() {
 }
 
 bool TestProfessionalSettingsCenterValidationAndPersistence() {
-    std::filesystem::path work_dir = "/tmp/openidm_test_settings_" + openidm::GenerateUuidV4();
+    std::filesystem::path work_dir = "/tmp/openidm_test_settings_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(work_dir);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
-    cfg.nm3u8dl_binary_path = openidm::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", openidm::PathSanitizer::GetExecutableDir());
-    cfg.ffmpeg_binary_path = openidm::PathSanitizer::FindWorkerBinary("ffmpeg", openidm::PathSanitizer::GetExecutableDir());
+    cfg.nm3u8dl_binary_path = radium::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", radium::PathSanitizer::GetExecutableDir());
+    cfg.ffmpeg_binary_path = radium::PathSanitizer::FindWorkerBinary("ffmpeg", radium::PathSanitizer::GetExecutableDir());
 
     {
-        openidm::SqliteStore legacy_settings;
+        radium::SqliteStore legacy_settings;
         ASSERT_TRUE(legacy_settings.Open(cfg.state_db_path).ok(), "Create database for legacy automatic-language migration");
         ASSERT_TRUE(legacy_settings.SetSetting("app_settings", R"({"language":"system"})").ok(),
                     "Seed the old automatic language preference");
@@ -712,34 +712,34 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
     }
 
     {
-        openidm::DownloadController ctrl(cfg);
+        radium::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for Settings Center test");
         ASSERT_TRUE(ctrl.GetSettings().language == "en", "Legacy automatic language preference migrates to explicit English");
         ASSERT_TRUE(ctrl.GetSettings().last_download_dir.empty(), "Canceled dialogs leave remembered folder unchanged");
-        openidm::ui::DesktopView view(ctrl);
+        radium::ui::DesktopView view(ctrl);
         view.SetWindowDimensions(1280, 720, 96);
         ASSERT_TRUE(!view.SetDraftSettingByKey("language", "system").ok(),
                     "Automatic language selection is not offered as a user preference");
 
         // Open Settings Center via toolbar action
-        ASSERT_TRUE(view.TriggerToolbarAction(openidm::ui::ToolbarActionId::kSettings).ok(), "Open Settings Center");
+        ASSERT_TRUE(view.TriggerToolbarAction(radium::ui::ToolbarActionId::kSettings).ok(), "Open Settings Center");
         ASSERT_TRUE(view.IsSettingsCenterOpen(), "Settings Center is open");
 
         auto sv = view.BuildSettingsCenterView();
         ASSERT_TRUE(sv.categories.size() == 8, "Settings Center omits the removed File Types category");
         for (const auto& category : sv.categories) ASSERT_TRUE(category.label != "File Types", "File Types category is absent");
-        view.SelectSettingsCategory(openidm::ui::SettingsCategory::kAboutAndDiagnostics);
+        view.SelectSettingsCategory(radium::ui::SettingsCategory::kAboutAndDiagnostics);
         view.SetSettingsSearchQuery("Check for Updates");
         sv = view.BuildSettingsCenterView();
         ASSERT_TRUE(sv.visible_items.size() == 1 && sv.visible_items[0].key == "check_for_updates" &&
-                    sv.visible_items[0].control_type == openidm::ui::SettingControlType::kActionButton,
+                    sv.visible_items[0].control_type == radium::ui::SettingControlType::kActionButton,
                     "About settings exposes a functional GitHub update check action");
         view.SetSettingsSearchQuery("");
-        const auto stable_compare = openidm::CompareSemanticVersions("v1.0.1", "1.0.0");
-        const auto pre_compare = openidm::CompareSemanticVersions("2.0.0-rc.1", "2.0.0");
+        const auto stable_compare = radium::CompareSemanticVersions("v1.0.1", "1.0.0");
+        const auto pre_compare = radium::CompareSemanticVersions("2.0.0-rc.1", "2.0.0");
         ASSERT_TRUE(stable_compare.has_value() && *stable_compare > 0 && pre_compare.has_value() && *pre_compare < 0,
                     "Semantic release comparison handles tags and prereleases");
-        ASSERT_TRUE(!openidm::CompareSemanticVersions("1.0", "1.0.0").has_value(), "Malformed semantic versions are rejected");
+        ASSERT_TRUE(!radium::CompareSemanticVersions("1.0", "1.0.0").has_value(), "Malformed semantic versions are rejected");
         ASSERT_TRUE(!sv.has_unsaved_changes && sv.is_valid, "Clean initial state in Settings Center");
 
         // Test Settings Search across categories
@@ -779,7 +779,7 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
 
     // Re-open controller on the same state.db and verify all settings persisted across restart
     {
-        openidm::DownloadController ctrl2(cfg);
+        radium::DownloadController ctrl2(cfg);
         ASSERT_TRUE(ctrl2.Initialize().ok(), "Re-initialize controller from persisted state.db");
         auto s = ctrl2.GetSettings();
         ASSERT_TRUE(s.max_concurrent_tasks == 6, "Persisted max_concurrent_tasks == 6");
@@ -787,7 +787,7 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
         ASSERT_TRUE(s.speed_limit_bps == 10485760ULL, "Persisted speed_limit_bps == 10 MiB/s");
         ASSERT_TRUE(s.last_download_dir == std::filesystem::weakly_canonical(cfg.default_download_dir).string(),
                     "Last selected download directory survives controller restart");
-        ASSERT_TRUE(s.conflict_policy == openidm::ConflictPolicy::kOverwrite, "Persisted conflict_policy == kOverwrite");
+        ASSERT_TRUE(s.conflict_policy == radium::ConflictPolicy::kOverwrite, "Persisted conflict_policy == kOverwrite");
         ASSERT_TRUE(s.reduced_motion, "Persisted reduced_motion == true");
         ASSERT_TRUE(s.language == "ja", "Explicit language preference survives application restart");
         ctrl2.Shutdown();
@@ -798,19 +798,19 @@ bool TestProfessionalSettingsCenterValidationAndPersistence() {
 }
 
 bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
-    std::filesystem::path work_dir = "/tmp/openidm_test_ui_" + openidm::GenerateUuidV4();
+    std::filesystem::path work_dir = "/tmp/openidm_test_ui_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(work_dir);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
-    cfg.nm3u8dl_binary_path = openidm::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", openidm::PathSanitizer::GetExecutableDir());
-    cfg.ffmpeg_binary_path = openidm::PathSanitizer::FindWorkerBinary("ffmpeg", openidm::PathSanitizer::GetExecutableDir());
+    cfg.nm3u8dl_binary_path = radium::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", radium::PathSanitizer::GetExecutableDir());
+    cfg.ffmpeg_binary_path = radium::PathSanitizer::FindWorkerBinary("ffmpeg", radium::PathSanitizer::GetExecutableDir());
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for UI test");
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
 
     // 1. Responsive column hiding at compact width vs full width
     view.SetWindowDimensions(920, 600, 96);
@@ -847,11 +847,11 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
     ASSERT_TRUE(view.GetEmptyStateMessage().find("Add URL") != std::string::npos, "First launch empty state guides user");
 
     // 3. Add Download Dialog validation (rejects invalid URL, accepts valid URL)
-    openidm::ui::AddDownloadDialogInput bad_in;
+    radium::ui::AddDownloadDialogInput bad_in;
     bad_in.url = "gopher://invalid-scheme/file.zip";
     ASSERT_TRUE(!view.SubmitAddDownloadDialog(bad_in).ok(), "Add Download dialog rejects unsupported scheme");
 
-    openidm::ui::AddDownloadDialogInput file_in;
+    radium::ui::AddDownloadDialogInput file_in;
     file_in.url = "https://cdn.example.com/archive.zip?token=secret_query_token_999";
     file_in.custom_filename = "archive.zip";
     file_in.save_dir = cfg.default_download_dir.string();
@@ -860,8 +860,8 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
     ASSERT_TRUE(file_task.ok(), "Add Download dialog creates HTTP file task");
 
     // 4. Add a video stream task with sensitive Cookie header and unknown total_bytes
-    openidm::TaskModel stream_t;
-    stream_t.task_type = openidm::TaskType::kStreamHls;
+    radium::TaskModel stream_t;
+    stream_t.task_type = radium::TaskType::kStreamHls;
     stream_t.url = "https://vod.example.com/lecture.m3u8?sig=private_sig_123";
     stream_t.file_name = "lecture.mp4";
     stream_t.save_dir = cfg.default_download_dir.string();
@@ -878,13 +878,13 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
                 "Category counts accurately reflect unified task queue");
 
     // 6. Filter by Video Downloads category
-    view.SelectCategory(openidm::ui::SidebarCategory::kVideoDownloads);
+    view.SelectCategory(radium::ui::SidebarCategory::kVideoDownloads);
     auto video_rows = view.BuildVisibleTaskRows();
     ASSERT_TRUE(video_rows.size() == 1 && video_rows[0].file_type_badge == "HLS STREAM", "Video category filters to HLS stream");
     ASSERT_TRUE(video_rows[0].progress_text.find("50.0%") != std::string::npos, "Stream with known segment count shows segment %");
 
     // 7. Unknown total_bytes on ordinary HTTP file must NOT show a fake percentage (Phase 2D)
-    view.SelectCategory(openidm::ui::SidebarCategory::kAllDownloads);
+    view.SelectCategory(radium::ui::SidebarCategory::kAllDownloads);
     view.SetSearchQuery("archive.zip");
     auto archive_rows = view.BuildVisibleTaskRows();
     ASSERT_TRUE(archive_rows.size() == 1, "Search filter matches archive.zip");
@@ -902,12 +902,12 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
     ASSERT_TRUE(details.engine_name.find("N_m3u8DL-RE") != std::string::npos, "Details Panel shows stream engine");
 
     // 9. Settings persistence & restore defaults (preserving dark mode palette)
-    openidm::AppSettings custom_s = ctrl.GetSettings();
+    radium::AppSettings custom_s = ctrl.GetSettings();
     custom_s.theme = "dark";
     custom_s.max_concurrent_tasks = 6;
     custom_s.speed_limit_bps = 5242880;
     ASSERT_TRUE(view.ActionSaveSettings(custom_s).ok(), "Save custom settings");
-    ASSERT_TRUE(view.GetPalette().mode == openidm::ui::ThemeMode::kDark && ctrl.GetMaxConcurrentTasks() == 6,
+    ASSERT_TRUE(view.GetPalette().mode == radium::ui::ThemeMode::kDark && ctrl.GetMaxConcurrentTasks() == 6,
                 "Settings applied while keeping application in Cosmic Dark mode");
 
     auto restored = view.ActionRestoreDefaultSettings();
@@ -919,21 +919,21 @@ bool TestDesktopUiInteractionsFilteringSortingAndRedaction() {
 }
 
 bool TestKeyboardNavigationAndShortcuts() {
-    std::filesystem::path work_dir = "/tmp/openidm_test_keys_" + openidm::GenerateUuidV4();
+    std::filesystem::path work_dir = "/tmp/openidm_test_keys_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(work_dir);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for keyboard test");
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
 
-    view.OpenSettingsCenter(openidm::ui::SettingsCategory::kKeyboardShortcuts);
+    view.OpenSettingsCenter(radium::ui::SettingsCategory::kKeyboardShortcuts);
     auto settings_view = view.BuildSettingsCenterView();
-    ASSERT_TRUE(settings_view.active_category == openidm::ui::SettingsCategory::kKeyboardShortcuts,
+    ASSERT_TRUE(settings_view.active_category == radium::ui::SettingsCategory::kKeyboardShortcuts,
                 "Keyboard Shortcuts is a selectable Settings category");
     ASSERT_TRUE(settings_view.visible_items.size() == 10,
                 "Settings lists all ten supported shortcut entries");
@@ -943,14 +943,14 @@ bool TestKeyboardNavigationAndShortcuts() {
     view.CloseSettingsCenter();
 
     for (int i = 1; i <= 3; ++i) {
-        openidm::TaskModel t;
+        radium::TaskModel t;
         t.url = "https://example.com/file_" + std::to_string(i) + ".bin";
         t.file_name = "file_" + std::to_string(i) + ".bin";
         t.created_at_ms = 1000 * i;
         ctrl.AddTask(t, false, true);
     }
 
-    view.SetSort(openidm::ui::SortColumn::kFileName, true);
+    view.SetSort(radium::ui::SortColumn::kFileName, true);
     view.HandleKeyShortcut("VK_HOME");
     auto first_id = view.GetSelectedTaskId();
     ASSERT_TRUE(!first_id.empty(), "VK_HOME selects first row");
@@ -972,29 +972,29 @@ bool TestKeyboardNavigationAndShortcuts() {
 }
 
 bool TestDesktopUiHitTestingAndMouseInteractions() {
-    std::filesystem::path work_dir = "/tmp/openidm_test_hit_" + openidm::GenerateUuidV4();
+    std::filesystem::path work_dir = "/tmp/openidm_test_hit_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(work_dir);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for hit-test suite");
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
     view.SetWindowDimensions(1280, 720, 96);
 
     // Add 2 tasks (1 with a very long filename to trigger truncation & tooltip)
-    openidm::TaskModel t1;
+    radium::TaskModel t1;
     t1.url = "https://example.com/short.zip";
     t1.file_name = "short.zip";
     t1.created_at_ms = 1000;
     t1.total_bytes = 2048;
     ctrl.AddTask(t1, false, true);
 
-    openidm::TaskModel t2;
-    t2.task_type = openidm::TaskType::kStreamHls;
+    radium::TaskModel t2;
+    t2.task_type = radium::TaskType::kStreamHls;
     t2.url = "https://example.com/master.m3u8";
     t2.file_name = "Very_Long_University_Computer_Science_Lecture_Recording_2026_1080p_60fps.mp4";
     t2.created_at_ms = 2000;
@@ -1027,24 +1027,24 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
     }
     view.SetWindowDimensions(1280, 720, 96);
 
-    view.SelectCategory(openidm::ui::SidebarCategory::kPaused);
+    view.SelectCategory(radium::ui::SidebarCategory::kPaused);
     ASSERT_TRUE(view.BuildVisibleTaskRows().size() == 2, "Paused navigation filters the actual paused task objects");
-    view.SelectCategory(openidm::ui::SidebarCategory::kInProgress);
+    view.SelectCategory(radium::ui::SidebarCategory::kInProgress);
     ASSERT_TRUE(view.BuildVisibleTaskRows().empty(), "Active navigation excludes paused tasks");
-    view.SelectCategory(openidm::ui::SidebarCategory::kCompleted);
+    view.SelectCategory(radium::ui::SidebarCategory::kCompleted);
     ASSERT_TRUE(view.BuildVisibleTaskRows().empty(), "Completed navigation excludes paused tasks");
-    view.SelectCategory(openidm::ui::SidebarCategory::kAllDownloads);
+    view.SelectCategory(radium::ui::SidebarCategory::kAllDownloads);
 
     // 1. Legacy categories remain filterable through the view model.
-    view.SelectCategory(openidm::ui::SidebarCategory::kVideoDownloads);
-    ASSERT_TRUE(view.GetSelectedCategory() == openidm::ui::SidebarCategory::kVideoDownloads, "Category switched to Video Downloads");
+    view.SelectCategory(radium::ui::SidebarCategory::kVideoDownloads);
+    ASSERT_TRUE(view.GetSelectedCategory() == radium::ui::SidebarCategory::kVideoDownloads, "Category switched to Video Downloads");
     ASSERT_TRUE(view.BuildVisibleTaskRows().size() == 1, "Filtered to 1 video task");
 
     // 2. Click Sidebar 'All Downloads' category (index 0)
     const auto& all_cat_rc = geom.sidebar_items[0].rect;
     ASSERT_TRUE(view.HitTestPoint((all_cat_rc.left + all_cat_rc.right) / 2,
                                   (all_cat_rc.top + all_cat_rc.bottom) / 2, 0).type ==
-                    openidm::ui::HitTargetType::kSidebarCategory,
+                    radium::ui::HitTargetType::kSidebarCategory,
                 "All Downloads is hit-tested as sidebar navigation, not the toolbar filter dropdown");
     ASSERT_TRUE(view.HandleMouseClick((all_cat_rc.left + all_cat_rc.right) / 2, (all_cat_rc.top + all_cat_rc.bottom) / 2, false),
                 "Click All Downloads category");
@@ -1053,11 +1053,11 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
     // Settings remains a functional bottom-anchored sidebar target.
     ASSERT_TRUE(view.HitTestPoint((geom.sidebar_settings_rect.left + geom.sidebar_settings_rect.right) / 2,
                                   (geom.sidebar_settings_rect.top + geom.sidebar_settings_rect.bottom) / 2).type ==
-                    openidm::ui::HitTargetType::kSidebarSettingsButton,
+                    radium::ui::HitTargetType::kSidebarSettingsButton,
                 "Bottom sidebar Settings hit target is reachable");
     ASSERT_TRUE(view.HitTestPoint((geom.sidebar_language_rect.left + geom.sidebar_language_rect.right) / 2,
                                   (geom.sidebar_language_rect.top + geom.sidebar_language_rect.bottom) / 2).type ==
-                    openidm::ui::HitTargetType::kSidebarLanguageButton,
+                    radium::ui::HitTargetType::kSidebarLanguageButton,
                 "Standalone Language button above Settings is reachable");
     ASSERT_TRUE(view.HandleMouseClick((geom.sidebar_settings_rect.left + geom.sidebar_settings_rect.right) / 2,
                                       (geom.sidebar_settings_rect.top + geom.sidebar_settings_rect.bottom) / 2, false) &&
@@ -1068,22 +1068,22 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
     geom = view.ComputeLayoutGeometry(0);
     const auto& fn_rc = geom.task_rows[0].filename_rect;
     auto hover_res = view.HandleMouseMove((fn_rc.left + fn_rc.right) / 2, (fn_rc.top + fn_rc.bottom) / 2);
-    ASSERT_TRUE(hover_res.type == openidm::ui::HitTargetType::kTaskRow, "Hover hit-tests task row");
+    ASSERT_TRUE(hover_res.type == radium::ui::HitTargetType::kTaskRow, "Hover hit-tests task row");
     ASSERT_TRUE(view.GetActiveTooltip() == "Very_Long_University_Computer_Science_Lecture_Recording_2026_1080p_60fps.mp4",
                 "Hovering truncated filename exposes full untruncated filename in tooltip");
     const auto& next_row = geom.task_rows[1].row_rect;
     auto next_hover = view.HandleMouseMove((next_row.left + next_row.right) / 2, (next_row.top + next_row.bottom) / 2);
-    ASSERT_TRUE(next_hover.type == openidm::ui::HitTargetType::kTaskRow && view.GetHoveredRowIndex() == 1,
+    ASSERT_TRUE(next_hover.type == radium::ui::HitTargetType::kTaskRow && view.GetHoveredRowIndex() == 1,
                 "Moving the pointer to the next task row updates hover state immediately");
 
     // 4. Verify Table Column Headers are interactive (click sorts, divider hit-test resizes)
     const auto& col0_rc = geom.table_columns[0].rect;
     auto hit_hdr = view.HitTestPoint((col0_rc.left + col0_rc.right) / 2, (col0_rc.top + col0_rc.bottom) / 2);
-    ASSERT_TRUE(hit_hdr.type == openidm::ui::HitTargetType::kTableHeaderColumn && hit_hdr.index == 0,
+    ASSERT_TRUE(hit_hdr.type == radium::ui::HitTargetType::kTableHeaderColumn && hit_hdr.index == 0,
                 "Header column hit-test identifies column 0");
     ASSERT_TRUE(view.HandleMouseClick((col0_rc.left + col0_rc.right) / 2, (col0_rc.top + col0_rc.bottom) / 2, false),
                 "Clicking column header triggers sort toggle");
-    ASSERT_TRUE(view.GetSortColumn() == openidm::ui::SortColumn::kFileName && view.IsSortAscending(),
+    ASSERT_TRUE(view.GetSortColumn() == radium::ui::SortColumn::kFileName && view.IsSortAscending(),
                 "Clicking column 0 header sorts by Filename ascending");
     ASSERT_TRUE(view.HitTestColumnDivider((col0_rc.left + col0_rc.right) / 2, (col0_rc.top + col0_rc.bottom) / 2) == -1,
                 "Column center is not a resize divider");
@@ -1091,25 +1091,25 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
                 "Column 0 right edge hits divider 0");
 
     // Verify sorting remains fully functional via view sort controls
-    view.ToggleSortColumn(openidm::ui::SortColumn::kFileName);
+    view.ToggleSortColumn(radium::ui::SortColumn::kFileName);
     ASSERT_TRUE(!view.IsSortAscending(), "Toggled Filename sort to descending via sort control");
-    view.ToggleSortColumn(openidm::ui::SortColumn::kFileName);
+    view.ToggleSortColumn(radium::ui::SortColumn::kFileName);
     ASSERT_TRUE(view.IsSortAscending(), "Toggled Filename sort back to ascending via sort control");
 
     // Near a row boundary, reclaim the otherwise unusable strip and keep
     // completed-history actions wide enough to show their full labels.
     for (int i = 0; i < 6; ++i) {
-        openidm::TaskModel extra;
+        radium::TaskModel extra;
         extra.url = "https://example.com/extra_" + std::to_string(i) + ".bin";
         extra.file_name = "extra_" + std::to_string(i) + ".bin";
         extra.created_at_ms = 3000 + i;
         ASSERT_TRUE(ctrl.AddTask(std::move(extra), false, true).ok(), "Add extra task for dense table geometry");
     }
-    openidm::TaskModel completed;
+    radium::TaskModel completed;
     completed.url = "https://example.com/completed.bin";
     completed.file_name = "completed.bin";
     completed.save_dir = (work_dir / "downloads").string();
-    completed.state = openidm::TaskState::kCompleted;
+    completed.state = radium::TaskState::kCompleted;
     completed.total_bytes = 10;
     completed.downloaded_bytes = 10;
     completed.created_at_ms = 10000;
@@ -1121,8 +1121,8 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
     ASSERT_TRUE(compact_geom.task_row_height == 51 && compact_geom.task_rows.size() == 6,
                 "Slightly reduce row height to show the next file instead of leaving a near-row-sized blank strip");
     auto remove_action = std::find_if(compact_geom.details_action_buttons.begin(), compact_geom.details_action_buttons.end(),
-        [](const openidm::ui::DetailsActionButtonLayout& action) {
-            return action.action_id == openidm::ui::DetailsActionId::kRemoveHistory;
+        [](const radium::ui::DetailsActionButtonLayout& action) {
+            return action.action_id == radium::ui::DetailsActionId::kRemoveHistory;
         });
     ASSERT_TRUE(remove_action != compact_geom.details_action_buttons.end() && remove_action->rect.width() >= 32,
                 "Remove from History button gets compact icon styling and valid dimensions");
@@ -1133,17 +1133,17 @@ bool TestDesktopUiHitTestingAndMouseInteractions() {
 }
 
 bool TestWorkerLifecycleAndIncompatibleWorkerDetection() {
-    std::filesystem::path tmp_dir = "/tmp/openidm_test_worker_" + openidm::GenerateUuidV4();
+    std::filesystem::path tmp_dir = "/tmp/openidm_test_worker_" + radium::GenerateUuidV4();
     std::filesystem::create_directories(tmp_dir);
 
     // 1. Missing worker binary must be detected and reported as ERR_DEPENDENCY_MISSING
-    openidm::stream::StreamAdapterConfig missing_cfg{
+    radium::stream::StreamAdapterConfig missing_cfg{
         tmp_dir / "nonexistent_N_m3u8DL-RE",
         "/usr/bin/ffmpeg",
         tmp_dir,
         true
     };
-    openidm::stream::Nm3u8dlReAdapter missing_adapter(missing_cfg);
+    radium::stream::Nm3u8dlReAdapter missing_adapter(missing_cfg);
     auto v1 = missing_adapter.VerifyWorkerBinary();
     ASSERT_TRUE(!v1.ok() && v1.error->code == "ERR_DEPENDENCY_MISSING", "Missing worker reported as ERR_DEPENDENCY_MISSING");
 
@@ -1156,25 +1156,25 @@ bool TestWorkerLifecycleAndIncompatibleWorkerDetection() {
 #else
     std::filesystem::path bad_binary = "/bin/false";
 #endif
-    openidm::stream::StreamAdapterConfig bad_cfg{
+    radium::stream::StreamAdapterConfig bad_cfg{
         bad_binary,
         "/usr/bin/ffmpeg",
         tmp_dir,
         true
     };
-    openidm::stream::Nm3u8dlReAdapter bad_adapter(bad_cfg);
+    radium::stream::Nm3u8dlReAdapter bad_adapter(bad_cfg);
     auto v2 = bad_adapter.VerifyWorkerBinary();
     ASSERT_TRUE(!v2.ok() && v2.error->code == "ERR_WORKER_INCOMPATIBLE", "Incompatible worker reported as ERR_WORKER_INCOMPATIBLE");
 
     // 3. Valid compiled worker binary passes VerifyWorkerBinary
-    auto valid_worker = openidm::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", openidm::PathSanitizer::GetExecutableDir());
-    openidm::stream::StreamAdapterConfig good_cfg{
+    auto valid_worker = radium::PathSanitizer::FindWorkerBinary("N_m3u8DL-RE", radium::PathSanitizer::GetExecutableDir());
+    radium::stream::StreamAdapterConfig good_cfg{
         valid_worker,
-        openidm::PathSanitizer::FindWorkerBinary("ffmpeg", openidm::PathSanitizer::GetExecutableDir()),
+        radium::PathSanitizer::FindWorkerBinary("ffmpeg", radium::PathSanitizer::GetExecutableDir()),
         tmp_dir,
         true
     };
-    openidm::stream::Nm3u8dlReAdapter good_adapter(good_cfg);
+    radium::stream::Nm3u8dlReAdapter good_adapter(good_cfg);
     auto v3 = good_adapter.VerifyWorkerBinary();
     ASSERT_TRUE(v3.ok() && (!v3.value->empty() && (v3.value->find("N_m3u8DL-RE") != std::string::npos || v3.value->find("0.") != std::string::npos)), "Valid compiled worker passes --version check");
 
@@ -1183,7 +1183,7 @@ bool TestWorkerLifecycleAndIncompatibleWorkerDetection() {
 }
 
 bool TestRadiumBrandingAndLegacyDataMigration() {
-    using openidm::PathSanitizer;
+    using radium::PathSanitizer;
     std::filesystem::path app_data = PathSanitizer::GetDefaultAppDataDir();
     ASSERT_TRUE(app_data.string().find("Radium") != std::string::npos, "AppData dir contains Radium");
 
@@ -1195,13 +1195,13 @@ bool TestRadiumBrandingAndLegacyDataMigration() {
     ASSERT_TRUE(downloads.filename() == "Radium_Downloads", "Non-Windows fallback uses Radium_Downloads");
 #endif
 
-    openidm::ui::AboutDialogView about;
+    radium::ui::AboutDialogView about;
     ASSERT_TRUE(about.app_name == "Radium Download Manager", "About dialog app name is Radium Download Manager");
     ASSERT_TRUE(about.version == RADIUM_VERSION_STRING, "About dialog version matches RADIUM_VERSION_STRING");
 
     // Test migration logic: create mock legacy OpenIDM & Flux directory and verify clean copy to Radium
     std::error_code ec;
-    std::filesystem::path mock_root = std::filesystem::temp_directory_path(ec) / ("radium_test_mig_" + openidm::GenerateUuidV4());
+    std::filesystem::path mock_root = std::filesystem::temp_directory_path(ec) / ("radium_test_mig_" + radium::GenerateUuidV4());
     std::filesystem::path legacy_dir = mock_root / "OpenIDM";
     std::filesystem::path legacy_flux = mock_root / "Flux Download Manager";
     std::filesystem::path target_radium = mock_root / "Radium Download Manager";
@@ -1262,7 +1262,7 @@ bool TestRadiumBrandingAndLegacyDataMigration() {
 
 bool TestPartFileIsolationAndSafeCommit() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_isolation_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_isolation_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
     // COR-01: Two concurrent tasks downloading with identical filename
@@ -1288,25 +1288,25 @@ bool TestPartFileIsolationAndSafeCommit() {
     }
 
     // COR-02: Commit size check rejection
-    auto bad_size_commit = openidm::PathSanitizer::CommitPartFile(
-        part1, work_dir, filename, openidm::ConflictPolicy::kAutoRename, content1.size() + 100);
+    auto bad_size_commit = radium::PathSanitizer::CommitPartFile(
+        part1, work_dir, filename, radium::ConflictPolicy::kAutoRename, content1.size() + 100);
     ASSERT_TRUE(!bad_size_commit.ok() && bad_size_commit.error->code == "ERR_STORAGE_PART_SIZE_MISMATCH",
                 "CommitPartFile rejects part file with mismatched size");
 
     // COR-02 & FDM-008: Concurrent part file commit race test
     std::atomic<bool> gate{false};
-    openidm::Result<std::filesystem::path> res1 = openidm::Result<std::filesystem::path>::Err("ERR", "init");
-    openidm::Result<std::filesystem::path> res2 = openidm::Result<std::filesystem::path>::Err("ERR", "init");
+    radium::Result<std::filesystem::path> res1 = radium::Result<std::filesystem::path>::Err("ERR", "init");
+    radium::Result<std::filesystem::path> res2 = radium::Result<std::filesystem::path>::Err("ERR", "init");
 
     std::thread th1([&]() {
         while (!gate.load()) std::this_thread::yield();
-        res1 = openidm::PathSanitizer::CommitPartFile(
-            part1, work_dir, filename, openidm::ConflictPolicy::kAutoRename, content1.size());
+        res1 = radium::PathSanitizer::CommitPartFile(
+            part1, work_dir, filename, radium::ConflictPolicy::kAutoRename, content1.size());
     });
     std::thread th2([&]() {
         while (!gate.load()) std::this_thread::yield();
-        res2 = openidm::PathSanitizer::CommitPartFile(
-            part2, work_dir, filename, openidm::ConflictPolicy::kAutoRename, content2.size());
+        res2 = radium::PathSanitizer::CommitPartFile(
+            part2, work_dir, filename, radium::ConflictPolicy::kAutoRename, content2.size());
     });
     gate.store(true);
     th1.join();
@@ -1339,10 +1339,10 @@ bool TestPartFileIsolationAndSafeCommit() {
         std::ofstream ofs(bengali_part, std::ios::binary);
         ofs << "BENGALI_VIDEO_TEST_PAYLOAD";
     }
-    auto b_res = openidm::PathSanitizer::CommitPartFile(
-        bengali_part, work_dir, bengali_filename, openidm::ConflictPolicy::kAutoRename);
+    auto b_res = radium::PathSanitizer::CommitPartFile(
+        bengali_part, work_dir, bengali_filename, radium::ConflictPolicy::kAutoRename);
     ASSERT_TRUE(b_res.ok(), "Bengali filename committed without codecvt exception");
-    std::string b_utf8 = openidm::PathSanitizer::PathToUtf8(b_res.value->filename());
+    std::string b_utf8 = radium::PathSanitizer::PathToUtf8(b_res.value->filename());
     ASSERT_TRUE(b_utf8 == bengali_filename, "Committed filename matches UTF-8 Bengali name");
 
     std::filesystem::remove_all(work_dir, ec);
@@ -1351,19 +1351,19 @@ bool TestPartFileIsolationAndSafeCommit() {
 
 bool TestResourceAwareResumeAndValidatorMismatch() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_resume_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_resume_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
 
     // COR-03: Create a task with existing etag and segments
-    openidm::TaskModel t;
+    radium::TaskModel t;
     t.task_id = "test-resume-task";
     t.url = "https://example.com/data.bin";
     t.file_name = "data.bin";
@@ -1372,8 +1372,8 @@ bool TestResourceAwareResumeAndValidatorMismatch() {
     t.last_modified = "Mon, 01 Jan 2026 00:00:00 GMT";
     t.total_bytes = 1048576;
     t.downloaded_bytes = 524288;
-    t.segments.push_back(openidm::Segment{0, 0, 524288, 524287, true});
-    t.segments.push_back(openidm::Segment{1, 524288, 524288, 1048575, false});
+    t.segments.push_back(radium::Segment{0, 0, 524288, 524287, true});
+    t.segments.push_back(radium::Segment{1, 524288, 524288, 1048575, false});
     t.part_path = ((work_dir / "downloads") / ("data.bin." + t.task_id + ".part")).string();
 
     auto add_res = ctrl.AddTask(t, false, true);
@@ -1385,16 +1385,16 @@ bool TestResourceAwareResumeAndValidatorMismatch() {
     ASSERT_TRUE(retrieved.has_value(), "Retrieved task");
 
     // Test validator mismatch reset behavior: task with ERR_HTTP_VALIDATOR_MISMATCH must reset on retry
-    openidm::TaskModel t_mismatch;
+    radium::TaskModel t_mismatch;
     t_mismatch.task_id = "test-mismatch-task";
     t_mismatch.url = "https://example.com/changed.bin";
     t_mismatch.file_name = "changed.bin";
     t_mismatch.save_dir = (work_dir / "downloads").string();
-    t_mismatch.state = openidm::TaskState::kFailed;
+    t_mismatch.state = radium::TaskState::kFailed;
     t_mismatch.error_code = "ERR_HTTP_VALIDATOR_MISMATCH";
     t_mismatch.error_message = "Remote ETag changed";
     t_mismatch.downloaded_bytes = 262144;
-    t_mismatch.segments.push_back(openidm::Segment{0, 0, 262144, 524287, false});
+    t_mismatch.segments.push_back(radium::Segment{0, 0, 262144, 524287, false});
     std::filesystem::path mm_part = (work_dir / "downloads") / ("changed.bin." + t_mismatch.task_id + ".part");
     {
         std::ofstream ofs(mm_part, std::ios::binary);
@@ -1410,12 +1410,12 @@ bool TestResourceAwareResumeAndValidatorMismatch() {
     ASSERT_TRUE(!std::filesystem::exists(mm_part), "Stale partial file removed after validator mismatch");
 
     // Test CancelTask state consistency and cleanup
-    openidm::TaskModel t_cancel;
+    radium::TaskModel t_cancel;
     t_cancel.task_id = "test-cancel-task";
     t_cancel.url = "https://example.com/cancel_me.bin";
     t_cancel.file_name = "cancel_me.bin";
     t_cancel.save_dir = (work_dir / "downloads").string();
-    t_cancel.state = openidm::TaskState::kPaused;
+    t_cancel.state = radium::TaskState::kPaused;
     t_cancel.error_code = "ERR_FILE_EXISTS";
     t_cancel.error_message = "Destination file already exists";
     std::filesystem::path c_part = (work_dir / "downloads") / ("cancel_me.bin." + t_cancel.task_id + ".part");
@@ -1425,13 +1425,13 @@ bool TestResourceAwareResumeAndValidatorMismatch() {
     }
     t_cancel.part_path = c_part.string();
     t_cancel.downloaded_bytes = 100;
-    t_cancel.segments.push_back(openidm::Segment{0, 0, 100, 1000, false});
+    t_cancel.segments.push_back(radium::Segment{0, 0, 100, 1000, false});
     t_cancel.auth_headers["Authorization"] = "Bearer SecretToken";
     ASSERT_TRUE(ctrl.AddTask(t_cancel, false, true).ok(), "Added cancel task");
     ASSERT_TRUE(ctrl.CancelTask(t_cancel.task_id).ok(), "CancelTask succeeds");
     auto c_retrieved = ctrl.GetTask(t_cancel.task_id);
     ASSERT_TRUE(c_retrieved.has_value(), "Retrieved canceled task");
-    ASSERT_TRUE(c_retrieved->state == openidm::TaskState::kCanceled, "State is kCanceled");
+    ASSERT_TRUE(c_retrieved->state == radium::TaskState::kCanceled, "State is kCanceled");
     ASSERT_TRUE(c_retrieved->segments.empty(), "Segments cleared on cancel");
     ASSERT_TRUE(c_retrieved->downloaded_bytes == 0, "Downloaded bytes reset to 0 on cancel");
     ASSERT_TRUE(c_retrieved->auth_headers.empty(), "Auth headers scrubbed on cancel");
@@ -1447,7 +1447,7 @@ bool TestResourceAwareResumeAndValidatorMismatch() {
 bool TestSegmentSchedulerBoundarySplitRaceGuard() {
     // CON-01 & FDM-009: Verify SegmentScheduler with active concurrent writer and stealer threads
     uint64_t total = 10ULL * 1048576ULL; // 10 MiB
-    openidm::brisk::SegmentScheduler scheduler(total, 4, 131072);
+    radium::brisk::SegmentScheduler scheduler(total, 4, 131072);
     scheduler.Initialize();
 
     auto s1 = scheduler.AcquireNextOrStealSegment(false);
@@ -1456,7 +1456,7 @@ bool TestSegmentSchedulerBoundarySplitRaceGuard() {
 
     std::atomic<bool> writer_done{false};
     std::atomic<bool> split_started{false};
-    std::shared_ptr<openidm::brisk::LiveSegment> s2 = nullptr;
+    std::shared_ptr<radium::brisk::LiveSegment> s2 = nullptr;
 
     // Concurrent writer thread: advances offset
     std::thread writer([&]() {
@@ -1488,7 +1488,7 @@ bool TestSegmentSchedulerBoundarySplitRaceGuard() {
 
 bool TestSegmentSchedulerDoesNotResplitInFlightRange() {
     constexpr uint64_t total = 16ULL * 1024ULL * 1024ULL;
-    openidm::brisk::SegmentScheduler scheduler(total, 8, 262144);
+    radium::brisk::SegmentScheduler scheduler(total, 8, 262144);
     scheduler.Initialize();
 
     auto original = scheduler.AcquireNextOrStealSegment(false);
@@ -1509,13 +1509,13 @@ bool TestSegmentSchedulerDoesNotResplitInFlightRange() {
         "Second split preserves contiguous range boundaries");
 
     const auto segments = scheduler.GetSnapshots();
-    ASSERT_TRUE(openidm::brisk::SegmentScheduler::ValidateSegmentPartition(segments, total),
+    ASSERT_TRUE(radium::brisk::SegmentScheduler::ValidateSegmentPartition(segments, total),
         "Repeated split attempt preserves a complete non-overlapping partition");
     return true;
 }
 
 bool TestIpcSecurityDaclAndPathTraversal() {
-    std::string sock = openidm::ipc::IpcServer::DefaultSocketPath();
+    std::string sock = radium::ipc::IpcServer::DefaultSocketPath();
     ASSERT_TRUE(!sock.empty(), "Default socket path is non-empty");
 
 #ifdef _WIN32
@@ -1524,17 +1524,17 @@ bool TestIpcSecurityDaclAndPathTraversal() {
     ASSERT_TRUE(sock.find("/tmp/radium_ipc_") == 0 || sock.find("/tmp/flux_ipc_") == 0, "Unix socket is in /tmp/radium_ipc_ namespace");
 #endif
 
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_ipc_sec_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_ipc_sec_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller");
-    openidm::ipc::IpcServer server(ctrl, sock);
+    radium::ipc::IpcServer server(ctrl, sock);
 
     // SEC-02: Path traversal rejection in download.offer
     std::string traversal_req = R"({
@@ -1559,7 +1559,7 @@ bool TestIpcSecurityDaclAndPathTraversal() {
 
 bool TestGlobalRateLimiting() {
     // CTRL-01 & FDM-009: Verify shared TokenBucketLimiter throttles real concurrent threads
-    openidm::brisk::TokenBucketLimiter limiter;
+    radium::brisk::TokenBucketLimiter limiter;
     std::atomic<uint64_t> limit_bps{1000000}; // 1 MB/s
     std::atomic<bool> stop_flag{false};
     std::atomic<bool> start_gate{false};
@@ -1588,30 +1588,30 @@ bool TestGlobalRateLimiting() {
 
 // Regression Suite 21: Verify URI Reference & Protocol-Relative Redirect Resolution (NET-03)
 bool TestRelativeAndProtocolRelativeRedirectResolution() {
-    openidm::brisk::ParsedUrl base;
+    radium::brisk::ParsedUrl base;
     base.scheme = "http";
     base.host = "127.0.0.1";
     base.port = 18081;
     base.path_and_query = "/dir/sample.bin?token=abc";
 
     // 1. Protocol-relative URL
-    std::string r1 = openidm::brisk::HttpClient::ResolveRedirectTarget(base, "//localhost:18082/full.bin");
+    std::string r1 = radium::brisk::HttpClient::ResolveRedirectTarget(base, "//localhost:18082/full.bin");
     ASSERT_TRUE(r1 == "http://localhost:18082/full.bin", "Protocol-relative redirect inherits scheme");
 
     // 2. Absolute path
-    std::string r2 = openidm::brisk::HttpClient::ResolveRedirectTarget(base, "/downloads/output.dat");
+    std::string r2 = radium::brisk::HttpClient::ResolveRedirectTarget(base, "/downloads/output.dat");
     ASSERT_TRUE(r2 == "http://127.0.0.1:18081/downloads/output.dat", "Absolute path inherits authority");
 
     // 3. Query-only relative redirect
-    std::string r3 = openidm::brisk::HttpClient::ResolveRedirectTarget(base, "?retry=1");
+    std::string r3 = radium::brisk::HttpClient::ResolveRedirectTarget(base, "?retry=1");
     ASSERT_TRUE(r3 == "http://127.0.0.1:18081/dir/sample.bin?retry=1", "Query-only replaces existing query");
 
     // 4. Directory-relative path
-    std::string r4 = openidm::brisk::HttpClient::ResolveRedirectTarget(base, "chunk2.bin");
+    std::string r4 = radium::brisk::HttpClient::ResolveRedirectTarget(base, "chunk2.bin");
     ASSERT_TRUE(r4 == "http://127.0.0.1:18081/dir/chunk2.bin", "Relative path resolves against directory");
 
     // 5. Full absolute URL
-    std::string r5 = openidm::brisk::HttpClient::ResolveRedirectTarget(base, "https://secure.example.com/asset.zip");
+    std::string r5 = radium::brisk::HttpClient::ResolveRedirectTarget(base, "https://secure.example.com/asset.zip");
     ASSERT_TRUE(r5 == "https://secure.example.com/asset.zip", "Absolute URL preserved verbatim");
 
     return true;
@@ -1622,53 +1622,53 @@ bool TestCompleteSegmentRangeMapValidation() {
     uint64_t total = 1048576; // 1 MiB
 
     // 1. Valid 2-segment partition
-    std::vector<openidm::Segment> valid_segs = {
+    std::vector<radium::Segment> valid_segs = {
         {0, 0, 524288, 524287, true},
         {1, 524288, 524288, 1048575, false}
     };
-    ASSERT_TRUE(openidm::brisk::SegmentScheduler::ValidateSegmentPartition(valid_segs, total), "Valid partition accepted");
+    ASSERT_TRUE(radium::brisk::SegmentScheduler::ValidateSegmentPartition(valid_segs, total), "Valid partition accepted");
 
     // 2. Gap between segments
-    std::vector<openidm::Segment> gap_segs = {
+    std::vector<radium::Segment> gap_segs = {
         {0, 0, 500000, 499999, true},
         {1, 510000, 510000, 1048575, false}
     };
-    ASSERT_TRUE(!openidm::brisk::SegmentScheduler::ValidateSegmentPartition(gap_segs, total), "Gap partition rejected");
+    ASSERT_TRUE(!radium::brisk::SegmentScheduler::ValidateSegmentPartition(gap_segs, total), "Gap partition rejected");
 
     // 3. Overlap between segments
-    std::vector<openidm::Segment> overlap_segs = {
+    std::vector<radium::Segment> overlap_segs = {
         {0, 0, 524288, 524287, true},
         {1, 500000, 500000, 1048575, false}
     };
-    ASSERT_TRUE(!openidm::brisk::SegmentScheduler::ValidateSegmentPartition(overlap_segs, total), "Overlap partition rejected");
+    ASSERT_TRUE(!radium::brisk::SegmentScheduler::ValidateSegmentPartition(overlap_segs, total), "Overlap partition rejected");
 
     // 4. Cursor outside range
-    std::vector<openidm::Segment> bad_cursor = {
+    std::vector<radium::Segment> bad_cursor = {
         {0, 0, 600000, 524287, true},
         {1, 524288, 524288, 1048575, false}
     };
-    ASSERT_TRUE(!openidm::brisk::SegmentScheduler::ValidateSegmentPartition(bad_cursor, total), "Cursor overflow rejected");
+    ASSERT_TRUE(!radium::brisk::SegmentScheduler::ValidateSegmentPartition(bad_cursor, total), "Cursor overflow rejected");
 
     // 5. Premature completion flag
-    std::vector<openidm::Segment> premature_comp = {
+    std::vector<radium::Segment> premature_comp = {
         {0, 0, 100000, 524287, true},
         {1, 524288, 524288, 1048575, false}
     };
-    ASSERT_TRUE(!openidm::brisk::SegmentScheduler::ValidateSegmentPartition(premature_comp, total), "Premature completion rejected");
+    ASSERT_TRUE(!radium::brisk::SegmentScheduler::ValidateSegmentPartition(premature_comp, total), "Premature completion rejected");
 
     // 6. Duplicate segment ID
-    std::vector<openidm::Segment> dup_id = {
+    std::vector<radium::Segment> dup_id = {
         {0, 0, 524288, 524287, true},
         {0, 524288, 524288, 1048575, false}
     };
-    ASSERT_TRUE(!openidm::brisk::SegmentScheduler::ValidateSegmentPartition(dup_id, total), "Duplicate segment ID rejected");
+    ASSERT_TRUE(!radium::brisk::SegmentScheduler::ValidateSegmentPartition(dup_id, total), "Duplicate segment ID rejected");
 
     return true;
 }
 
 // Regression Suite 23: HTTP Chunked Body Framing Decoder (FDM-003, TG-04)
 bool TestPosixHttpChunkedDecoder() {
-    openidm::brisk::ChunkedDecoder decoder;
+    radium::brisk::ChunkedDecoder decoder;
     std::string decoded_output;
     auto on_chunk = [&](const uint8_t* data, size_t len) -> bool {
         decoded_output.append(reinterpret_cast<const char*>(data), len);
@@ -1683,7 +1683,7 @@ bool TestPosixHttpChunkedDecoder() {
     ASSERT_TRUE(decoded_output == "Wikipedia in \r\n\r\nchunks.", "Decoded body matches exact fixture");
 
     // Chunk extensions and trailers
-    openidm::brisk::ChunkedDecoder decoder2;
+    radium::brisk::ChunkedDecoder decoder2;
     std::string out2;
     auto on_chunk2 = [&](const uint8_t* d, size_t l) {
         out2.append(reinterpret_cast<const char*>(d), l);
@@ -1703,37 +1703,37 @@ bool TestPosixHttpChunkedDecoder() {
 // Regression Suite 24: URL Parsing, Query Without Slash, IPv6 & Security (FDM-004, FDM-005, TG-05, TG-06)
 bool TestUrlParsingAndSecurityChecks() {
     // 1. Query without slash: https://example.test?token=secret
-    auto r1 = openidm::brisk::HttpClient::ParseUrl("https://example.test?token=secret");
+    auto r1 = radium::brisk::HttpClient::ParseUrl("https://example.test?token=secret");
     ASSERT_TRUE(r1.ok(), "Parse URL without slash ok");
     ASSERT_TRUE(r1.value->host == "example.test", "Host parsed without query attached");
     ASSERT_TRUE(r1.value->path_and_query == "/?token=secret", "Path and query formatted correctly");
 
     // 2. URL with fragment: https://example.test/file#section
-    auto r2 = openidm::brisk::HttpClient::ParseUrl("https://example.test/file#section");
+    auto r2 = radium::brisk::HttpClient::ParseUrl("https://example.test/file#section");
     ASSERT_TRUE(r2.ok(), "Parse URL with fragment ok");
     ASSERT_TRUE(r2.value->path_and_query == "/file", "Fragment stripped from path_and_query");
 
     // 3. IPv6 in brackets: http://[::1]:8080/path
-    auto r3 = openidm::brisk::HttpClient::ParseUrl("http://[::1]:8080/path");
+    auto r3 = radium::brisk::HttpClient::ParseUrl("http://[::1]:8080/path");
     ASSERT_TRUE(r3.ok(), "Parse bracketed IPv6 ok");
     ASSERT_TRUE(r3.value->host == "::1", "IPv6 host extracted");
     ASSERT_TRUE(r3.value->port == 8080, "Port extracted");
 
     // 4. Dot segment removal in relative redirect: /a/b/c.html + ../d.html -> /a/d.html
-    openidm::brisk::ParsedUrl base;
+    radium::brisk::ParsedUrl base;
     base.scheme = "http";
     base.host = "cdn.example.com";
     base.port = 80;
     base.path_and_query = "/a/b/c.html";
-    std::string red = openidm::brisk::HttpClient::ResolveRedirectTarget(base, "../d.html");
+    std::string red = radium::brisk::HttpClient::ResolveRedirectTarget(base, "../d.html");
     ASSERT_TRUE(red == "http://cdn.example.com/a/d.html", "Parent-relative redirect resolved correctly");
 
     // 5. Private IP classification (RFC 1918 & Loopback)
-    auto r_p1 = openidm::brisk::HttpClient::ParseUrl("http://10.0.0.1/doc.pdf");
+    auto r_p1 = radium::brisk::HttpClient::ParseUrl("http://10.0.0.1/doc.pdf");
     ASSERT_TRUE(r_p1.ok() && r_p1.value->is_loopback_or_private, "10.0.0.1 marked private");
-    auto r_p2 = openidm::brisk::HttpClient::ParseUrl("http://192.168.1.1/doc.pdf");
+    auto r_p2 = radium::brisk::HttpClient::ParseUrl("http://192.168.1.1/doc.pdf");
     ASSERT_TRUE(r_p2.ok() && r_p2.value->is_loopback_or_private, "192.168.1.1 marked private");
-    auto r_p3 = openidm::brisk::HttpClient::ParseUrl("http://172.20.0.1/doc.pdf");
+    auto r_p3 = radium::brisk::HttpClient::ParseUrl("http://172.20.0.1/doc.pdf");
     ASSERT_TRUE(r_p3.ok() && r_p3.value->is_loopback_or_private, "172.20.0.1 marked private");
 
     return true;
@@ -1742,25 +1742,25 @@ bool TestUrlParsingAndSecurityChecks() {
 // Regression Suite 25: IPC Bounded Shutdown & First Pipe Instance (FDM-006, FDM-011, TG-08, TG-16)
 bool TestIpcShutdownAndFirstPipeInstance() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_ipc_shut_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_ipc_shut_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller");
 
     std::string pipe_name;
 #ifdef _WIN32
-    pipe_name = "\\\\.\\pipe\\Flux_Test_Shutdown_" + openidm::GenerateUuidV4();
+    pipe_name = "\\\\.\\pipe\\Flux_Test_Shutdown_" + radium::GenerateUuidV4();
 #else
     pipe_name = (work_dir / "test.sock").string();
 #endif
 
-    openidm::ipc::IpcServer server1(ctrl, pipe_name);
+    radium::ipc::IpcServer server1(ctrl, pipe_name);
     ASSERT_TRUE(server1.Start().ok(), "Server 1 started");
 
 #ifdef _WIN32
@@ -1788,7 +1788,7 @@ bool TestIpcShutdownAndFirstPipeInstance() {
 // Regression Suite 26: Conflict Policies End-to-End (FDM-007, FDM-008, TG-10)
 bool TestConflictPolicies() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_conflict_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_conflict_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
     std::string fname = "report.pdf";
@@ -1804,12 +1804,12 @@ bool TestConflictPolicies() {
         std::ofstream ofs(part_fail);
         ofs << "New content";
     }
-    auto res_fail = openidm::PathSanitizer::CommitPartFile(part_fail, work_dir, fname, openidm::ConflictPolicy::kFailIfExists);
+    auto res_fail = radium::PathSanitizer::CommitPartFile(part_fail, work_dir, fname, radium::ConflictPolicy::kFailIfExists);
     ASSERT_TRUE(!res_fail.ok() && res_fail.error->code == "ERR_FILE_EXISTS", "kFailIfExists rejects existing destination");
 
     std::filesystem::path part_prompt = work_dir / "prompt.part";
     { std::ofstream ofs(part_prompt); ofs << "Incoming content"; }
-    auto res_prompt = openidm::PathSanitizer::CommitPartFile(part_prompt, work_dir, fname, openidm::ConflictPolicy::kPrompt);
+    auto res_prompt = radium::PathSanitizer::CommitPartFile(part_prompt, work_dir, fname, radium::ConflictPolicy::kPrompt);
     ASSERT_TRUE(!res_prompt.ok() && res_prompt.error->code == "ERR_FILE_EXISTS", "kPrompt rejects replacement until user chooses");
     ASSERT_TRUE(std::filesystem::exists(part_prompt), "kPrompt keeps the incoming part available for retry");
     {
@@ -1824,7 +1824,7 @@ bool TestConflictPolicies() {
         std::ofstream ofs(part_ovw);
         ofs << "Overwritten content";
     }
-    auto res_ovw = openidm::PathSanitizer::CommitPartFile(part_ovw, work_dir, fname, openidm::ConflictPolicy::kOverwrite);
+    auto res_ovw = radium::PathSanitizer::CommitPartFile(part_ovw, work_dir, fname, radium::ConflictPolicy::kOverwrite);
     ASSERT_TRUE(res_ovw.ok(), "kOverwrite succeeded");
     {
         std::ifstream ifs(*res_ovw.value);
@@ -1839,7 +1839,7 @@ bool TestConflictPolicies() {
         std::ofstream ofs(part_ren);
         ofs << "Auto-renamed content";
     }
-    auto res_ren = openidm::PathSanitizer::CommitPartFile(part_ren, work_dir, fname, openidm::ConflictPolicy::kAutoRename);
+    auto res_ren = radium::PathSanitizer::CommitPartFile(part_ren, work_dir, fname, radium::ConflictPolicy::kAutoRename);
     ASSERT_TRUE(res_ren.ok(), "kAutoRename succeeded");
     ASSERT_TRUE(res_ren.value->filename().string() == "report (1).pdf", "Target renamed to report (1).pdf");
     {
@@ -1850,7 +1850,7 @@ bool TestConflictPolicies() {
     }
 
     // 4. Preflight detection without part file (verifies warning shows first)
-    auto preflight_check = openidm::PathSanitizer::ResolveSafeOutputPath(work_dir, fname, openidm::ConflictPolicy::kPrompt);
+    auto preflight_check = radium::PathSanitizer::ResolveSafeOutputPath(work_dir, fname, radium::ConflictPolicy::kPrompt);
     ASSERT_TRUE(!preflight_check.ok() && preflight_check.error->code == "ERR_FILE_EXISTS",
                 "Preflight check detects existing destination before any part file or download");
 
@@ -1861,32 +1861,32 @@ bool TestConflictPolicies() {
 // Regression Suite 27: System Suspend/Resume Selective Task Restoration (CTRL-02)
 bool TestSystemSuspendResumeAndPauseReason() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_suspend_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_suspend_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller");
 
     // Task 1: Started immediately (active/queued)
-    openidm::TaskModel t1;
+    radium::TaskModel t1;
     t1.url = "https://example.com/file1.zip";
     auto r1 = ctrl.AddTask(t1, true);
     ASSERT_TRUE(r1.ok(), "Task 1 added");
-    ASSERT_TRUE(r1.value->state == openidm::TaskState::kQueued, "Task 1 starts in Queued state");
-    ASSERT_TRUE(r1.value->pause_reason == openidm::PauseReason::kNone, "Task 1 pause_reason is kNone");
+    ASSERT_TRUE(r1.value->state == radium::TaskState::kQueued, "Task 1 starts in Queued state");
+    ASSERT_TRUE(r1.value->pause_reason == radium::PauseReason::kNone, "Task 1 pause_reason is kNone");
 
     // Task 2: Created in paused state by user
-    openidm::TaskModel t2;
+    radium::TaskModel t2;
     t2.url = "https://example.com/file2.zip";
     auto r2 = ctrl.AddTask(t2, false);
     ASSERT_TRUE(r2.ok(), "Task 2 added");
-    ASSERT_TRUE(r2.value->state == openidm::TaskState::kPaused, "Task 2 starts in Paused state");
-    ASSERT_TRUE(r2.value->pause_reason == openidm::PauseReason::kUser, "Task 2 pause_reason is kUser");
+    ASSERT_TRUE(r2.value->state == radium::TaskState::kPaused, "Task 2 starts in Paused state");
+    ASSERT_TRUE(r2.value->pause_reason == radium::PauseReason::kUser, "Task 2 pause_reason is kUser");
 
     // 1. Trigger system suspend
     ctrl.OnSystemSuspend();
@@ -1896,11 +1896,11 @@ bool TestSystemSuspendResumeAndPauseReason() {
     ASSERT_TRUE(g1_suspend.has_value(), "Task 1 found");
     ASSERT_TRUE(g2_suspend.has_value(), "Task 2 found");
 
-    ASSERT_TRUE(g1_suspend->state == openidm::TaskState::kPaused, "Task 1 paused on suspend");
-    ASSERT_TRUE(g1_suspend->pause_reason == openidm::PauseReason::kSystemSuspend, "Task 1 marked as kSystemSuspend");
+    ASSERT_TRUE(g1_suspend->state == radium::TaskState::kPaused, "Task 1 paused on suspend");
+    ASSERT_TRUE(g1_suspend->pause_reason == radium::PauseReason::kSystemSuspend, "Task 1 marked as kSystemSuspend");
 
-    ASSERT_TRUE(g2_suspend->state == openidm::TaskState::kPaused, "Task 2 still paused on suspend");
-    ASSERT_TRUE(g2_suspend->pause_reason == openidm::PauseReason::kUser, "Task 2 retains kUser pause_reason");
+    ASSERT_TRUE(g2_suspend->state == radium::TaskState::kPaused, "Task 2 still paused on suspend");
+    ASSERT_TRUE(g2_suspend->pause_reason == radium::PauseReason::kUser, "Task 2 retains kUser pause_reason");
 
     // 2. Trigger system resume
     ctrl.OnSystemResume();
@@ -1910,17 +1910,17 @@ bool TestSystemSuspendResumeAndPauseReason() {
     ASSERT_TRUE(g1_resume.has_value(), "Task 1 found");
     ASSERT_TRUE(g2_resume.has_value(), "Task 2 found");
 
-    ASSERT_TRUE(g1_resume->state == openidm::TaskState::kQueued, "Task 1 automatically resumed to Queued");
-    ASSERT_TRUE(g1_resume->pause_reason == openidm::PauseReason::kNone, "Task 1 pause_reason reset to kNone");
+    ASSERT_TRUE(g1_resume->state == radium::TaskState::kQueued, "Task 1 automatically resumed to Queued");
+    ASSERT_TRUE(g1_resume->pause_reason == radium::PauseReason::kNone, "Task 1 pause_reason reset to kNone");
 
-    ASSERT_TRUE(g2_resume->state == openidm::TaskState::kPaused, "Task 2 strictly remains Paused after sleep/wake");
-    ASSERT_TRUE(g2_resume->pause_reason == openidm::PauseReason::kUser, "Task 2 pause_reason remains kUser");
+    ASSERT_TRUE(g2_resume->state == radium::TaskState::kPaused, "Task 2 strictly remains Paused after sleep/wake");
+    ASSERT_TRUE(g2_resume->pause_reason == radium::PauseReason::kUser, "Task 2 pause_reason remains kUser");
 
     // 3. User manually resumes Task 2
     ASSERT_TRUE(ctrl.ResumeTask(r2.value->task_id).ok(), "Manual resume of Task 2 succeeded");
     auto g2_manual = ctrl.GetTask(r2.value->task_id);
-    ASSERT_TRUE(g2_manual.has_value() && (g2_manual->state == openidm::TaskState::kQueued || g2_manual->state == openidm::TaskState::kProbing || g2_manual->state == openidm::TaskState::kDownloading), "Task 2 resumed to Queued or Active");
-    ASSERT_TRUE(g2_manual->pause_reason == openidm::PauseReason::kNone, "Task 2 pause_reason reset to kNone");
+    ASSERT_TRUE(g2_manual.has_value() && (g2_manual->state == radium::TaskState::kQueued || g2_manual->state == radium::TaskState::kProbing || g2_manual->state == radium::TaskState::kDownloading), "Task 2 resumed to Queued or Active");
+    ASSERT_TRUE(g2_manual->pause_reason == radium::PauseReason::kNone, "Task 2 pause_reason reset to kNone");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(work_dir, ec);
@@ -1929,7 +1929,7 @@ bool TestSystemSuspendResumeAndPauseReason() {
 
 bool TestConcurrentAtomicCommitsAndSha256() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_atomic_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_atomic_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
     const int kThreadCount = 8;
@@ -1939,7 +1939,7 @@ bool TestConcurrentAtomicCommitsAndSha256() {
 
     for (int i = 0; i < kThreadCount; ++i) {
         payloads[i] = "PAYLOAD_THREAD_CHUNK_" + std::to_string(i) + "_" + std::string(1024 * (i + 1), static_cast<char>('A' + i));
-        expected_hashes[i] = openidm::CryptoUtils::ComputeBufferSha256Hex(payloads[i]);
+        expected_hashes[i] = radium::CryptoUtils::ComputeBufferSha256Hex(payloads[i]);
         part_files[i] = work_dir / ("worker_" + std::to_string(i) + ".part");
         std::ofstream ofs(part_files[i], std::ios::binary);
         ofs << payloads[i];
@@ -1956,8 +1956,8 @@ bool TestConcurrentAtomicCommitsAndSha256() {
             while (!start_signal.load()) {
                 std::this_thread::yield();
             }
-            auto res = openidm::PathSanitizer::CommitPartFile(
-                part_files[i], work_dir, "contended.bin", openidm::ConflictPolicy::kAutoRename);
+            auto res = radium::PathSanitizer::CommitPartFile(
+                part_files[i], work_dir, "contended.bin", radium::ConflictPolicy::kAutoRename);
             if (res.ok()) {
                 resulting_paths[i] = *res.value;
                 thread_success[i] = true;
@@ -1984,7 +1984,7 @@ bool TestConcurrentAtomicCommitsAndSha256() {
     for (int i = 0; i < kThreadCount; ++i) {
         std::ifstream ifs(resulting_paths[i], std::ios::binary);
         std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
-        std::string actual_hash = openidm::CryptoUtils::ComputeBufferSha256Hex(content);
+        std::string actual_hash = radium::CryptoUtils::ComputeBufferSha256Hex(content);
         ASSERT_TRUE(actual_hash == expected_hashes[i], "Committed file SHA-256 matches exact source content without corruption");
     }
 
@@ -2006,8 +2006,8 @@ bool TestConcurrentAtomicCommitsAndSha256() {
             while (!start_signal.load()) {
                 std::this_thread::yield();
             }
-            auto res = openidm::PathSanitizer::CommitPartFile(
-                part_files[i], work_dir, "exclusive.bin", openidm::ConflictPolicy::kFailIfExists);
+            auto res = radium::PathSanitizer::CommitPartFile(
+                part_files[i], work_dir, "exclusive.bin", radium::ConflictPolicy::kFailIfExists);
             if (res.ok()) {
                 ++success_count;
             } else if (res.error->code == "ERR_FILE_EXISTS") {
@@ -2030,7 +2030,7 @@ bool TestConcurrentAtomicCommitsAndSha256() {
 }
 
 bool TestDnsRebindingAndDestinationSecurity() {
-    using openidm::brisk::HttpClient;
+    using radium::brisk::HttpClient;
 
     // 1. IPv4 private / loopback / link-local / CGNAT / multicast / broadcast
     ASSERT_TRUE(HttpClient::IsPrivateOrLoopbackIp(0x7F000001), "127.0.0.1 is loopback");
@@ -2079,9 +2079,9 @@ bool TestDnsRebindingAndDestinationSecurity() {
 }
 
 bool TestStreamContainerValidation() {
-    using openidm::stream::Nm3u8dlReAdapter;
+    using radium::stream::Nm3u8dlReAdapter;
     std::error_code ec;
-    std::filesystem::path tmp_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_container_" + openidm::GenerateUuidV4());
+    std::filesystem::path tmp_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_container_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(tmp_dir, ec);
 
     // 1. MP4 / M4A (ISO BMFF ftyp / moov)
@@ -2155,7 +2155,7 @@ bool TestStreamContainerValidation() {
 }
 
 bool TestFtpClientParsingAndCommands() {
-    using namespace openidm::ftp;
+    using namespace radium::ftp;
 
     auto res1 = FtpUrl::Parse("ftp://ftp.example.com/pub/files/archive.tar.gz");
     ASSERT_TRUE(res1.ok(), "Parse standard FTP URL");
@@ -2182,7 +2182,7 @@ bool TestFtpClientParsingAndCommands() {
 }
 
 bool TestBencodeAndTorrentParser() {
-    using namespace openidm::torrent;
+    using namespace radium::torrent;
 
     // 1. Bencode integer, string, list, dict
     auto int_res = BencodeParser::Decode("i42e");
@@ -2219,12 +2219,12 @@ bool TestBencodeAndTorrentParser() {
 
     // 3. Piece SHA-1 Verification
     const char test_data[] = "BitTorrent Piece Validation Test Block";
-    std::string expected_sha1 = openidm::CryptoUtils::ComputeBufferSha1Hex(std::string_view(test_data, sizeof(test_data) - 1));
+    std::string expected_sha1 = radium::CryptoUtils::ComputeBufferSha1Hex(std::string_view(test_data, sizeof(test_data) - 1));
     ASSERT_TRUE(TorrentParser::VerifyPieceHex(reinterpret_cast<const uint8_t*>(test_data), sizeof(test_data) - 1, expected_sha1), "VerifyPieceHex matches");
     ASSERT_TRUE(!TorrentParser::VerifyPieceHex(reinterpret_cast<const uint8_t*>("corrupt data"), 12, expected_sha1), "Corrupt piece rejected");
 
     // 4. BitTorrent Execution Elimination Guard (honesty check)
-    openidm::TaskModel tor_task;
+    radium::TaskModel tor_task;
     tor_task.task_id = "test-torrent-task";
     tor_task.url = magnet;
     tor_task.file_name = "test.iso";
@@ -2238,7 +2238,7 @@ bool TestBencodeAndTorrentParser() {
     auto tor_exec = TorrentEngine::ExecuteTorrentDownload(tor_task, tinfo, t_pause, t_cancel, t_speed, nullptr);
     ASSERT_TRUE(!tor_exec.ok(), "BitTorrent execution must fail cleanly on incomplete metainfo");
     ASSERT_TRUE(tor_exec.error->code == "ERR_TORRENT_MALFORMED", "Returns ERR_TORRENT_MALFORMED on zero-piece metainfo");
-    ASSERT_TRUE(tor_task.state == openidm::TaskState::kFailed, "Task state marked as kFailed");
+    ASSERT_TRUE(tor_task.state == radium::TaskState::kFailed, "Task state marked as kFailed");
     ASSERT_TRUE(tor_task.downloaded_bytes == 0, "Downloaded bytes must remain 0");
     ASSERT_TRUE(tor_task.completed_segments == 0, "Completed pieces must remain 0");
     ASSERT_TRUE(!std::filesystem::exists("/tmp/test_torrent_dir/test.iso"), "No dummy or placeholder files created on disk");
@@ -2258,7 +2258,7 @@ bool TestBencodeAndTorrentParser() {
 }
 
 bool TestRtspMmsStreamDetection() {
-    using namespace openidm::stream;
+    using namespace radium::stream;
 
     ASSERT_TRUE(RtspMmsAdapter::IsStreamUrl("rtsp://media.example.com/live/ch1"), "rtsp:// is stream");
     ASSERT_TRUE(RtspMmsAdapter::IsStreamUrl("rtsps://media.example.com:443/live"), "rtsps:// is stream");
@@ -2270,7 +2270,7 @@ bool TestRtspMmsStreamDetection() {
 }
 
 bool TestSiteGrabberCrawlerAndSsrf() {
-    using namespace openidm::crawler;
+    using namespace radium::crawler;
 
     // 1. URL Resolution
     ASSERT_TRUE(SiteGrabber::ResolveUrl("https://example.com/docs/page.html", "sub.html") == "https://example.com/docs/sub.html", "Relative path resolution");
@@ -2312,7 +2312,7 @@ bool TestSiteGrabberCrawlerAndSsrf() {
 }
 
 bool TestZipArchivePreviewAndSecurity() {
-    using namespace openidm::archive;
+    using namespace radium::archive;
 
     // 1. Zip Slip Path Traversal Guard
     ASSERT_TRUE(ZipPreviewer::IsZipSlipPath("../../etc/shadow"), "Detect ../ traversal");
@@ -2360,10 +2360,10 @@ bool TestZipArchivePreviewAndSecurity() {
 }
 
 bool TestTaskImportExportAndMultiQueue() {
-    using namespace openidm::storage;
+    using namespace radium::storage;
 
     // 1. Task Export & Credential Redaction
-    openidm::TaskModel t1;
+    radium::TaskModel t1;
     t1.task_id = "test-uuid-1";
     t1.url = "https://user:SuperSecretPassword@cdn.example.com/download.zip?token=xyz123";
     t1.file_name = "download.zip";
@@ -2373,7 +2373,7 @@ bool TestTaskImportExportAndMultiQueue() {
     t1.auth_headers["Authorization"] = "Bearer secret-token-999";
     t1.auth_headers["Cookie"] = "session=secret-session-abc";
 
-    std::vector<openidm::TaskModel> tasks = {t1};
+    std::vector<radium::TaskModel> tasks = {t1};
 
     auto json_exp = TaskImportExport::ExportTasksToString(tasks, ExportFormat::kJson, false);
     ASSERT_TRUE(json_exp.ok(), "Export to JSON succeeds");
@@ -2391,15 +2391,15 @@ bool TestTaskImportExportAndMultiQueue() {
     ASSERT_TRUE(imported.ok(), "Import from URL list succeeds");
     ASSERT_TRUE(imported.value->size() == 3, "Imported 3 tasks");
     ASSERT_TRUE((*imported.value)[0].category == "Documents", "Auto-inferred Documents category for PDF");
-    ASSERT_TRUE((*imported.value)[1].task_type == openidm::TaskType::kFtp, "Auto-inferred FTP task type");
-    ASSERT_TRUE((*imported.value)[2].task_type == openidm::TaskType::kTorrent, "Auto-inferred Torrent task type");
+    ASSERT_TRUE((*imported.value)[1].task_type == radium::TaskType::kFtp, "Auto-inferred FTP task type");
+    ASSERT_TRUE((*imported.value)[2].task_type == radium::TaskType::kTorrent, "Auto-inferred Torrent task type");
 
     // 3. Multi-Queue Management in SqliteStore
-    std::filesystem::path db_p = "/tmp/test_queue_" + openidm::GenerateUuidV4() + ".db";
-    openidm::SqliteStore store;
+    std::filesystem::path db_p = "/tmp/test_queue_" + radium::GenerateUuidV4() + ".db";
+    radium::SqliteStore store;
     ASSERT_TRUE(store.Open(db_p).ok(), "Open test DB for queues");
 
-    openidm::QueueConfig q2;
+    radium::QueueConfig q2;
     q2.queue_id = "sync_queue";
     q2.name = "Synchronization Queue";
     q2.max_concurrent_tasks = 5;
@@ -2420,7 +2420,7 @@ bool TestTaskImportExportAndMultiQueue() {
 }
 
 bool TestAntivirusScannerSafetyAndHandling() {
-    using namespace openidm::security;
+    using namespace radium::security;
 
     // 1. ScanReport default status must be kUnavailable (never kClean)
     ScanReport def_rep;
@@ -2432,7 +2432,7 @@ bool TestAntivirusScannerSafetyAndHandling() {
     ASSERT_TRUE(missing_res.error->code == "ERR_FILE_NOT_FOUND", "Error code is ERR_FILE_NOT_FOUND");
 
     // 3. Create dummy file and verify scan does NOT report fake kClean on non-Windows
-    std::filesystem::path tmp_p = std::filesystem::temp_directory_path() / ("test_av_" + openidm::GenerateUuidV4() + ".bin");
+    std::filesystem::path tmp_p = std::filesystem::temp_directory_path() / ("test_av_" + radium::GenerateUuidV4() + ".bin");
     {
         std::ofstream ofs(tmp_p, std::ios::binary);
         ofs << "Antivirus Test Content";
@@ -2447,24 +2447,24 @@ bool TestAntivirusScannerSafetyAndHandling() {
 
     // 4. Verify DesktopView blocks ActionOpenFile if a threat was detected
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_av_ui_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_av_ui_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
     std::filesystem::create_directories(cfg.default_download_dir, ec);
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
 
-    openidm::TaskModel t_threat;
+    radium::TaskModel t_threat;
     t_threat.task_id = "task-threat-1";
     t_threat.url = "https://example.com/malware.exe";
     t_threat.file_name = "malware.exe";
     t_threat.save_dir = cfg.default_download_dir.string();
-    t_threat.state = openidm::TaskState::kCompleted;
+    t_threat.state = radium::TaskState::kCompleted;
     t_threat.error_code = "ERR_THREAT_DETECTED";
     t_threat.status_detail = "Threat detected by Antivirus (Defender)";
 
@@ -2477,7 +2477,7 @@ bool TestAntivirusScannerSafetyAndHandling() {
     auto add_threat = ctrl.AddTask(t_threat, false, true);
     ASSERT_TRUE(add_threat.ok(), "Added threat task");
 
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
     view.SelectTask("task-threat-1");
     auto open_res = view.ActionOpenCompletedFile(true); // dry_run
     ASSERT_TRUE(!open_res.ok(), "ActionOpenCompletedFile must block execution on threat detection");
@@ -2490,7 +2490,7 @@ bool TestAntivirusScannerSafetyAndHandling() {
 }
 
 bool TestDualRateLimiterAndPerTaskSpeedLimit() {
-    using openidm::brisk::TokenBucketLimiter;
+    using radium::brisk::TokenBucketLimiter;
 
     // Test dual limiter logic
     auto global_limiter = std::make_shared<TokenBucketLimiter>();
@@ -2504,19 +2504,19 @@ bool TestDualRateLimiterAndPerTaskSpeedLimit() {
 
     // Test controller per-task speed limit API
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_speed_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_speed_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
     std::filesystem::create_directories(cfg.default_download_dir, ec);
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
 
-    openidm::TaskModel t;
+    radium::TaskModel t;
     t.task_id = "task-speed-1";
     t.url = "https://example.com/file.bin";
     t.file_name = "file.bin";
@@ -2536,16 +2536,16 @@ bool TestDualRateLimiterAndPerTaskSpeedLimit() {
 
 bool TestDynamicCategorizationAndSiteRulesPriority() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_cat_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_cat_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
     std::filesystem::create_directories(cfg.default_download_dir, ec);
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
 
     auto settings = ctrl.GetSettings();
@@ -2582,7 +2582,7 @@ bool TestDynamicCategorizationAndSiteRulesPriority() {
     auto gen_dir = ctrl.ResolveCategorySaveDir("General", "https://example.com/data.bin");
     ASSERT_TRUE(gen_dir == cfg.default_download_dir, "General category maps to default dir");
 
-    openidm::TaskModel explicit_destination;
+    radium::TaskModel explicit_destination;
     explicit_destination.url = "https://example.com/explicit.bin";
     explicit_destination.file_name = "explicit.bin";
     explicit_destination.save_dir = (work_dir / "SelectedFolder").string();
@@ -2597,19 +2597,19 @@ bool TestDynamicCategorizationAndSiteRulesPriority() {
 
 bool TestAlternateUrlsAndMirrorValidation() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_mirrors_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_mirrors_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
     std::filesystem::create_directories(cfg.default_download_dir, ec);
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
 
-    openidm::TaskModel t;
+    radium::TaskModel t;
     t.task_id = "task-mirrors-1";
     t.url = "https://primary.example.com/large.iso";
     t.file_name = "large.iso";
@@ -2637,7 +2637,7 @@ bool TestAlternateUrlsAndMirrorValidation() {
 }
 
 bool TestFtpReliabilityEpsvAndResumeTruncation() {
-    using openidm::ftp::FtpUrl;
+    using radium::ftp::FtpUrl;
 
     auto parsed = FtpUrl::Parse("ftp://user:pass@ftp.example.com:2121/files/document.pdf");
     ASSERT_TRUE(parsed.ok(), "Parsed FTP URL with custom port");
@@ -2665,19 +2665,19 @@ bool TestFtpReliabilityEpsvAndResumeTruncation() {
 
 bool TestSchedulerStopTimesAndPostCompletionActions() {
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_sched_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("flux_test_sched_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
     std::filesystem::create_directories(cfg.default_download_dir, ec);
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
 
-    openidm::TaskModel t;
+    radium::TaskModel t;
     t.task_id = "task-sched-1";
     t.url = "https://example.com/nightly.iso";
     t.file_name = "nightly.iso";
@@ -2719,7 +2719,7 @@ bool TestSchedulerStopTimesAndPostCompletionActions() {
 }
 
 bool TestPeerWireProtocolFramingAndCompactPeers() {
-    using namespace openidm::torrent;
+    using namespace radium::torrent;
 
     // 1. Peer ID format
     std::string peer_id = PeerWireProtocol::GeneratePeerId();
@@ -2797,7 +2797,7 @@ bool TestPeerWireProtocolFramingAndCompactPeers() {
 }
 
 bool TestMultiFileStorageMappingAndBoundarySplitting() {
-    using namespace openidm::torrent;
+    using namespace radium::torrent;
     std::error_code ec;
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "flux_test_storage";
     std::filesystem::remove_all(temp_dir, ec);
@@ -2849,7 +2849,7 @@ bool TestMultiFileStorageMappingAndBoundarySplitting() {
 }
 
 bool TestPieceManagerAndBlockScheduling() {
-    using namespace openidm::torrent;
+    using namespace radium::torrent;
     std::error_code ec;
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / "flux_test_piecemgr";
     std::filesystem::remove_all(temp_dir, ec);
@@ -2864,8 +2864,8 @@ bool TestPieceManagerAndBlockScheduling() {
     std::vector<uint8_t> piece0_data(32768, 'A');
     std::vector<uint8_t> piece1_data(32768, 'B');
 
-    std::vector<uint8_t> hash0 = openidm::CryptoUtils::ComputeBufferSha1Raw(piece0_data.data(), piece0_data.size());
-    std::vector<uint8_t> hash1 = openidm::CryptoUtils::ComputeBufferSha1Raw(piece1_data.data(), piece1_data.size());
+    std::vector<uint8_t> hash0 = radium::CryptoUtils::ComputeBufferSha1Raw(piece0_data.data(), piece0_data.size());
+    std::vector<uint8_t> hash1 = radium::CryptoUtils::ComputeBufferSha1Raw(piece1_data.data(), piece1_data.size());
     info.pieces = {hash0, hash1};
 
     auto storage = std::make_shared<MultiFileStorage>();
@@ -2920,9 +2920,9 @@ bool TestPieceManagerAndBlockScheduling() {
     std::vector<uint8_t> selected_piece_a(1000, 'A');
     std::vector<uint8_t> selected_piece_c(1000, 'C');
     selective.pieces = {
-        openidm::CryptoUtils::ComputeBufferSha1Raw(selected_piece_a.data(), selected_piece_a.size()),
+        radium::CryptoUtils::ComputeBufferSha1Raw(selected_piece_a.data(), selected_piece_a.size()),
         std::vector<uint8_t>(20, 0), std::vector<uint8_t>(20, 0),
-        openidm::CryptoUtils::ComputeBufferSha1Raw(selected_piece_c.data(), selected_piece_c.size())
+        radium::CryptoUtils::ComputeBufferSha1Raw(selected_piece_c.data(), selected_piece_c.size())
     };
     auto selective_storage = std::make_shared<MultiFileStorage>();
     std::filesystem::path selective_dir = temp_dir / "selective";
@@ -2948,7 +2948,7 @@ bool TestPieceManagerAndBlockScheduling() {
 }
 
 bool TestTrackerClientQueryEncodingAndResponseParsing() {
-    using namespace openidm::torrent;
+    using namespace radium::torrent;
 
     // 1. URL percent encoding of raw binary info-hash
     const uint8_t binary_hash[5] = {0x00, 0x12, 0xFF, 'A', 'z'};
@@ -2996,7 +2996,7 @@ bool TestTrackerClientQueryEncodingAndResponseParsing() {
 }
 
 bool TestHttpRangeSatisfactionValidation() {
-    using namespace openidm::brisk;
+    using namespace radium::brisk;
 
     // Simulate aria2 isRangeSatisfied logic
     uint64_t total_bytes = 10485760;
@@ -3039,7 +3039,7 @@ bool TestHttpRangeSatisfactionValidation() {
 }
 
 bool TestDuplicateTaskDetectionThreeTiers() {
-    using namespace openidm::core;
+    using namespace radium::core;
 
     // 1. URL Normalization
     std::string norm1 = DuplicateDetector::NormalizeUrl("  HTTP://Example.COM:80/path/file.zip?token=123#frag  ");
@@ -3049,8 +3049,8 @@ bool TestDuplicateTaskDetectionThreeTiers() {
     ASSERT_TRUE(norm2 == "https://api.server.org:8443/data/v1/?query=yes", "Non-default port and query preserved");
 
     // 2. Setup tasks list
-    std::vector<openidm::TaskModel> tasks;
-    openidm::TaskModel t1;
+    std::vector<radium::TaskModel> tasks;
+    radium::TaskModel t1;
     t1.task_id = "task-url-1";
     t1.url = "https://cdn.example.com/downloads/setup.exe?v=1";
     t1.file_name = "setup.exe";
@@ -3059,7 +3059,7 @@ bool TestDuplicateTaskDetectionThreeTiers() {
     t1.created_at_ms = 1000;
     tasks.push_back(t1);
 
-    openidm::TaskModel t2;
+    radium::TaskModel t2;
     t2.task_id = "task-name-size-1";
     t2.url = "https://mirror1.example.org/files/linux-distro.iso";
     t2.file_name = "linux-distro.iso";
@@ -3068,7 +3068,7 @@ bool TestDuplicateTaskDetectionThreeTiers() {
     t2.created_at_ms = 2000;
     tasks.push_back(t2);
 
-    openidm::TaskModel t3;
+    radium::TaskModel t3;
     t3.task_id = "task-etag-1";
     t3.url = "https://cdn.example.com/assets/video_hd.mp4";
     t3.file_name = "video_hd.mp4";
@@ -3120,7 +3120,7 @@ bool TestDuplicateTaskDetectionThreeTiers() {
     ASSERT_TRUE(base32_ones == "ffffffffffffffffffffffffffffffffffffffff", "32-base32 all-ones decoded to 40-hex");
 
     // Setup magnet task with 40-hex hash
-    openidm::TaskModel t_magnet;
+    radium::TaskModel t_magnet;
     t_magnet.task_id = "task-magnet-1";
     t_magnet.url = "magnet:?xt=urn:btih:ffffffffffffffffffffffffffffffffffffffff&dn=TestTorrent";
     t_magnet.file_name = "TestTorrent";
@@ -3133,7 +3133,7 @@ bool TestDuplicateTaskDetectionThreeTiers() {
     ASSERT_TRUE(match_magnet.matched_task.task_id == "task-magnet-1", "Matched correct magnet task ID");
 
     // 5. Motrix Reference Reuse: FinalNamePicker .part file collision prevention
-    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / ("test_motrix_part_" + openidm::GenerateUuidV4());
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / ("test_motrix_part_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(temp_dir);
     std::filesystem::path primary = temp_dir / "collision_test.bin";
     std::filesystem::path part_slot1 = temp_dir / "collision_test (1).bin.part";
@@ -3144,7 +3144,7 @@ bool TestDuplicateTaskDetectionThreeTiers() {
         std::ofstream(part_slot1) << "partial_download";
     }
 
-    auto safe_res = openidm::PathSanitizer::ResolveSafeOutputPath(temp_dir, "collision_test.bin", openidm::ConflictPolicy::kAutoRename);
+    auto safe_res = radium::PathSanitizer::ResolveSafeOutputPath(temp_dir, "collision_test.bin", radium::ConflictPolicy::kAutoRename);
     ASSERT_TRUE(safe_res.ok(), "Safe output path resolved successfully");
     // Should skip collision_test (1).bin because collision_test (1).bin.part exists, picking (2)
     ASSERT_TRUE(safe_res.value->filename().string() == "collision_test (2).bin", "Avoided slot with existing in-progress .part file, picked slot (2)");
@@ -3154,31 +3154,31 @@ bool TestDuplicateTaskDetectionThreeTiers() {
 
     // 6. Controller duplicate and destination conflict checks across diverse states (Queued, Downloading, Paused, Completed, Failed)
     {
-        std::string ctrl_temp_db = (std::filesystem::temp_directory_path() / ("test_dup_ctrl_" + openidm::GenerateUuidV4() + ".db")).string();
-        openidm::ControllerConfig ctrl_cfg;
+        std::string ctrl_temp_db = (std::filesystem::temp_directory_path() / ("test_dup_ctrl_" + radium::GenerateUuidV4() + ".db")).string();
+        radium::ControllerConfig ctrl_cfg;
         ctrl_cfg.state_db_path = ctrl_temp_db;
         ctrl_cfg.default_download_dir = std::filesystem::temp_directory_path();
         ctrl_cfg.temp_root_dir = std::filesystem::temp_directory_path();
-        openidm::DownloadController ctrl(ctrl_cfg);
+        radium::DownloadController ctrl(ctrl_cfg);
         (void)ctrl.Initialize();
 
         // Add task in Queued/Paused state
-        openidm::TaskModel task1;
+        radium::TaskModel task1;
         task1.task_id = "task-active-1";
         task1.url = "https://example.com/files/document.pdf";
         task1.file_name = "document.pdf";
         task1.save_dir = ctrl_cfg.default_download_dir.string();
-        task1.state = openidm::TaskState::kDownloading;
+        task1.state = radium::TaskState::kDownloading;
         task1.total_bytes = 1048576;
         ASSERT_TRUE(ctrl.AddTask(task1, false, false).ok(), "Added task1 to controller");
 
         // Add task in Completed state
-        openidm::TaskModel task2;
+        radium::TaskModel task2;
         task2.task_id = "task-completed-2";
         task2.url = "https://example.com/files/archive.zip?auth=xyz";
         task2.file_name = "archive.zip";
         task2.save_dir = ctrl_cfg.default_download_dir.string();
-        task2.state = openidm::TaskState::kCompleted;
+        task2.state = radium::TaskState::kCompleted;
         task2.total_bytes = 2097152;
         ASSERT_TRUE(ctrl.AddTask(task2, false, false).ok(), "Added task2 to controller");
 
@@ -3212,7 +3212,7 @@ bool TestDuplicateTaskDetectionThreeTiers() {
 }
 
 bool TestExpiredLinkRefreshAndCookieReplacement() {
-    using namespace openidm;
+    using namespace radium;
 
     // 1. IsLinkExpiredStatus verification
     ASSERT_TRUE(brisk::HttpClient::IsLinkExpiredStatus(403), "HTTP 403 Forbidden is link expired");
@@ -3304,16 +3304,16 @@ bool TestExpiredLinkRefreshAndCookieReplacement() {
 }
 
 bool TestSegmentSchedulerChunkNormalizationAndTruncationGuard() {
-    using namespace openidm::brisk;
+    using namespace radium::brisk;
 
     uint64_t total_bytes = 10000;
     SegmentScheduler scheduler(total_bytes, 4);
 
     // Segment 0: completed [0, 4999] with cursor at 5000, BUT completed flag was false (crash right after last byte)
     // Segment 1: incomplete [5000, 9999] with cursor at 6000
-    std::vector<openidm::Segment> unnormalized_segments = {
-        openidm::Segment{0, 0, 5000, 4999, false}, // current_offset == end_offset + 1, completed = false
-        openidm::Segment{1, 5000, 6000, 9999, false}
+    std::vector<radium::Segment> unnormalized_segments = {
+        radium::Segment{0, 0, 5000, 4999, false}, // current_offset == end_offset + 1, completed = false
+        radium::Segment{1, 5000, 6000, 9999, false}
     };
 
     ASSERT_TRUE(SegmentScheduler::ValidateSegmentPartition(unnormalized_segments, total_bytes),
@@ -3342,8 +3342,8 @@ bool TestSegmentSchedulerChunkNormalizationAndTruncationGuard() {
 }
 
 bool TestUrlUserinfoExtractionAndBasicAuthGeneration() {
-    using namespace openidm;
-    using namespace openidm::brisk;
+    using namespace radium;
+    using namespace radium::brisk;
 
     // 1. Parse URL with userinfo (username:password)
     auto p1 = HttpClient::ParseUrl("http://admin:secret123@127.0.0.1:8080/downloads/file.bin?token=abc");
@@ -3373,11 +3373,11 @@ bool TestUrlUserinfoExtractionAndBasicAuthGeneration() {
 // Regression Suite 52: Modern Coral Charcoal Theme, Settings Modal Bounds, Sorting Labels & Safe Delete
 bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
     // 1. AppSettings follows Windows automatically on first launch.
-    openidm::AppSettings default_settings;
+    radium::AppSettings default_settings;
     ASSERT_TRUE(default_settings.theme == "system", "Default theme follows system preference");
 
     // 2. Palette resolution: "coral_dark", "coral", "charcoal", and legacy "dark" resolve to GetRedesignPalette (#FF4757)
-    auto pal_coral = openidm::ui::DesignSystem::ResolvePalette("coral_dark");
+    auto pal_coral = radium::ui::DesignSystem::ResolvePalette("coral_dark");
     ASSERT_TRUE(pal_coral.accent_primary.r == 0xFF &&
                 pal_coral.accent_primary.g == 0x47 &&
                 pal_coral.accent_primary.b == 0x57, "coral_dark resolves to coral red #FF4757");
@@ -3396,30 +3396,30 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
                 pal_coral.status_danger.ToCssHex() == "#FF9F43",
                 "coral_dark uses muted completion, amber warning, and orange failure colors");
 
-    auto pal_dark = openidm::ui::DesignSystem::ResolvePalette("dark");
+    auto pal_dark = radium::ui::DesignSystem::ResolvePalette("dark");
     ASSERT_TRUE(pal_dark.accent_primary.r == 0xFF &&
                 pal_dark.accent_primary.g == 0x47 &&
                 pal_dark.accent_primary.b == 0x57, "legacy dark resolves to coral red #FF4757");
 
-    auto pal_classic = openidm::ui::DesignSystem::ResolvePalette("classic_blue");
+    auto pal_classic = radium::ui::DesignSystem::ResolvePalette("classic_blue");
     ASSERT_TRUE(pal_classic.accent_primary.ToCssHex() == "#FF4757", "legacy theme alias retains Radium Coral #FF4757");
 
     // 3. Modern Windows 11 Typography ramp floors
-    auto metrics_96 = openidm::ui::DesignSystem::ComputeMetrics(96);
+    auto metrics_96 = radium::ui::DesignSystem::ComputeMetrics(96);
     ASSERT_TRUE(metrics_96.font_body_px >= 14, "Body font size is at least 14px at 96 DPI");
     ASSERT_TRUE(metrics_96.font_caption_px >= 12, "Caption font size is at least 12px at 96 DPI");
 
     // 4. Controller initialization and RestoreDefaultSettings defaults
     std::error_code ec;
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_theme_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_theme_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initialized");
     ASSERT_TRUE(ctrl.GetSettings().theme == "system", "Initialized controller settings theme is system");
 
@@ -3427,7 +3427,7 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
     ASSERT_TRUE(restored.ok() && restored.value->theme == "system", "RestoreDefaultSettings returns system theme");
 
     // 5. DesktopView Settings Modal Hit Testing Bounds & Click-Through Absorption
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
     view.SetTheme("dark");
     auto theme_geometry = view.ComputeLayoutGeometry();
     ASSERT_TRUE(theme_geometry.theme_button_rect.width() > 0 && theme_geometry.theme_button_rect.height() > 0,
@@ -3435,34 +3435,34 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
     auto theme_hit = view.HitTestPoint(
         (theme_geometry.theme_button_rect.left + theme_geometry.theme_button_rect.right) / 2,
         (theme_geometry.theme_button_rect.top + theme_geometry.theme_button_rect.bottom) / 2);
-    ASSERT_TRUE(theme_hit.type == openidm::ui::HitTargetType::kThemeToggleButton,
+    ASSERT_TRUE(theme_hit.type == radium::ui::HitTargetType::kThemeToggleButton,
                 "Theme button hit testing is independent of download actions");
-    ASSERT_TRUE(view.ToggleTheme().ok() && ctrl.GetSettings().theme == "light" && view.GetPalette().mode == openidm::ui::ThemeMode::kLight,
+    ASSERT_TRUE(view.ToggleTheme().ok() && ctrl.GetSettings().theme == "light" && view.GetPalette().mode == radium::ui::ThemeMode::kLight,
                 "Theme toolbar action persists and applies light palette");
-    ASSERT_TRUE(view.ToggleTheme().ok() && ctrl.GetSettings().theme == "dark" && view.GetPalette().mode == openidm::ui::ThemeMode::kDark,
+    ASSERT_TRUE(view.ToggleTheme().ok() && ctrl.GetSettings().theme == "dark" && view.GetPalette().mode == radium::ui::ThemeMode::kDark,
                 "Theme toolbar action switches back to dark palette");
     view.RefreshSystemTheme(true);
-    ASSERT_TRUE(view.GetPalette().mode == openidm::ui::ThemeMode::kDark, "Explicit dark preference ignores system changes");
+    ASSERT_TRUE(view.GetPalette().mode == radium::ui::ThemeMode::kDark, "Explicit dark preference ignores system changes");
     ASSERT_TRUE(view.SetDraftSettingByKey("theme", "system").ok(), "Settings accepts System appearance");
     ASSERT_TRUE(view.ActionSaveSettings(view.GetDraftSettings()).ok(), "System appearance persists");
     view.RefreshSystemTheme(true);
-    ASSERT_TRUE(view.GetPalette().mode == openidm::ui::ThemeMode::kLight, "System appearance follows Windows theme change");
+    ASSERT_TRUE(view.GetPalette().mode == radium::ui::ThemeMode::kLight, "System appearance follows Windows theme change");
     ASSERT_TRUE(!view.IsSettingsCenterOpen(), "Settings center starts closed");
 
     // When settings center is open, hit testing inside modal dialog returns kSettingsModalBackground
-    view.OpenSettingsCenter(openidm::ui::SettingsCategory::kGeneral);
+    view.OpenSettingsCenter(radium::ui::SettingsCategory::kGeneral);
     ASSERT_TRUE(view.IsSettingsCenterOpen(), "Settings center opened");
 
     auto sv = view.BuildSettingsCenterView();
 
     // A click inside the modal that doesn't hit a specific control must return kSettingsModalBackground (not fall through!)
     auto hit_inside = view.HitTestPoint(sv.modal_rect.left + 50, sv.modal_rect.top + 30); // in modal header area
-    ASSERT_TRUE(hit_inside.type == openidm::ui::HitTargetType::kSettingsModalBackground,
+    ASSERT_TRUE(hit_inside.type == radium::ui::HitTargetType::kSettingsModalBackground,
                 "Click inside modal background returns kSettingsModalBackground");
 
     // A click outside the modal must return kSettingsBackdrop (not fall through to toolbar/table!)
     auto hit_outside = view.HitTestPoint(5, 5); // top-left corner outside modal
-    ASSERT_TRUE(hit_outside.type == openidm::ui::HitTargetType::kSettingsBackdrop,
+    ASSERT_TRUE(hit_outside.type == radium::ui::HitTargetType::kSettingsBackdrop,
                 "Click outside modal returns kSettingsBackdrop");
 
     // Verify HandleMouseClick on backdrop closes or handles modal safely
@@ -3471,7 +3471,7 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
     ASSERT_TRUE(!view.IsSettingsCenterOpen(), "Backdrop click closes settings center");
 
     // 6. Safe Deletion: ActionMoveSelectedToRecycleBin safely removes task
-    openidm::TaskModel t_del;
+    radium::TaskModel t_del;
     t_del.url = "https://example.com/delete_test.zip";
     t_del.file_name = "delete_test.zip";
     t_del.save_dir = work_dir.string();
@@ -3490,8 +3490,8 @@ bool TestModernCoralThemeSettingsModalBoundsAndSafeDelete() {
 }
 
 bool TestYouTubeSpeedParsingMidnightCrossingAndBitTorrentUpload() {
-    using namespace openidm;
-    using namespace openidm::torrent;
+    using namespace radium;
+    using namespace radium::torrent;
 
     // 1. Regex parsing of yt-dlp download progress and speed
     static const std::regex kYtDlpProgRe(R"(\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+~?\s*([0-9.]+)(KiB|MiB|GiB))");
@@ -3579,15 +3579,15 @@ bool TestYouTubeSpeedParsingMidnightCrossingAndBitTorrentUpload() {
 }
 
 bool TestFinalPhaseRemediationAndLiveMetrics() {
-    using namespace openidm;
+    using namespace radium;
 
     // 1. Theme default restoration follows system preference while retaining coral red accent.
     AppSettings def_settings;
     ASSERT_TRUE(def_settings.theme == "system", "Default theme is system");
-    auto pal = openidm::ui::DesignSystem::ResolvePalette("coral_dark");
+    auto pal = radium::ui::DesignSystem::ResolvePalette("coral_dark");
     ASSERT_TRUE(pal.accent_primary.r == 0xFF && pal.accent_primary.g == 0x47 && pal.accent_primary.b == 0x57,
                 "coral_dark accent is coral red #FF4757");
-    ASSERT_TRUE(openidm::ui::DesignSystem::ResolvePalette("").accent_primary.r == 0xFF,
+    ASSERT_TRUE(radium::ui::DesignSystem::ResolvePalette("").accent_primary.r == 0xFF,
                 "Fallback theme defaults to coral red #FF4757");
 
     // 2. Safe File Deletion in Controller
@@ -3678,7 +3678,7 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
 #endif
 
     // 3. Status Bar Metrics and Active Counts
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
     auto sb = view.BuildStatusBar();
     ASSERT_TRUE(sb.browser_capture_enabled, "Browser capture enabled by default");
     ASSERT_TRUE(!sb.formatted_total_speed.empty(), "Formatted speed non-empty");
@@ -3790,9 +3790,9 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
     view.SetTheme("light");
     const auto light_rows = view.BuildVisibleTaskRows();
     const auto light_completed = std::find_if(light_rows.begin(), light_rows.end(),
-        [](const openidm::ui::FormattedTaskRow& row) { return row.task_id == "task-tbl-seeding"; });
+        [](const radium::ui::FormattedTaskRow& row) { return row.task_id == "task-tbl-seeding"; });
     const auto light_failed = std::find_if(light_rows.begin(), light_rows.end(),
-        [](const openidm::ui::FormattedTaskRow& row) { return row.task_id == "task-tbl-failed"; });
+        [](const radium::ui::FormattedTaskRow& row) { return row.task_id == "task-tbl-failed"; });
     ASSERT_TRUE(light_completed != light_rows.end() &&
                 light_completed->progress_fill_color.ToCssHex() == "#168BCB",
                 "Light completed progress bars keep the sky-blue accent");
@@ -3840,7 +3840,7 @@ bool TestFinalPhaseRemediationAndLiveMetrics() {
 
 bool TestYouTubeCanonicalRoutingAndSchedulerThroughput() {
     // 1. Test SegmentScheduler::CanSplitAnySegment()
-    openidm::brisk::SegmentScheduler sched(4 * 1024 * 1024, 4, 1024 * 1024);
+    radium::brisk::SegmentScheduler sched(4 * 1024 * 1024, 4, 1024 * 1024);
     sched.Initialize({});
     ASSERT_TRUE(sched.CanSplitAnySegment(), "4MB segment with 1MB min_split should be split-eligible (4MB >= 2 * 1MB)");
 
@@ -3852,17 +3852,17 @@ bool TestYouTubeCanonicalRoutingAndSchedulerThroughput() {
     ASSERT_TRUE(s2 != nullptr, "Acquired second stolen segment");
 
     // Test small scheduler where total bytes < 2 * min_split_bytes
-    openidm::brisk::SegmentScheduler small_sched(1024 * 1024, 4, 1024 * 1024);
+    radium::brisk::SegmentScheduler small_sched(1024 * 1024, 4, 1024 * 1024);
     small_sched.Initialize({});
     ASSERT_TRUE(!small_sched.CanSplitAnySegment(), "1MB segment with 1MB min_split cannot be split (< 2 * 1MB)");
 
     // 2. Production Nm3u8dlReAdapter::WriteRestrictedResponseFile & VerifyContainerMagicBytes
     std::error_code ec;
-    std::filesystem::path task_tmp = std::filesystem::temp_directory_path() / ("flux_test_resp_" + openidm::GenerateUuidV4());
+    std::filesystem::path task_tmp = std::filesystem::temp_directory_path() / ("flux_test_resp_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(task_tmp, ec);
 
     std::vector<std::string> rsp_lines = {"--header", "Cookie: secret=12345", "--header", "Authorization: Bearer mytoken"};
-    auto rsp_res = openidm::stream::Nm3u8dlReAdapter::WriteRestrictedResponseFile(task_tmp, "job.rsp", rsp_lines);
+    auto rsp_res = radium::stream::Nm3u8dlReAdapter::WriteRestrictedResponseFile(task_tmp, "job.rsp", rsp_lines);
     ASSERT_TRUE(rsp_res.ok(), "WriteRestrictedResponseFile succeeded");
     ASSERT_TRUE(std::filesystem::exists(*rsp_res.value), "Response file exists on disk");
 
@@ -3875,14 +3875,14 @@ bool TestYouTubeCanonicalRoutingAndSchedulerThroughput() {
         std::vector<char> pad(128, 0);
         ofs.write(pad.data(), pad.size());
     }
-    ASSERT_TRUE(openidm::stream::Nm3u8dlReAdapter::VerifyContainerMagicBytes(valid_mp4, "mp4"), "VerifyContainerMagicBytes passes valid MP4");
+    ASSERT_TRUE(radium::stream::Nm3u8dlReAdapter::VerifyContainerMagicBytes(valid_mp4, "mp4"), "VerifyContainerMagicBytes passes valid MP4");
 
     std::filesystem::path corrupt_mp4 = task_tmp / "corrupt.mp4";
     {
         std::ofstream ofs(corrupt_mp4, std::ios::binary);
         ofs << "not an mp4 file content";
     }
-    ASSERT_TRUE(!openidm::stream::Nm3u8dlReAdapter::VerifyContainerMagicBytes(corrupt_mp4, "mp4"), "VerifyContainerMagicBytes rejects corrupt MP4");
+    ASSERT_TRUE(!radium::stream::Nm3u8dlReAdapter::VerifyContainerMagicBytes(corrupt_mp4, "mp4"), "VerifyContainerMagicBytes rejects corrupt MP4");
 
     std::filesystem::remove_all(task_tmp, ec);
 
@@ -3932,25 +3932,25 @@ bool TestYouTubeCanonicalRoutingAndSchedulerThroughput() {
 }
 
 bool TestSpeedFormattingMultiTrackProgressAndContainerVerification() {
-    using namespace openidm;
-    using openidm::stream::Nm3u8dlReAdapter;
+    using namespace radium;
+    using radium::stream::Nm3u8dlReAdapter;
 
     // 1. One binary-unit formatter is shared by HTTP and torrent rate displays.
-    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(0) == "0 B/s", "zero rate is formatted as 0 B/s");
-    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(999) == "999 B/s", "sub-KiB rates remain visible in B/s");
-    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(500 * 1024) == "500.0 KiB/s", "500 KiB/s formatted in binary units");
-    ASSERT_TRUE(openidm::ui::DesktopView::FormatSpeedKbps(1024 * 1024 - 1) == "1024.0 KiB/s", "Rates below 1 MiB/s use KiB/s without hiding the unit");
+    ASSERT_TRUE(radium::ui::DesktopView::FormatSpeedKbps(0) == "0 B/s", "zero rate is formatted as 0 B/s");
+    ASSERT_TRUE(radium::ui::DesktopView::FormatSpeedKbps(999) == "999 B/s", "sub-KiB rates remain visible in B/s");
+    ASSERT_TRUE(radium::ui::DesktopView::FormatSpeedKbps(500 * 1024) == "500.0 KiB/s", "500 KiB/s formatted in binary units");
+    ASSERT_TRUE(radium::ui::DesktopView::FormatSpeedKbps(1024 * 1024 - 1) == "1024.0 KiB/s", "Rates below 1 MiB/s use KiB/s without hiding the unit");
 
-    std::string spd_1mb = openidm::ui::DesktopView::FormatSpeedKbps(1024ULL * 1024ULL);
+    std::string spd_1mb = radium::ui::DesktopView::FormatSpeedKbps(1024ULL * 1024ULL);
     ASSERT_TRUE(spd_1mb == "1.0 MiB/s", "Exactly 1 MiB/s formatted in binary units");
 
-    std::string spd_2_5mb = openidm::ui::DesktopView::FormatSpeedKbps(static_cast<uint64_t>(2.5 * 1024.0 * 1024.0));
+    std::string spd_2_5mb = radium::ui::DesktopView::FormatSpeedKbps(static_cast<uint64_t>(2.5 * 1024.0 * 1024.0));
     ASSERT_TRUE(spd_2_5mb == "2.5 MiB/s", "2.5 MiB/s formatted consistently");
 
-    std::string spd_15mb = openidm::ui::DesktopView::FormatSpeedKbps(15ULL * 1024ULL * 1024ULL);
+    std::string spd_15mb = radium::ui::DesktopView::FormatSpeedKbps(15ULL * 1024ULL * 1024ULL);
     ASSERT_TRUE(spd_15mb == "15.0 MiB/s", "15 MiB/s formatted consistently");
 
-    std::string spd_1_25gb = openidm::ui::DesktopView::FormatSpeedKbps(static_cast<uint64_t>(1.25 * 1024.0 * 1024.0 * 1024.0));
+    std::string spd_1_25gb = radium::ui::DesktopView::FormatSpeedKbps(static_cast<uint64_t>(1.25 * 1024.0 * 1024.0 * 1024.0));
     ASSERT_TRUE(spd_1_25gb == "1.2 GiB/s", "1.25 GiB/s uses the shared one-decimal precision");
 
     // 2. Multi-track YouTube progress accounting simulation (Video 182.50 MiB + Audio 13.30 MiB = 195.80 MiB)
@@ -4073,8 +4073,8 @@ bool TestSpeedFormattingMultiTrackProgressAndContainerVerification() {
 }
 
 bool TestPimpbunnyStreamRoutingAndYouTubeNetscapeCookieFile() {
-    using namespace openidm;
-    using namespace openidm::stream;
+    using namespace radium;
+    using namespace radium::stream;
     std::error_code ec;
     auto test_dir = std::filesystem::temp_directory_path() / ("test_pb_yt_" + GenerateUuidV4());
     std::filesystem::create_directories(test_dir, ec);
@@ -4115,19 +4115,19 @@ bool TestPimpbunnyStreamRoutingAndYouTubeNetscapeCookieFile() {
 
     // 2. Test IpcServer stream.add routing
     {
-        std::string sock = openidm::ipc::IpcServer::DefaultSocketPath() + "_test_pb_" + GenerateUuidV4();
-        openidm::ControllerConfig cfg;
+        std::string sock = radium::ipc::IpcServer::DefaultSocketPath() + "_test_pb_" + GenerateUuidV4();
+        radium::ControllerConfig cfg;
         cfg.state_db_path = test_dir / "state.db";
         cfg.default_download_dir = test_dir / "downloads";
         cfg.temp_root_dir = test_dir / "tmp";
 
-        openidm::DownloadController ctrl(cfg);
+        radium::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller for stream routing test");
-        openidm::ipc::IpcServer server(ctrl, sock);
+        radium::ipc::IpcServer server(ctrl, sock);
         server.SetHeadlessDaemonMode(true);
 
         // Scenario A: Pimpbunny progressive direct video (.mp4) with videoUrl
-        // Must NOT forge fluxType: YOUTUBE_STREAM and must route to TaskType::kHttpFile
+        // Must NOT forge radiumType: YOUTUBE_STREAM and must route to TaskType::kHttpFile
         std::string pb_direct_req = R"JSON({
             "jsonrpc": "2.0",
             "id": "pb-test-1",
@@ -4147,13 +4147,13 @@ bool TestPimpbunnyStreamRoutingAndYouTubeNetscapeCookieFile() {
         auto tasks = ctrl.ListTasks();
         ASSERT_TRUE(!tasks.empty(), "Task was added to controller");
         auto pb_task = tasks.back();
-        ASSERT_TRUE(pb_task.task_type == openidm::TaskType::kHttpFile, "Pimpbunny direct video routed to in-process HTTP engine");
+        ASSERT_TRUE(pb_task.task_type == radium::TaskType::kHttpFile, "Pimpbunny direct video routed to in-process HTTP engine");
         ASSERT_TRUE(pb_task.url.find("pimpbunny.com/videos/media_1080p.mp4") != std::string::npos, "Correct media URL preserved");
         ASSERT_TRUE(pb_task.stream_options.cached_manifest_body.find("YOUTUBE_STREAM") == std::string::npos,
                     "Non-YouTube task does NOT contain synthetic YOUTUBE_STREAM descriptor");
 
         // Scenario B: Pimpbunny HLS stream (.m3u8) with videoUrl
-        // Must NOT forge fluxType: YOUTUBE_STREAM and must route to TaskType::kStreamHls
+        // Must NOT forge radiumType: YOUTUBE_STREAM and must route to TaskType::kStreamHls
         std::string pb_hls_req = R"JSON({
             "jsonrpc": "2.0",
             "id": "pb-test-2",
@@ -4179,13 +4179,13 @@ bool TestPimpbunnyStreamRoutingAndYouTubeNetscapeCookieFile() {
             }
         }
         ASSERT_TRUE(!pb_hls_task.task_id.empty(), "Pimpbunny HLS task found");
-        ASSERT_TRUE(pb_hls_task.task_type == openidm::TaskType::kStreamHls, "Pimpbunny HLS routed to Stream HLS");
+        ASSERT_TRUE(pb_hls_task.task_type == radium::TaskType::kStreamHls, "Pimpbunny HLS routed to Stream HLS");
         ASSERT_TRUE(pb_hls_task.url.find("master.m3u8") != std::string::npos, "Correct m3u8 URL preserved");
         ASSERT_TRUE(pb_hls_task.stream_options.cached_manifest_body.find("YOUTUBE_STREAM") == std::string::npos,
                     "Pimpbunny HLS task does NOT contain synthetic YOUTUBE_STREAM descriptor");
 
         // Scenario C: YouTube stream extraction with videoUrl
-        // MUST forge fluxType: YOUTUBE_STREAM and route to YouTube extraction
+        // MUST forge radiumType: YOUTUBE_STREAM and route to YouTube extraction
         std::string yt_req = R"JSON({
             "jsonrpc": "2.0",
             "id": "yt-test-1",
@@ -4213,7 +4213,7 @@ bool TestPimpbunnyStreamRoutingAndYouTubeNetscapeCookieFile() {
             }
         }
         ASSERT_TRUE(!yt_task.task_id.empty(), "YouTube task found");
-        ASSERT_TRUE(yt_task.task_type == openidm::TaskType::kStreamHls, "YouTube routed to Stream HLS for worker handling");
+        ASSERT_TRUE(yt_task.task_type == radium::TaskType::kStreamHls, "YouTube routed to Stream HLS for worker handling");
         ASSERT_TRUE(yt_task.stream_options.cached_manifest_body.find("YOUTUBE_STREAM") != std::string::npos,
                     "YouTube task contains YOUTUBE_STREAM descriptor");
 
@@ -4237,7 +4237,7 @@ bool TestPimpbunnyStreamRoutingAndYouTubeNetscapeCookieFile() {
 }
 
 bool TestRemediationPhaseRegressionSuites() {
-    using namespace openidm;
+    using namespace radium;
 
     // 1. Test brisk::HttpClient HeaderAction and HTTP status mappings
     {
@@ -4300,7 +4300,7 @@ bool TestRemediationPhaseRegressionSuites() {
 
     // 3. Test Bencode integer parsing edge cases & raw dictionary slice
     {
-        using namespace openidm::torrent;
+        using namespace radium::torrent;
 
         // Leading zeros
         auto r1 = BencodeParser::Decode("i03e");
@@ -4370,15 +4370,15 @@ bool TestRemediationPhaseRegressionSuites() {
         auto test_dir = std::filesystem::temp_directory_path() / ("test_ipc_remediation_" + GenerateUuidV4());
         std::filesystem::create_directories(test_dir, ec);
 
-        std::string sock = openidm::ipc::IpcServer::DefaultSocketPath() + "_test_rem_" + GenerateUuidV4();
-        openidm::ControllerConfig cfg;
+        std::string sock = radium::ipc::IpcServer::DefaultSocketPath() + "_test_rem_" + GenerateUuidV4();
+        radium::ControllerConfig cfg;
         cfg.state_db_path = test_dir / "state.db";
         cfg.default_download_dir = test_dir / "downloads";
         cfg.temp_root_dir = test_dir / "tmp";
 
-        openidm::DownloadController ctrl(cfg);
+        radium::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller for IPC remediation test");
-        openidm::ipc::IpcServer server(ctrl, sock);
+        radium::ipc::IpcServer server(ctrl, sock);
         server.SetHeadlessDaemonMode(true);
 
         // Path traversal in saveDir rejected
@@ -4461,18 +4461,18 @@ bool TestAuditBehaviorImprovements() {
     {
         uint64_t s = 0, e = 0, t = 0;
         // end >= total
-        ASSERT_TRUE(!openidm::brisk::ParseContentRange("bytes 0-100/50", s, e, t), "bytes 0-100/50 rejected (end >= total)");
+        ASSERT_TRUE(!radium::brisk::ParseContentRange("bytes 0-100/50", s, e, t), "bytes 0-100/50 rejected (end >= total)");
         // start >= total
-        ASSERT_TRUE(!openidm::brisk::ParseContentRange("bytes 100-200/50", s, e, t), "bytes 100-200/50 rejected (start >= total)");
+        ASSERT_TRUE(!radium::brisk::ParseContentRange("bytes 100-200/50", s, e, t), "bytes 100-200/50 rejected (start >= total)");
         // total == 0
-        ASSERT_TRUE(!openidm::brisk::ParseContentRange("bytes 0-0/0", s, e, t), "bytes 0-0/0 rejected (total == 0)");
+        ASSERT_TRUE(!radium::brisk::ParseContentRange("bytes 0-0/0", s, e, t), "bytes 0-0/0 rejected (total == 0)");
         // start > end
-        ASSERT_TRUE(!openidm::brisk::ParseContentRange("bytes 200-100/500", s, e, t), "bytes 200-100/500 rejected (start > end)");
+        ASSERT_TRUE(!radium::brisk::ParseContentRange("bytes 200-100/500", s, e, t), "bytes 200-100/500 rejected (start > end)");
         // Valid exact satisfaction
-        ASSERT_TRUE(openidm::brisk::ParseContentRange("bytes 0-99/100", s, e, t), "bytes 0-99/100 accepted");
+        ASSERT_TRUE(radium::brisk::ParseContentRange("bytes 0-99/100", s, e, t), "bytes 0-99/100 accepted");
         ASSERT_TRUE(s == 0 && e == 99 && t == 100, "Range parsed: 0..99 / 100");
         // Valid unknown total (*)
-        ASSERT_TRUE(openidm::brisk::ParseContentRange("bytes 50-99/*", s, e, t), "bytes 50-99/* accepted");
+        ASSERT_TRUE(radium::brisk::ParseContentRange("bytes 50-99/*", s, e, t), "bytes 50-99/* accepted");
         ASSERT_TRUE(s == 50 && e == 99 && t == 0, "Range parsed: 50..99 / unknown");
     }
 
@@ -4483,7 +4483,7 @@ bool TestAuditBehaviorImprovements() {
 #else
         std::string non_existent_dir = "/proc/invalid_non_existent_flux_dir/downloads";
 #endif
-        auto check_res = openidm::PathSanitizer::CheckAvailableDiskSpace(non_existent_dir, 1024);
+        auto check_res = radium::PathSanitizer::CheckAvailableDiskSpace(non_existent_dir, 1024);
         ASSERT_TRUE(!check_res.ok(), "Non-existent directory rejected by CheckAvailableDiskSpace");
         ASSERT_TRUE(check_res.error->code == "ERR_DESTINATION_UNAVAILABLE", "Error code is ERR_DESTINATION_UNAVAILABLE");
     }
@@ -4491,7 +4491,7 @@ bool TestAuditBehaviorImprovements() {
     std::cout << "  [3/7] Testing FTP resume truncation logic...\n";
     {
         std::error_code ec;
-        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_ftp_trunc_" + openidm::GenerateUuidV4());
+        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_ftp_trunc_" + radium::GenerateUuidV4());
         std::filesystem::create_directories(test_dir, ec);
 
         auto partial_file = test_dir / "ftp_partial.bin";
@@ -4518,46 +4518,46 @@ bool TestAuditBehaviorImprovements() {
     {
         // 1. Piece length 0
         std::string bad_torrent_1 = "d4:infod6:lengthi1024e4:name8:test.txt12:piece lengthi0e6:pieces20:12345678901234567890ee";
-        auto r1 = openidm::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_1);
+        auto r1 = radium::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_1);
         ASSERT_TRUE(!r1.ok(), "piece length 0 rejected");
         ASSERT_TRUE(r1.error->code == "ERR_TORRENT_MALFORMED", "ERR_TORRENT_MALFORMED for piece length 0");
 
         // 2. Piece length > 128 MiB
         std::string bad_torrent_2 = "d4:infod6:lengthi1024e4:name8:test.txt12:piece lengthi268435456e6:pieces20:12345678901234567890ee";
-        auto r2 = openidm::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_2);
+        auto r2 = radium::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_2);
         ASSERT_TRUE(!r2.ok(), "piece length > 128 MiB rejected");
         ASSERT_TRUE(r2.error->code == "ERR_TORRENT_MALFORMED", "ERR_TORRENT_MALFORMED for piece length > 128 MiB");
 
         // 3. Piece count mismatch (requires 2 pieces = 40 bytes, but provides 20 bytes)
         std::string bad_torrent_3 = "d4:infod6:lengthi32768e4:name8:test.txt12:piece lengthi16384e6:pieces20:12345678901234567890ee";
-        auto r3 = openidm::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_3);
+        auto r3 = radium::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_3);
         ASSERT_TRUE(!r3.ok(), "piece count mismatch rejected");
         ASSERT_TRUE(r3.error->code == "ERR_TORRENT_PIECES", "ERR_TORRENT_PIECES for mismatched piece count");
 
         // 4. Negative file length
         std::string bad_torrent_4 = "d4:infod6:lengthi-100e4:name8:test.txt12:piece lengthi16384e6:pieces20:12345678901234567890ee";
-        auto r4 = openidm::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_4);
+        auto r4 = radium::torrent::TorrentParser::ParseTorrentBuffer(bad_torrent_4);
         ASSERT_TRUE(!r4.ok(), "negative file length rejected");
         ASSERT_TRUE(r4.error->code == "ERR_TORRENT_MALFORMED", "ERR_TORRENT_MALFORMED for negative length");
 
         // 5. Safe get_piece_size with empty or 0 length
-        openidm::torrent::TorrentInfo ti;
+        radium::torrent::TorrentInfo ti;
         ti.total_length = 0;
         ti.piece_length = 0;
         ASSERT_TRUE(ti.get_piece_size(0) == 0, "get_piece_size with 0 length returns 0 safely without division by zero");
 
         // 6. Magnet link rejection in TorrentEngine
-        openidm::TaskModel t_mag;
-        t_mag.task_id = openidm::GenerateUuidV4();
+        radium::TaskModel t_mag;
+        t_mag.task_id = radium::GenerateUuidV4();
         t_mag.url = "magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709&dn=test";
-        openidm::torrent::TorrentInfo ti_mag;
+        radium::torrent::TorrentInfo ti_mag;
         ti_mag.is_magnet = true;
         std::atomic<bool> pause_req{false};
         std::atomic<bool> cancel_req{false};
         std::atomic<uint64_t> spd_limit{0};
         std::atomic<uint64_t> global_limit{1048576};
 
-        auto mag_res = openidm::torrent::TorrentEngine::ExecuteTorrentDownload(
+        auto mag_res = radium::torrent::TorrentEngine::ExecuteTorrentDownload(
             t_mag,
             ti_mag,
             pause_req,
@@ -4574,15 +4574,15 @@ bool TestAuditBehaviorImprovements() {
     std::cout << "  [5/7] Testing stream task intermediate part file preservation on retry...\n";
     {
         std::error_code ec;
-        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_retry_stream_" + openidm::GenerateUuidV4());
+        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_retry_stream_" + radium::GenerateUuidV4());
         std::filesystem::create_directories(test_dir, ec);
 
-        openidm::ControllerConfig cfg;
+        radium::ControllerConfig cfg;
         cfg.state_db_path = test_dir / "state.db";
         cfg.default_download_dir = test_dir / "downloads";
         cfg.temp_root_dir = test_dir / "tmp";
 
-        openidm::DownloadController ctrl(cfg);
+        radium::DownloadController ctrl(cfg);
         ASSERT_TRUE(ctrl.Initialize().ok(), "Init controller for stream retry test");
 
         auto dummy_stream_file = test_dir / "stream_temp.part";
@@ -4591,9 +4591,9 @@ bool TestAuditBehaviorImprovements() {
             out << "STREAM_PARTIAL_SEGMENTS_REMAIN";
         }
 
-        openidm::TaskModel t;
-        t.task_id = openidm::GenerateUuidV4();
-        t.task_type = openidm::TaskType::kStreamHls;
+        radium::TaskModel t;
+        t.task_id = radium::GenerateUuidV4();
+        t.task_type = radium::TaskType::kStreamHls;
         t.file_name = "stream_temp.mp4";
         t.save_dir = test_dir.string();
         t.part_path = dummy_stream_file.string();
@@ -4614,24 +4614,24 @@ bool TestAuditBehaviorImprovements() {
     std::cout << "  [6/7] Testing SQLite crash recovery disk reconciliation...\n";
     {
         std::error_code ec;
-        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_reconcile_" + openidm::GenerateUuidV4());
+        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_reconcile_" + radium::GenerateUuidV4());
         std::filesystem::create_directories(test_dir, ec);
 
-        openidm::SqliteStore store;
+        radium::SqliteStore store;
         ASSERT_TRUE(store.Open(test_dir / "state.db").ok(), "Open test db for reconciliation");
 
         // Task 1: part file missing on disk
-        openidm::TaskModel t1;
-        t1.task_id = openidm::GenerateUuidV4();
-        t1.task_type = openidm::TaskType::kHttpFile;
-        t1.state = openidm::TaskState::kDownloading;
+        radium::TaskModel t1;
+        t1.task_id = radium::GenerateUuidV4();
+        t1.task_type = radium::TaskType::kHttpFile;
+        t1.state = radium::TaskState::kDownloading;
         t1.url = "https://example.com/missing.bin";
         t1.file_name = "missing.bin";
         t1.save_dir = test_dir.string();
         t1.part_path = (test_dir / "missing.bin.part").string();
         t1.total_bytes = 100000;
         t1.downloaded_bytes = 50000;
-        t1.segments = { openidm::Segment{0, 0, 50000, 99999, false} };
+        t1.segments = { radium::Segment{0, 0, 50000, 99999, false} };
         ASSERT_TRUE(store.UpsertTask(t1).ok(), "Upsert t1");
 
         // Task 2: part file exists on disk but is only 30000 bytes
@@ -4642,17 +4642,17 @@ bool TestAuditBehaviorImprovements() {
             out.write(dummy.data(), dummy.size());
         }
 
-        openidm::TaskModel t2;
-        t2.task_id = openidm::GenerateUuidV4();
-        t2.task_type = openidm::TaskType::kHttpFile;
-        t2.state = openidm::TaskState::kDownloading;
+        radium::TaskModel t2;
+        t2.task_id = radium::GenerateUuidV4();
+        t2.task_type = radium::TaskType::kHttpFile;
+        t2.state = radium::TaskState::kDownloading;
         t2.url = "https://example.com/clamped.bin";
         t2.file_name = "clamped.bin";
         t2.save_dir = test_dir.string();
         t2.part_path = part2.string();
         t2.total_bytes = 100000;
         t2.downloaded_bytes = 50000;
-        t2.segments = { openidm::Segment{0, 0, 50000, 99999, false} };
+        t2.segments = { radium::Segment{0, 0, 50000, 99999, false} };
         ASSERT_TRUE(store.UpsertTask(t2).ok(), "Upsert t2");
 
         // Recover with 0 safety rollback to test pure disk reconciliation
@@ -4682,7 +4682,7 @@ bool TestAuditBehaviorImprovements() {
 bool TestQualitySelectionSizeAndColumnDocking() {
     std::cout << "  [1/5] Verifying StreamSelectionOptions default audio filter is 'best'...\n";
     {
-        openidm::StreamSelectionOptions opts;
+        radium::StreamSelectionOptions opts;
         ASSERT_TRUE(opts.audio_filter == "best", "StreamSelectionOptions default audio filter must be 'best'");
         ASSERT_TRUE(opts.video_filter == "best", "StreamSelectionOptions default video filter must be 'best'");
     }
@@ -4690,7 +4690,7 @@ bool TestQualitySelectionSizeAndColumnDocking() {
     std::cout << "  [2/5] Verifying JSON manifest quality parsing, resolution matching and size combination...\n";
     {
         std::string manifest_json = R"raw({
-            "fluxType": "YOUTUBE_STREAM",
+            "radiumType": "YOUTUBE_STREAM",
             "qualities": [
                 {
                     "id": "1080p",
@@ -4728,7 +4728,7 @@ bool TestQualitySelectionSizeAndColumnDocking() {
             ]
         })raw";
 
-        auto root = openidm::json::Parse(manifest_json);
+        auto root = radium::json::Parse(manifest_json);
         ASSERT_TRUE(root.is_object(), "Root is JSON object");
         ASSERT_TRUE(root["qualities"].is_array(), "Qualities is array");
         ASSERT_TRUE(root["qualities"].as_array().size() == 3, "3 qualities parsed");
@@ -4770,7 +4770,7 @@ bool TestQualitySelectionSizeAndColumnDocking() {
         ASSERT_TRUE(actual_size == 59123456, "Actual file size on disk is 59,123,456 bytes (~59 MB)");
 
         // Test pretty formatting
-        std::string pretty = openidm::ui::DesktopView::FormatSizePretty(actual_size);
+        std::string pretty = radium::ui::DesktopView::FormatSizePretty(actual_size);
         ASSERT_TRUE(pretty.find("56.3") != std::string::npos || pretty.find("56.") != std::string::npos || pretty.find("MB") != std::string::npos, "FormatSizePretty reports ~56.4 MiB");
 
         std::filesystem::remove_all(temp_dir, ec);
@@ -4782,11 +4782,11 @@ bool TestQualitySelectionSizeAndColumnDocking() {
         auto db_dir = std::filesystem::temp_directory_path() / "flux_docking_test";
         std::filesystem::create_directories(db_dir, ec);
         auto db_path = (db_dir / "test.db").string();
-        openidm::ControllerConfig cfg;
+        radium::ControllerConfig cfg;
         cfg.state_db_path = db_path;
-        openidm::DownloadController controller(cfg);
+        radium::DownloadController controller(cfg);
         ASSERT_TRUE(controller.Initialize().ok(), "Initialize controller");
-        openidm::ui::DesktopView view(controller);
+        radium::ui::DesktopView view(controller);
 
         const int test_widths[] = {800, 900, 931, 1024, 1280, 1600, 1920};
         for (int w : test_widths) {
@@ -4826,14 +4826,14 @@ bool TestQualitySelectionSizeAndColumnDocking() {
     std::cout << "  [5/5] Verifying Excel-style column resizing, divider hit testing and persistence...\n";
     {
         std::error_code ec;
-        auto db_dir = std::filesystem::temp_directory_path() / ("flux_resize_col_test_" + openidm::GenerateUuidV4());
+        auto db_dir = std::filesystem::temp_directory_path() / ("flux_resize_col_test_" + radium::GenerateUuidV4());
         std::filesystem::create_directories(db_dir, ec);
         auto db_path = (db_dir / "test.db").string();
-        openidm::ControllerConfig cfg;
+        radium::ControllerConfig cfg;
         cfg.state_db_path = db_path;
-        openidm::DownloadController controller(cfg);
+        radium::DownloadController controller(cfg);
         ASSERT_TRUE(controller.Initialize().ok(), "Initialize controller");
-        openidm::ui::DesktopView view(controller);
+        radium::ui::DesktopView view(controller);
 
         view.SetWindowDimensions(1200, 800);
         auto initial_geom = view.ComputeLayoutGeometry(0);
@@ -4868,7 +4868,7 @@ bool TestQualitySelectionSizeAndColumnDocking() {
         ASSERT_TRUE(geom_resized2.table_columns[2].rect.left == geom_resized2.table_columns[1].rect.right, "Status column shifted to stay contiguous");
 
         // 4. Verify persistence across instances via SQLite settings
-        openidm::ui::DesktopView view2(controller);
+        radium::ui::DesktopView view2(controller);
         view2.SetWindowDimensions(1200, 800);
         auto geom_persisted = view2.ComputeLayoutGeometry(0);
         ASSERT_TRUE(geom_persisted.table_columns[0].rect.width() == orig_name_w + 50, "Persisted Name column width loaded on restart");
@@ -4884,38 +4884,38 @@ bool TestQualitySelectionSizeAndColumnDocking() {
 bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     std::cout << "  [1/7] Testing valid ordinary HTTP URL submission and task creation...\n";
     std::error_code ec;
-    auto test_dir = std::filesystem::temp_directory_path() / ("flux_dlg_submit_test_" + openidm::GenerateUuidV4());
+    auto test_dir = std::filesystem::temp_directory_path() / ("flux_dlg_submit_test_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(test_dir, ec);
     auto db_path = (test_dir / "tasks.db").string();
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = db_path;
     cfg.default_download_dir = test_dir / "downloads";
     cfg.temp_root_dir = test_dir / "tmp";
     std::filesystem::create_directories(cfg.default_download_dir, ec);
     std::filesystem::create_directories(cfg.temp_root_dir, ec);
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initialized for dialog submission test");
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
 
     // Case 1: Valid ordinary HTTP URL
-    openidm::ui::AddDownloadDialogInput http_in;
+    radium::ui::AddDownloadDialogInput http_in;
     http_in.url = "http://example.com/archive.zip";
     http_in.custom_filename = "archive.zip";
     http_in.save_dir = cfg.default_download_dir.string();
     http_in.start_immediately = true;
     auto http_res = view.SubmitAddDownloadDialog(http_in);
     ASSERT_TRUE(http_res.ok(), "HTTP URL submission succeeds");
-    ASSERT_TRUE(http_res.value->task_type == openidm::TaskType::kHttpFile, "Task type is kHttpFile");
+    ASSERT_TRUE(http_res.value->task_type == radium::TaskType::kHttpFile, "Task type is kHttpFile");
     ASSERT_TRUE(http_res.value->file_name == "archive.zip", "File name preserved");
     auto check_http = ctrl.GetTask(http_res.value->task_id);
     ASSERT_TRUE(check_http.has_value(), "Task exists in controller store");
-    ASSERT_TRUE(check_http->state == openidm::TaskState::kQueued || check_http->state == openidm::TaskState::kProbing || check_http->state == openidm::TaskState::kDownloading, "Task starts in active/queued state when start_immediately=true");
+    ASSERT_TRUE(check_http->state == radium::TaskState::kQueued || check_http->state == radium::TaskState::kProbing || check_http->state == radium::TaskState::kDownloading, "Task starts in active/queued state when start_immediately=true");
 
     std::cout << "  [2/7] Testing valid HTTPS URL submission...\n";
     // Case 2: Valid HTTPS URL
-    openidm::ui::AddDownloadDialogInput https_in;
+    radium::ui::AddDownloadDialogInput https_in;
     https_in.url = "https://cdn.example.org/docs/manual.pdf";
     https_in.custom_filename = "manual.pdf";
     https_in.save_dir = cfg.default_download_dir.string();
@@ -4924,11 +4924,11 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     ASSERT_TRUE(https_res.ok(), "HTTPS URL submission succeeds");
     auto check_https = ctrl.GetTask(https_res.value->task_id);
     ASSERT_TRUE(check_https.has_value(), "HTTPS task exists in controller");
-    ASSERT_TRUE(check_https->state == openidm::TaskState::kPaused, "Task starts in kPaused state when start_immediately=false");
+    ASSERT_TRUE(check_https->state == radium::TaskState::kPaused, "Task starts in kPaused state when start_immediately=false");
 
     std::cout << "  [3/7] Testing YouTube URL stream task creation before extraction...\n";
     // Case 3: YouTube URL
-    openidm::ui::AddDownloadDialogInput yt_in;
+    radium::ui::AddDownloadDialogInput yt_in;
     yt_in.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
     yt_in.custom_filename = "";
     yt_in.save_dir = cfg.default_download_dir.string();
@@ -4937,7 +4937,7 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     yt_in.start_immediately = true;
     auto yt_res = view.SubmitAddDownloadDialog(yt_in);
     ASSERT_TRUE(yt_res.ok(), "YouTube URL creates stream task");
-    ASSERT_TRUE(yt_res.value->task_type == openidm::TaskType::kStreamHls, "YouTube URL routes to stream task");
+    ASSERT_TRUE(yt_res.value->task_type == radium::TaskType::kStreamHls, "YouTube URL routes to stream task");
     ASSERT_TRUE(yt_res.value->category == "Video", "YouTube task category is Video");
     ASSERT_TRUE(yt_res.value->stream_options.video_filter == "144p", "Selected quality video_filter reaches task");
     ASSERT_TRUE(yt_res.value->stream_options.audio_filter == "best", "Audio filter reaches task");
@@ -4946,7 +4946,7 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
 
     std::cout << "  [4/7] Testing invalid URL rejection with descriptive validation error...\n";
     // Case 4: Invalid URL
-    openidm::ui::AddDownloadDialogInput bad_url_in;
+    radium::ui::AddDownloadDialogInput bad_url_in;
     bad_url_in.url = "not_a_valid_url_at_all";
     auto bad_res = view.SubmitAddDownloadDialog(bad_url_in);
     ASSERT_TRUE(!bad_res.ok(), "Invalid URL rejected");
@@ -4954,7 +4954,7 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
 
     std::cout << "  [5/7] Testing quality, destination, and scheduling settings propagation...\n";
     // Case 5: Propagation of custom destination, scheduling, and format options
-    openidm::ui::AddDownloadDialogInput custom_in;
+    radium::ui::AddDownloadDialogInput custom_in;
     custom_in.url = "https://stream.example.com/live/playlist.m3u8";
     custom_in.custom_filename = "custom_lecture.mp4";
     auto custom_save_dir = (test_dir / "lectures").string();
@@ -4975,7 +4975,7 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     ASSERT_TRUE(check_custom->total_bytes == 54321000ULL, "Estimated size matches");
     ASSERT_TRUE(check_custom->scheduled == true, "Scheduled flag matches");
     ASSERT_TRUE(check_custom->schedule_time_local == "23:45", "Scheduled time matches");
-    ASSERT_TRUE(check_custom->state == openidm::TaskState::kPaused, "Scheduled task initialized as paused until schedule time");
+    ASSERT_TRUE(check_custom->state == radium::TaskState::kPaused, "Scheduled task initialized as paused until schedule time");
 
     std::cout << "  [6/7] Testing dialog duplicate click protection guard...\n";
     // Case 6: Duplicate submission guard
@@ -4984,7 +4984,7 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     auto simulate_button_click = [&]() {
         if (is_submitting) return false;
         is_submitting = true;
-        openidm::ui::AddDownloadDialogInput click_in;
+        radium::ui::AddDownloadDialogInput click_in;
         click_in.url = "https://example.com/unique_file_" + std::to_string(submissions) + ".zip";
         click_in.start_immediately = false;
         auto r = view.SubmitAddDownloadDialog(click_in);
@@ -5004,35 +5004,35 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
     // Case 8: Duplicate active download detection
     std::cout << "  [8/12] Testing duplicate active download detection...\n";
     auto dup_match1 = ctrl.CheckDuplicateTask("https://example.com/unique_file_0.zip");
-    ASSERT_TRUE(dup_match1.kind == openidm::core::DuplicateKind::kSameUrl, "Duplicate URL detected");
+    ASSERT_TRUE(dup_match1.kind == radium::core::DuplicateKind::kSameUrl, "Duplicate URL detected");
     ASSERT_TRUE(!dup_match1.matched_task.task_id.empty(), "Matched task identified");
 
     // Case 9: Duplicate paused download detection
     std::cout << "  [9/12] Testing duplicate paused download detection...\n";
     auto dup_match2 = ctrl.CheckDuplicateTask("https://stream.example.com/live/playlist.m3u8");
-    ASSERT_TRUE(dup_match2.kind == openidm::core::DuplicateKind::kSameUrl, "Duplicate paused task URL detected");
+    ASSERT_TRUE(dup_match2.kind == radium::core::DuplicateKind::kSameUrl, "Duplicate paused task URL detected");
 
     // Case 10: Duplicate completed download detection
     std::cout << "  [10/12] Testing duplicate completed download detection...\n";
-    openidm::TaskModel comp_task;
+    radium::TaskModel comp_task;
     comp_task.url = "https://example.com/completed_file.iso";
     comp_task.file_name = "completed_file.iso";
     comp_task.save_dir = test_dir.string();
-    comp_task.state = openidm::TaskState::kCompleted;
+    comp_task.state = radium::TaskState::kCompleted;
     auto add_comp = ctrl.AddTask(comp_task, false, true);
     ASSERT_TRUE(add_comp.ok(), "Completed task added");
     auto dup_match3 = ctrl.CheckDuplicateTask("https://example.com/completed_file.iso");
-    ASSERT_TRUE(dup_match3.kind == openidm::core::DuplicateKind::kSameUrl, "Completed task duplicate URL detected");
+    ASSERT_TRUE(dup_match3.kind == radium::core::DuplicateKind::kSameUrl, "Completed task duplicate URL detected");
 
     // Case 11: Destination path conflict detection
     std::cout << "  [11/12] Testing destination path conflict detection...\n";
     auto dest_conflict = ctrl.CheckDestinationConflict(custom_save_dir, "custom_lecture.mp4");
-    ASSERT_TRUE(dest_conflict.kind == openidm::core::DuplicateKind::kSameDestination, "Same destination path collision detected");
+    ASSERT_TRUE(dest_conflict.kind == radium::core::DuplicateKind::kSameDestination, "Same destination path collision detected");
 
     // Case 12: Distinct files on same domain are not false duplicates
     std::cout << "  [12/12] Testing distinct files on same domain are not false duplicates...\n";
     auto no_dup = ctrl.CheckDuplicateTask("https://example.com/completely_different_file.iso");
-    ASSERT_TRUE(no_dup.kind == openidm::core::DuplicateKind::kNone, "Distinct file not flagged as duplicate");
+    ASSERT_TRUE(no_dup.kind == radium::core::DuplicateKind::kNone, "Distinct file not flagged as duplicate");
 
     ctrl.Shutdown();
     std::filesystem::remove_all(test_dir, ec);
@@ -5042,8 +5042,8 @@ bool TestNewDownloadDialogSubmissionAndTaskCreation() {
 
 
 bool TestYouTubeQualitySelectionIntegrityAndVerification() {
-    using namespace openidm;
-    using namespace openidm::stream;
+    using namespace radium;
+    using namespace radium::stream;
     std::cout << "  [1/4] Verifying BuildYtDlpFormatSelector prevents 360p fallback...\n";
     {
         // 1080p target
@@ -5155,9 +5155,9 @@ bool TestYouTubeQualitySelectionIntegrityAndVerification() {
         auto db_dir = std::filesystem::temp_directory_path() / ("test_state_prog_" + GenerateUuidV4());
         std::filesystem::create_directories(db_dir, ec);
         auto db_path = (db_dir / "test.db").string();
-        openidm::ControllerConfig cfg;
+        radium::ControllerConfig cfg;
         cfg.state_db_path = db_path;
-        openidm::DownloadController controller(cfg);
+        radium::DownloadController controller(cfg);
         ASSERT_TRUE(controller.Initialize().ok(), "Initialize controller");
 
         // 1. Task in kDownloading with 100% bytes downloaded - must be capped at 99.0%
@@ -5232,7 +5232,7 @@ bool TestYouTubeQualitySelectionIntegrityAndVerification() {
         t_unknown.state = TaskState::kDownloading;
         ASSERT_TRUE(controller.UpdateTask(t_unknown).ok(), "Update task to downloading unknown");
 
-        openidm::ui::DesktopView view(controller);
+        radium::ui::DesktopView view(controller);
         auto rows = view.BuildVisibleTaskRows(0, 100);
 
         for (const auto& r : rows) {
@@ -5270,10 +5270,10 @@ bool TestYouTubeQualitySelectionIntegrityAndVerification() {
 bool TestAutoScrollToCurrentDownload() {
     std::cout << "  [1/4] Testing ScrollTaskIntoView when row is below visible window...\n";
     std::error_code ec;
-    auto db_dir = std::filesystem::temp_directory_path() / ("radium_test_autoscroll_" + openidm::GenerateUuidV4());
+    auto db_dir = std::filesystem::temp_directory_path() / ("radium_test_autoscroll_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(db_dir, ec);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = db_dir / "test.db";
     cfg.default_download_dir = db_dir / "downloads";
     cfg.temp_root_dir = db_dir / "temp";
@@ -5281,26 +5281,26 @@ bool TestAutoScrollToCurrentDownload() {
     std::filesystem::create_directories(cfg.temp_root_dir, ec);
 
     {
-        openidm::DownloadController controller(cfg);
+        radium::DownloadController controller(cfg);
         auto init_res = controller.Initialize();
         ASSERT_TRUE(init_res.ok(), "Controller initialization succeeds");
 
         // Add 25 tasks
         std::vector<std::string> task_ids;
         for (int i = 0; i < 25; ++i) {
-            openidm::TaskModel t;
+            radium::TaskModel t;
             t.task_id = "task_" + std::to_string(i + 1);
             t.url = "https://example.com/file_" + std::to_string(i + 1) + ".zip";
             t.file_name = "file_" + std::to_string(i + 1) + ".zip";
             t.save_dir = cfg.default_download_dir.string();
-            t.state = openidm::TaskState::kPaused;
+            t.state = radium::TaskState::kPaused;
             t.total_bytes = 1000000;
             auto add_res = controller.AddTask(std::move(t), false, false);
             ASSERT_TRUE(add_res.ok(), "Task added successfully");
             task_ids.push_back(add_res.value->task_id);
         }
 
-        openidm::ui::DesktopView view(controller);
+        radium::ui::DesktopView view(controller);
         view.SetWindowDimensions(1200, 600, 96);
         // Window height 600 -> table_body_rect ~450px, row_h=52px -> ~8 visible rows
         view.SetScrollOffset(0);
@@ -5326,7 +5326,7 @@ bool TestAutoScrollToCurrentDownload() {
         std::cout << "  [3/4] Testing manual and browser intercepted submission auto-scrolls...\n";
         // Set scroll to top and submit a 26th task via SubmitAddDownloadDialog
         view.SetScrollOffset(0);
-        openidm::ui::AddDownloadDialogInput input;
+        radium::ui::AddDownloadDialogInput input;
         input.url = "https://example.com/new_download.mp4";
         input.custom_filename = "new_download.mp4";
         input.save_dir = cfg.default_download_dir.string();
@@ -5344,12 +5344,12 @@ bool TestAutoScrollToCurrentDownload() {
         view.CheckAndAutoScrollNewOrStartedDownloads();
 
         // Add a new task directly to controller (simulating intercepted or background start)
-        openidm::TaskModel t_new;
+        radium::TaskModel t_new;
         t_new.task_id = "intercepted_task_99";
         t_new.url = "https://example.com/intercepted.pkg";
         t_new.file_name = "intercepted.pkg";
         t_new.save_dir = cfg.default_download_dir.string();
-        t_new.state = openidm::TaskState::kQueued;
+        t_new.state = radium::TaskState::kQueued;
         controller.AddTask(t_new, false, false);
 
         bool detected_new = view.CheckAndAutoScrollNewOrStartedDownloads();
@@ -5370,8 +5370,8 @@ bool TestAutoScrollToCurrentDownload() {
         // not be mistaken for a newly-created download.
         auto paused_task_opt = controller.GetTask(task_ids[15]);
         ASSERT_TRUE(paused_task_opt.has_value(), "Paused task exists");
-        openidm::TaskModel starting_task = *paused_task_opt;
-        starting_task.state = openidm::TaskState::kDownloading;
+        radium::TaskModel starting_task = *paused_task_opt;
+        starting_task.state = radium::TaskState::kDownloading;
         controller.UpdateTask(starting_task);
 
         bool detected_start = view.CheckAndAutoScrollNewOrStartedDownloads();
@@ -5387,7 +5387,7 @@ bool TestAutoScrollToCurrentDownload() {
 }
 
 bool TestHttp429AdaptiveConnectionFallbackAndIntegrity() {
-    using namespace openidm::brisk;
+    using namespace radium::brisk;
 
     std::cout << "  [1/4] Testing HTTP 429 vs Range Incompatibility Header Classification...\n";
     {
@@ -5500,7 +5500,7 @@ bool TestHttp429AdaptiveConnectionFallbackAndIntegrity() {
     std::cout << "  [4/4] Testing Multi-Segment Concurrent Write and SHA-256 Hash Integrity...\n";
     {
         std::error_code ec;
-        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_429_" + openidm::GenerateUuidV4());
+        auto test_dir = std::filesystem::temp_directory_path(ec) / ("flux_test_429_" + radium::GenerateUuidV4());
         std::filesystem::create_directories(test_dir, ec);
 
         auto target_part = test_dir / "test_file.bin.part";
@@ -5509,7 +5509,7 @@ bool TestHttp429AdaptiveConnectionFallbackAndIntegrity() {
         for (uint64_t i = 0; i < kTotalBytes; ++i) {
             full_payload[i] = static_cast<char>((i * 7 + 13) % 256);
         }
-        std::string expected_sha256 = openidm::CryptoUtils::ComputeBufferSha256Hex(full_payload);
+        std::string expected_sha256 = radium::CryptoUtils::ComputeBufferSha256Hex(full_payload);
 
         std::ofstream ofs(target_part, std::ios::binary);
         ofs.seekp(kTotalBytes - 1);
@@ -5580,7 +5580,7 @@ bool TestHttp429AdaptiveConnectionFallbackAndIntegrity() {
         std::ifstream ifs(target_part, std::ios::binary);
         std::string written_data((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
         ASSERT_TRUE(written_data.size() == kTotalBytes, "Total written size matches");
-        std::string actual_sha256 = openidm::CryptoUtils::ComputeBufferSha256Hex(written_data);
+        std::string actual_sha256 = radium::CryptoUtils::ComputeBufferSha256Hex(written_data);
         ASSERT_TRUE(actual_sha256 == expected_sha256, "Final assembled file SHA-256 exactly matches payload without gaps or overlaps");
 
         std::filesystem::remove_all(test_dir, ec);
@@ -5594,8 +5594,8 @@ bool TestHttp429AdaptiveConnectionFallbackAndIntegrity() {
 
 
 bool TestUdpTrackerProtocolLiveExchange() {
-    using namespace openidm::torrent;
-    using namespace openidm::torrent::testing;
+    using namespace radium::torrent;
+    using namespace radium::torrent::testing;
 
     std::cout << "  [1/2] Launching live mock UDP tracker on 127.0.0.1:16882...\n";
     MockUdpTrackerServer udp_tracker(16882);
@@ -5627,9 +5627,9 @@ bool TestUdpTrackerProtocolLiveExchange() {
 }
 
 bool TestMagnetMetadataExchangeBEP9Live() {
-    using namespace openidm;
-    using namespace openidm::torrent;
-    using namespace openidm::torrent::testing;
+    using namespace radium;
+    using namespace radium::torrent;
+    using namespace radium::torrent::testing;
 
     std::cout << "  [1/3] Generating synthetic info dictionary and metadata peer...\n";
     BencodeValue info_dict = BencodeValue::MakeDict();
@@ -5670,8 +5670,8 @@ bool TestMagnetMetadataExchangeBEP9Live() {
 }
 
 bool TestDhtIterativePeerDiscoveryLive() {
-    using namespace openidm::torrent;
-    using namespace openidm::torrent::testing;
+    using namespace radium::torrent;
+    using namespace radium::torrent::testing;
 
     std::cout << "  [1/2] Launching live mock DHT node on 127.0.0.1:16884...\n";
     MockDhtNodeServer dht_node(16884);
@@ -5693,9 +5693,9 @@ bool TestDhtIterativePeerDiscoveryLive() {
 }
 
 bool TestMultiPeerTransferAndSeedingControls() {
-    using namespace openidm;
-    using namespace openidm::torrent;
-    using namespace openidm::torrent::testing;
+    using namespace radium;
+    using namespace radium::torrent;
+    using namespace radium::torrent::testing;
 
     std::cout << "  [1/3] Setting up multi-peer swarm and test storage...\n";
     std::string payload = "Multi-peer swarm verification block test 2026";
@@ -5745,7 +5745,7 @@ bool TestMultiPeerTransferAndSeedingControls() {
 }
 
 bool TestPauseAllManualPauseScheduleAndRecovery() {
-    using namespace openidm;
+    using namespace radium;
     std::error_code ec;
     auto work_dir = std::filesystem::temp_directory_path() / ("radium_pause_all_" + GenerateUuidV4());
     std::filesystem::create_directories(work_dir, ec);
@@ -5845,9 +5845,9 @@ bool TestPauseAllManualPauseScheduleAndRecovery() {
 }
 
 bool TestBitTorrentEngineTransferAndIntegrity() {
-    using namespace openidm;
-    using namespace openidm::torrent;
-    using namespace openidm::torrent::testing;
+    using namespace radium;
+    using namespace radium::torrent;
+    using namespace radium::torrent::testing;
 
     std::cout << "  [1/4] Setting up mock BitTorrent peer and test dataset...\n";
     std::string test_data_str = "Radium BitTorrent Engine End-to-End Transfer Verification Payload 2026!";
@@ -5913,8 +5913,8 @@ bool TestBitTorrentEngineTransferAndIntegrity() {
 }
 
 bool TestNewDownloadDialogRowSpacingAcrossDpi() {
-    using openidm::ui::DesignSystem;
-    using openidm::ui::NewDownloadDialogLayout;
+    using radium::ui::DesignSystem;
+    using radium::ui::NewDownloadDialogLayout;
     for (uint32_t dpi : {96u, 120u, 144u, 192u, 288u, 384u}) {
         for (int row = 0; row < 4; ++row) {
             const int label_top = DesignSystem::ScaleForDpi(NewDownloadDialogLayout::LabelTop(row), dpi);
@@ -5954,7 +5954,7 @@ bool TestNewDownloadDialogRowSpacingAcrossDpi() {
 // 10. Safe fallback without missing or duplicate bytes.
 // ============================================================================
 bool TestHttpRangeCorrectnessAnd416Validation() {
-    using namespace openidm::brisk;
+    using namespace radium::brisk;
 
     std::cout << "  [1/10] Testing valid empty file handling (bytes */0 and un-ranged 0-length)...\n";
     {
@@ -6191,11 +6191,11 @@ bool TestHttpRangeCorrectnessAnd416Validation() {
 // 11. Crash recovery partial file validation, disk reconciliation, and preallocation checks.
 // ============================================================================
 bool TestHttpRecoveryAndResumeReliability() {
-    using namespace openidm::brisk;
-    using openidm::TaskModel;
-    using openidm::TaskState;
-    using openidm::Segment;
-    using openidm::PauseReason;
+    using namespace radium::brisk;
+    using radium::TaskModel;
+    using radium::TaskState;
+    using radium::Segment;
+    using radium::PauseReason;
 
     std::cout << "  [1/11] Testing Retry-After integer and HTTP-date parsing...\n";
     {
@@ -6300,7 +6300,7 @@ bool TestHttpRecoveryAndResumeReliability() {
         task.downloaded_bytes = 500000;
         task.total_bytes = 1000000;
         task.etag = "\"abcdef123456\"";
-        task.segments = { openidm::Segment{0, 0, 500000, 999999, false} };
+        task.segments = { radium::Segment{0, 0, 500000, 999999, false} };
 
         // Server probe returns matching ETag
         HttpResponseMeta match_meta;
@@ -6407,7 +6407,7 @@ bool TestHttpRecoveryAndResumeReliability() {
         task.url = "https://cdn.example.com/file.bin?token=expired";
         task.downloaded_bytes = 400000;
         task.total_bytes = 1000000;
-        task.segments = { openidm::Segment{0, 0, 400000, 999999, false} };
+        task.segments = { radium::Segment{0, 0, 400000, 999999, false} };
 
         std::string new_url = "https://cdn.example.com/file.bin?token=fresh_token";
         task.url = new_url;
@@ -6419,23 +6419,23 @@ bool TestHttpRecoveryAndResumeReliability() {
     {
         const uint64_t kTotal = 1000000;
         // Case A: Valid partition matching file
-        std::vector<openidm::Segment> valid_segs = {
-            openidm::Segment{0, 0, 250000, 499999, false},
-            openidm::Segment{1, 500000, 750000, 999999, false}
+        std::vector<radium::Segment> valid_segs = {
+            radium::Segment{0, 0, 250000, 499999, false},
+            radium::Segment{1, 500000, 750000, 999999, false}
         };
         ASSERT_TRUE(SegmentScheduler::ValidateSegmentPartition(valid_segs, kTotal), "Valid 2-segment partition passes");
 
         // Case B: Partition with gaps
-        std::vector<openidm::Segment> gap_segs = {
-            openidm::Segment{0, 0, 250000, 400000, false},
-            openidm::Segment{1, 500000, 750000, 999999, false}
+        std::vector<radium::Segment> gap_segs = {
+            radium::Segment{0, 0, 250000, 400000, false},
+            radium::Segment{1, 500000, 750000, 999999, false}
         };
         ASSERT_TRUE(!SegmentScheduler::ValidateSegmentPartition(gap_segs, kTotal), "Partition with gap [400001, 499999] rejected");
 
         // Case C: Partition with overlaps
-        std::vector<openidm::Segment> overlap_segs = {
-            openidm::Segment{0, 0, 250000, 550000, false},
-            openidm::Segment{1, 500000, 750000, 999999, false}
+        std::vector<radium::Segment> overlap_segs = {
+            radium::Segment{0, 0, 250000, 550000, false},
+            radium::Segment{1, 500000, 750000, 999999, false}
         };
         ASSERT_TRUE(!SegmentScheduler::ValidateSegmentPartition(overlap_segs, kTotal), "Partition with overlapping ranges rejected");
 
@@ -6462,7 +6462,7 @@ bool TestHttpRecoveryAndResumeReliability() {
 // 4. Remainder handling with odd total sizes preserves partition validity.
 // ============================================================================
 bool TestHttpRangePrepartitionEquipartitionInvariants() {
-    using namespace openidm::brisk;
+    using namespace radium::brisk;
 
     std::cout << "  [1/4] Testing InitializeEquipartition creates exact contiguous partitions...\n";
     {
@@ -6563,7 +6563,7 @@ bool TestHttpRangePrepartitionEquipartitionInvariants() {
 // 6. Non-range server / unknown file size single-stream fallback invariants.
 // ============================================================================
 bool TestInitializeEquipartitionEdgeCases() {
-    using namespace openidm::brisk;
+    using namespace radium::brisk;
 
     std::cout << "  [1/6] Testing empty files (total_bytes == 0)...\n";
     {
@@ -6627,9 +6627,9 @@ bool TestInitializeEquipartitionEdgeCases() {
     std::cout << "  [5/6] Testing resumed downloads with existing partial progress...\n";
     {
         constexpr uint64_t kTotal = 1000000;
-        std::vector<openidm::Segment> saved_segs = {
-            openidm::Segment{0, 0, 250000, 499999, false},
-            openidm::Segment{1, 500000, 800000, 999999, false}
+        std::vector<radium::Segment> saved_segs = {
+            radium::Segment{0, 0, 250000, 499999, false},
+            radium::Segment{1, 500000, 800000, 999999, false}
         };
 
         // On resume, Initialize() MUST be used instead of InitializeEquipartition()
@@ -6658,7 +6658,7 @@ bool TestInitializeEquipartitionEdgeCases() {
 
 
 bool TestFeatureMaturityHardeningFiveFeatures() {
-    using namespace openidm;
+    using namespace radium;
 
     std::cout << "  [1/5] Testing Download Scheduler deterministic past, active, and future windows...\n";
     {
@@ -6741,7 +6741,7 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
 
     std::cout << "  [2/5] Testing Speed Limiter aggregate concurrent enforcement & dynamic limit updates...\n";
     {
-        openidm::brisk::TokenBucketLimiter limiter;
+        radium::brisk::TokenBucketLimiter limiter;
         std::atomic<uint64_t> limit_bps{2000000}; // 2 MB/s
         std::atomic<bool> stop_flag{false};
 
@@ -6780,7 +6780,7 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
 
     std::cout << "  [3/5] Testing Site Grabber full crawl with local HTTP server redirect and SSRF defense...\n";
     {
-        using namespace openidm::crawler;
+        using namespace radium::crawler;
         std::error_code ec;
 
         // Verify redirect URL propagation on relative links
@@ -6801,9 +6801,9 @@ bool TestFeatureMaturityHardeningFiveFeatures() {
         ASSERT_TRUE(!grab_cfg.allow_loopback, "SiteGrabber default blocks loopback/private destinations");
 
         // SSRF Destination Validation
-        ASSERT_TRUE(openidm::brisk::HttpClient::CheckHostResolvesToPrivate("127.0.0.1"), "CheckHostResolvesToPrivate blocks 127.0.0.1");
-        ASSERT_TRUE(openidm::brisk::HttpClient::CheckHostResolvesToPrivate("localhost"), "CheckHostResolvesToPrivate blocks localhost");
-        ASSERT_TRUE(openidm::brisk::HttpClient::IsPrivateOrLoopbackIp(0x0A000005), "IsPrivateOrLoopbackIp blocks 10.0.0.5");
+        ASSERT_TRUE(radium::brisk::HttpClient::CheckHostResolvesToPrivate("127.0.0.1"), "CheckHostResolvesToPrivate blocks 127.0.0.1");
+        ASSERT_TRUE(radium::brisk::HttpClient::CheckHostResolvesToPrivate("localhost"), "CheckHostResolvesToPrivate blocks localhost");
+        ASSERT_TRUE(radium::brisk::HttpClient::IsPrivateOrLoopbackIp(0x0A000005), "IsPrivateOrLoopbackIp blocks 10.0.0.5");
     }
 
     std::cout << "  [4/5] Testing Antivirus strict mode vs non-strict mode across all scanner states...\n";
@@ -7048,20 +7048,20 @@ bool TestTorrentCreationSequentialModeAndSwarmManagement() {
         ofs.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
     }
 
-    openidm::torrent::TorrentCreatorOptions opts;
+    radium::torrent::TorrentCreatorOptions opts;
     opts.announce_urls = {"udp://tracker.opentrackr.org:1337/announce", "http://tracker.example.com/announce"};
     opts.comment = "Radium Automated Test Torrent";
     opts.created_by = "Radium Unit Tests 1.0";
     opts.piece_length = 16 * 1024; // 16 KiB pieces -> 4 pieces total
 
-    auto create_res = openidm::torrent::TorrentCreator::CreateTorrent(dummy_payload, opts);
+    auto create_res = radium::torrent::TorrentCreator::CreateTorrent(dummy_payload, opts);
     assert(create_res.ok());
     assert(!create_res.value.value().empty());
 
     std::cout << "  [2/4] Testing TorrentParser round-trip verification on generated .torrent..." << std::endl;
     const auto& c_bytes = create_res.value.value();
     std::string_view sv(reinterpret_cast<const char*>(c_bytes.data()), c_bytes.size());
-    auto parse_res = openidm::torrent::TorrentParser::ParseTorrentBuffer(sv);
+    auto parse_res = radium::torrent::TorrentParser::ParseTorrentBuffer(sv);
     assert(parse_res.ok());
     auto& tinfo = parse_res.value.value();
     assert(tinfo.name == "sample_video.bin");
@@ -7072,22 +7072,22 @@ bool TestTorrentCreationSequentialModeAndSwarmManagement() {
     assert(tinfo.announce_list.size() == 2);
 
     std::cout << "  [3/4] Testing canonical magnet link generation..." << std::endl;
-    std::string magnet = openidm::torrent::TorrentCreator::GenerateMagnetLink(tinfo.info_hash_hex, tinfo.name, opts.announce_urls);
+    std::string magnet = radium::torrent::TorrentCreator::GenerateMagnetLink(tinfo.info_hash_hex, tinfo.name, opts.announce_urls);
     assert(magnet.find("magnet:?xt=urn:btih:" + tinfo.info_hash_hex) == 0);
     assert(magnet.find("dn=sample_video.bin") != std::string::npos);
     assert(magnet.find("tr=udp://tracker.opentrackr.org:1337/announce") != std::string::npos);
 
     std::cout << "  [4/4] Testing PieceManager sequential mode and swarm controls..." << std::endl;
-    openidm::torrent::TorrentInfo seq_info;
+    radium::torrent::TorrentInfo seq_info;
     seq_info.total_length = 8 * 16 * 1024;
     seq_info.piece_length = 16 * 1024;
     seq_info.files = {{std::filesystem::path("video.mp4"), seq_info.total_length, 0, true}};
     for (size_t i = 0; i < 8; ++i) {
         seq_info.pieces.push_back(std::vector<uint8_t>(20, static_cast<uint8_t>(i + 1)));
     }
-    auto storage = std::make_shared<openidm::torrent::MultiFileStorage>();
+    auto storage = std::make_shared<radium::torrent::MultiFileStorage>();
     storage->Initialize(temp_dir, seq_info);
-    auto pm = std::make_shared<openidm::torrent::PieceManager>(seq_info, storage);
+    auto pm = std::make_shared<radium::torrent::PieceManager>(seq_info, storage);
     pm->SetSequentialMode(true, true);
     assert(pm->IsSequentialMode());
 
@@ -7097,11 +7097,11 @@ bool TestTorrentCreationSequentialModeAndSwarmManagement() {
     assert(reqs[0].piece_index == 0);
 
     std::string fake_task_id = "task-torrent-swarm-test-01";
-    auto add_res = openidm::torrent::TorrentEngine::AddTrackersToTask(fake_task_id, {"udp://tr2.example.com:80/announce"});
+    auto add_res = radium::torrent::TorrentEngine::AddTrackersToTask(fake_task_id, {"udp://tr2.example.com:80/announce"});
     assert(!add_res.ok());
     assert(add_res.error->code == "ERR_TASK_NOT_FOUND");
 
-    auto swarm_res = openidm::torrent::TorrentEngine::GetSwarmDetails(fake_task_id);
+    auto swarm_res = radium::torrent::TorrentEngine::GetSwarmDetails(fake_task_id);
     assert(!swarm_res.ok());
     assert(swarm_res.error->code == "ERR_TASK_NOT_FOUND");
 
@@ -7254,7 +7254,7 @@ bool TestUniversal11Outof10QualityAndPolish() {
     auto eval_429_rl = UpdateManager::EvaluateGitHubReleaseResponse(429, {}, "{}", "1.0.0", "x64");
     assert(!eval_429_rl.success && eval_429_rl.is_rate_limited);
 
-    auto net_err_msg = UpdateManager::FormatNetworkCheckError(openidm::Error{"ERR_NET_TIMEOUT", "WinHttpReceiveResponse timed out", true, true});
+    auto net_err_msg = UpdateManager::FormatNetworkCheckError(radium::Error{"ERR_NET_TIMEOUT", "WinHttpReceiveResponse timed out", true, true});
     assert(net_err_msg.find("timed out") != std::string::npos);
 
     // Test package SHA-256 validation
@@ -7282,18 +7282,18 @@ bool TestUniversal11Outof10QualityAndPolish() {
     std::filesystem::remove_all(mock_app_dir, ec);
     std::filesystem::create_directories(mock_app_dir, ec);
 
-    assert(!openidm::PathSanitizer::IsPortableMode(mock_app_dir));
+    assert(!radium::PathSanitizer::IsPortableMode(mock_app_dir));
     
     // Create portable marker
     {
         std::ofstream ofs(mock_app_dir / "radium.portable");
         ofs << "portable";
     }
-    assert(openidm::PathSanitizer::IsPortableMode(mock_app_dir));
+    assert(radium::PathSanitizer::IsPortableMode(mock_app_dir));
     std::filesystem::remove_all(mock_app_dir, ec);
 
     std::cout << "  [4/4] Testing SettingsSerializer JSON round-trip and validation..." << std::endl;
-    openidm::AppSettings original_settings;
+    radium::AppSettings original_settings;
     original_settings.max_concurrent_tasks = 8;
     original_settings.default_connections_per_task = 16;
     original_settings.speed_limit_bps = 5 * 1024 * 1024;
@@ -7318,8 +7318,8 @@ bool TestUniversal11Outof10QualityAndPolish() {
 }
 
 bool TestLocalizationCatalogAndLanguageFallback() {
-    openidm::ui::LocalizationManager localization;
-    const auto& languages = openidm::ui::LocalizationManager::Languages();
+    radium::ui::LocalizationManager localization;
+    const auto& languages = radium::ui::LocalizationManager::Languages();
     ASSERT_TRUE(languages.size() == 24, "The language picker exposes exactly 24 supported languages");
     ASSERT_TRUE(localization.GetLocale() == "en", "English is the default language");
     for (const auto& language : languages) {
@@ -7341,20 +7341,20 @@ bool TestLocalizationCatalogAndLanguageFallback() {
 }
 
 bool TestRtlLogicalLayoutMirroringAndHitTesting() {
-    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_test_rtl_" + openidm::GenerateUuidV4());
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_test_rtl_" + radium::GenerateUuidV4());
     std::filesystem::create_directories(work_dir);
 
-    openidm::ControllerConfig cfg;
+    radium::ControllerConfig cfg;
     cfg.state_db_path = work_dir / "state.db";
     cfg.default_download_dir = work_dir / "downloads";
     cfg.temp_root_dir = work_dir / "tmp";
 
-    openidm::DownloadController ctrl(cfg);
+    radium::DownloadController ctrl(cfg);
     ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller for RTL layout test");
-    openidm::ui::DesktopView view(ctrl);
+    radium::ui::DesktopView view(ctrl);
     view.SetWindowDimensions(1280, 720, 96);
 
-    auto& global_loc = openidm::ui::GetLocalizationManager();
+    auto& global_loc = radium::ui::GetLocalizationManager();
     const std::string prev_locale = global_loc.GetLocale();
     ASSERT_TRUE(global_loc.SetLocale("en-US"), "Global localization starts at en-US");
     const auto ltr_geom = view.ComputeLayoutGeometry(0);
@@ -7375,17 +7375,17 @@ bool TestRtlLogicalLayoutMirroringAndHitTesting() {
                 rtl_geom.sidebar_language_rect.right == ltr_geom.sidebar_language_rect.right,
                 "ar-SA preserves identical LTR layout coordinates");
 
-    auto center_of = [](const openidm::ui::RectI& r) {
+    auto center_of = [](const radium::ui::RectI& r) {
         return std::pair<int, int>{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
     };
     const auto [lang_x, lang_y] = center_of(rtl_geom.sidebar_language_rect);
     const auto [set_x, set_y] = center_of(rtl_geom.sidebar_settings_rect);
     const auto [srch_x, srch_y] = center_of(rtl_geom.search_box_rect);
-    ASSERT_TRUE(view.HitTestPoint(lang_x, lang_y, 0).type == openidm::ui::HitTargetType::kSidebarLanguageButton,
+    ASSERT_TRUE(view.HitTestPoint(lang_x, lang_y, 0).type == radium::ui::HitTargetType::kSidebarLanguageButton,
                 "ar-SA Language button hitbox matches visual rect");
-    ASSERT_TRUE(view.HitTestPoint(set_x, set_y, 0).type == openidm::ui::HitTargetType::kSidebarSettingsButton,
+    ASSERT_TRUE(view.HitTestPoint(set_x, set_y, 0).type == radium::ui::HitTargetType::kSidebarSettingsButton,
                 "ar-SA Settings button hitbox matches visual rect");
-    ASSERT_TRUE(view.HitTestPoint(srch_x, srch_y, 0).type == openidm::ui::HitTargetType::kSearchBox,
+    ASSERT_TRUE(view.HitTestPoint(srch_x, srch_y, 0).type == radium::ui::HitTargetType::kSearchBox,
                 "ar-SA Search box hitbox matches visual rect");
 
     global_loc.SetLocale(prev_locale);
@@ -7395,7 +7395,7 @@ bool TestRtlLogicalLayoutMirroringAndHitTesting() {
 }
 
 bool TestFailureNotificationPersistenceAndMigration() {
-    using namespace openidm;
+    using namespace radium;
     std::error_code ec;
     std::filesystem::path work_dir = std::filesystem::temp_directory_path() / "radium_failure_notif_test";
     std::filesystem::remove_all(work_dir, ec);
@@ -7639,7 +7639,7 @@ bool TestFailureNotificationPersistenceAndMigration() {
 }
 
 bool TestExtensionSetupOnboardingSettingsAndAbout() {
-    using namespace openidm;
+    using namespace radium;
     using namespace radium::core;
 
     const auto work_dir = std::filesystem::temp_directory_path() / "radium_ext_setup_unit_test";
@@ -7681,63 +7681,181 @@ bool TestExtensionSetupOnboardingSettingsAndAbout() {
         ctrl2.Shutdown();
     }
 
-    // 3. Mocked GitHub download, validation, update, and atomic failure preservation
+    // 2b. Existing installation with tasks does NOT trigger first-launch onboarding
+    {
+        const auto existing_dir = work_dir / "existing_install";
+        std::filesystem::create_directories(existing_dir / "downloads", ec);
+        std::filesystem::create_directories(existing_dir / "tmp", ec);
+        ControllerConfig existing_cfg = cfg;
+        existing_cfg.state_db_path = existing_dir / "state.db";
+        existing_cfg.default_download_dir = existing_dir / "downloads";
+        existing_cfg.temp_root_dir = existing_dir / "tmp";
+        {
+            DownloadController existing_ctrl(existing_cfg);
+            ASSERT_TRUE(existing_ctrl.Initialize().ok(), "Existing DB controller initializes");
+            TaskModel t;
+            t.url = "https://example.com/archive.zip";
+            t.file_name = "archive.zip";
+            t.save_dir = existing_cfg.default_download_dir.string();
+            ASSERT_TRUE(existing_ctrl.AddTask(std::move(t), false, false).ok(), "Add existing task");
+            existing_ctrl.Shutdown();
+        }
+        {
+            DownloadController upgraded_ctrl(existing_cfg);
+            ASSERT_TRUE(upgraded_ctrl.Initialize().ok(), "Upgraded controller initializes with existing tasks");
+            ASSERT_TRUE(!upgraded_ctrl.ShouldShowExtensionOnboarding(), "Existing installation with tasks does NOT trigger onboarding");
+
+            // Existing destination conflict detection works independently of onboarding
+            TaskModel incoming;
+            incoming.url = "https://example.com/other.zip";
+            incoming.file_name = "existing_file.zip";
+            incoming.save_dir = existing_cfg.default_download_dir.string();
+            {
+                std::ofstream ofs(existing_cfg.default_download_dir / "existing_file.zip", std::ios::binary);
+                ofs << "existing";
+            }
+            auto conflict = upgraded_ctrl.InspectIncomingDownload(incoming);
+            ASSERT_TRUE(conflict.kind == DownloadController::IncomingConflictKind::kExistsOnDisk,
+                        "Existing destination conflict detected independently");
+            ASSERT_TRUE(!upgraded_ctrl.ShouldShowExtensionOnboarding(), "Download inspection never triggers onboarding");
+            upgraded_ctrl.Shutdown();
+        }
+    }
+
+    // 2c. DesktopView onboarding eligibility vs Add Download / minimized / URL launch
+    {
+        DownloadController ctrl_view(cfg);
+        ASSERT_TRUE(ctrl_view.Initialize().ok(), "View eligibility controller initializes");
+        ui::DesktopView dv(ctrl_view);
+        ASSERT_TRUE(dv.IsFirstLaunchOnboardingEligible(), "Normal interactive launch is eligible");
+        dv.SetFirstLaunchOnboardingEligible(false);
+        ASSERT_TRUE(!dv.IsFirstLaunchOnboardingEligible(), "Minimized / URL / download offer clears eligibility");
+        ctrl_view.Shutdown();
+    }
+
+    // 3. Mocked GitHub Release ZIP download, fallback, caching, rate-limit, and atomic failure preservation
+    auto build_mock_zip = [&](const std::string& version, bool traversal, const std::string& prefix) -> std::string {
+        struct Entry { std::string name; std::string data; };
+        std::vector<Entry> entries;
+        if (traversal) {
+            entries.push_back({prefix + "../outside.txt", "evil"});
+        }
+        for (const auto& req : ExtensionInstaller::RequiredFiles()) {
+            std::string body = "// mock resource";
+            if (req == "manifest.json") {
+                body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version +
+                       "\",\"permissions\":[\"nativeMessaging\"],\"background\":{\"service_worker\":\"js/background.js\"},"
+                       "\"action\":{\"default_popup\":\"popup.html\"}}";
+            } else if (req == "manifest.firefox.json") {
+                body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version + "\"}";
+            }
+            entries.push_back({prefix + req, std::move(body)});
+        }
+
+        auto append_u16 = [](std::string& buf, uint16_t v) {
+            buf.push_back(static_cast<char>(v & 0xFF));
+            buf.push_back(static_cast<char>((v >> 8) & 0xFF));
+        };
+        auto append_u32 = [](std::string& buf, uint32_t v) {
+            buf.push_back(static_cast<char>(v & 0xFF));
+            buf.push_back(static_cast<char>((v >> 8) & 0xFF));
+            buf.push_back(static_cast<char>((v >> 16) & 0xFF));
+            buf.push_back(static_cast<char>((v >> 24) & 0xFF));
+        };
+
+        std::string zip_out;
+        std::string cd;
+        for (const auto& e : entries) {
+            uint32_t lfh_off = static_cast<uint32_t>(zip_out.size());
+            uint32_t sz = static_cast<uint32_t>(e.data.size());
+            uint16_t nlen = static_cast<uint16_t>(e.name.size());
+            // Local file header (Stored)
+            append_u32(zip_out, 0x04034B50);
+            append_u16(zip_out, 20);
+            append_u16(zip_out, 0);
+            append_u16(zip_out, 0);
+            append_u16(zip_out, 0);
+            append_u16(zip_out, 0);
+            append_u32(zip_out, 0);
+            append_u32(zip_out, sz);
+            append_u32(zip_out, sz);
+            append_u16(zip_out, nlen);
+            append_u16(zip_out, 0);
+            zip_out.append(e.name);
+            zip_out.append(e.data);
+
+            // Central directory header
+            append_u32(cd, 0x02014B50);
+            append_u16(cd, 20);
+            append_u16(cd, 20);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u32(cd, 0);
+            append_u32(cd, sz);
+            append_u32(cd, sz);
+            append_u16(cd, nlen);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u16(cd, 0);
+            append_u32(cd, 0);
+            append_u32(cd, lfh_off);
+            cd.append(e.name);
+        }
+        uint32_t cd_off = static_cast<uint32_t>(zip_out.size());
+        uint32_t cd_sz = static_cast<uint32_t>(cd.size());
+        zip_out.append(cd);
+        // EOCD
+        append_u32(zip_out, 0x06054B50);
+        append_u16(zip_out, 0);
+        append_u16(zip_out, 0);
+        append_u16(zip_out, static_cast<uint16_t>(entries.size()));
+        append_u16(zip_out, static_cast<uint16_t>(entries.size()));
+        append_u32(zip_out, cd_sz);
+        append_u32(zip_out, cd_off);
+        append_u16(zip_out, 0);
+        return zip_out;
+    };
+
     const std::string fake_sha = "0123456789abcdef0123456789abcdef01234567";
-    auto make_mock_fetcher = [&](std::string version, bool fail_mid_download, bool rate_limit, bool traversal) -> ExtensionFetchFn {
-        return [=](const std::string& url, const std::map<std::string, std::string>&) -> ExtensionFetchResponse {
+    int fetch_calls = 0;
+    auto make_mock_fetcher = [&](std::string version, int force_status, bool corrupt_zip, bool traversal, bool use_main_fallback) -> ExtensionFetchFn {
+        return [&, version, force_status, corrupt_zip, traversal, use_main_fallback](
+                   const std::string& url, const std::map<std::string, std::string>& req_headers) -> ExtensionFetchResponse {
+            ++fetch_calls;
             ExtensionFetchResponse r;
-            if (rate_limit) {
+            // Ensure we never call api.github.com
+            if (url.find("api.github.com") != std::string::npos) {
                 r.status_code = 403;
-                r.headers["X-RateLimit-Remaining"] = "0";
-                r.body = "{\"message\":\"API rate limit exceeded\"}";
+                r.body = "Unexpected api.github.com call";
                 return r;
             }
-            if (url.find("/releases/latest") != std::string::npos) {
-                r.status_code = 200;
-                r.body = "{\"tag_name\":\"v1.0.0\",\"assets\":[]}";
+            if (force_status == 403 || force_status == 429) {
+                r.status_code = force_status;
+                if (force_status == 403) r.headers["X-RateLimit-Remaining"] = "0";
+                r.body = "{\"message\":\"rate limit exceeded\"}";
                 return r;
             }
-            if (url.find("/branches/main") != std::string::npos) {
-                r.status_code = 200;
-                r.body = "{\"commit\":{\"sha\":\"" + fake_sha + "\"}}";
-                return r;
-            }
-            if (url.find("/git/trees/") != std::string::npos) {
-                json::Value tree = json::Array{};
-                if (traversal) {
-                    json::Value bad = json::Object{};
-                    bad["path"] = "extension/../outside.txt";
-                    bad["type"] = "blob";
-                    tree.mutable_array().push_back(std::move(bad));
+            if (url.find("/releases/latest/download/radium-extension.zip") != std::string::npos) {
+                if (use_main_fallback) {
+                    r.status_code = 404;
+                    return r;
                 }
-                for (const auto& req : ExtensionInstaller::RequiredFiles()) {
-                    json::Value item = json::Object{};
-                    item["path"] = "extension/" + req;
-                    item["type"] = "blob";
-                    tree.mutable_array().push_back(std::move(item));
-                }
-                json::Value root = json::Object{};
-                root["tree"] = std::move(tree);
-                r.status_code = 200;
-                r.body = root.dump();
-                return r;
-            }
-            if (url.find("raw.githubusercontent.com") != std::string::npos) {
-                if (fail_mid_download && url.find("js/popup.js") != std::string::npos) {
-                    r.status_code = 500;
-                    r.error_message = "Simulated HTTP 500";
+                auto inm = req_headers.find("If-None-Match");
+                if (inm != req_headers.end() && inm->second == ("\"etag-" + version + "\"")) {
+                    r.status_code = 304;
                     return r;
                 }
                 r.status_code = 200;
-                if (url.find("manifest.json") != std::string::npos) {
-                    r.body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version +
-                             "\",\"permissions\":[\"nativeMessaging\"],\"background\":{\"service_worker\":\"js/background.js\"},"
-                             "\"action\":{\"default_popup\":\"popup.html\"}}";
-                } else if (url.find("manifest.firefox.json") != std::string::npos) {
-                    r.body = "{\"manifest_version\":3,\"name\":\"Radium Download Manager\",\"version\":\"" + version + "\"}";
-                } else {
-                    r.body = "// mock resource";
-                }
+                r.headers["ETag"] = "\"etag-" + version + "\"";
+                r.body = corrupt_zip ? std::string("NOT_A_ZIP") : build_mock_zip(version, traversal, "");
+                return r;
+            }
+            if (url.find("/archive/refs/heads/main.zip") != std::string::npos) {
+                r.status_code = 200;
+                r.body = build_mock_zip(version, traversal, "Radium-Download-Manager-main/extension/");
                 return r;
             }
             r.status_code = 404;
@@ -7745,28 +7863,45 @@ bool TestExtensionSetupOnboardingSettingsAndAbout() {
         };
     };
 
-    auto res1 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.0.0", false, false, false));
-    ASSERT_TRUE(res1.success, "Initial mocked extension download succeeds");
+    fetch_calls = 0;
+    auto res1 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.0.0", 200, false, false, false));
+    ASSERT_TRUE(res1.success, "Initial mocked release ZIP download succeeds");
+    ASSERT_TRUE(fetch_calls == 1, "Single direct release ZIP request without api.github.com");
     ASSERT_TRUE(res1.version == "1.0.0", "Extracted version 1.0.0 from manifest.json");
     ASSERT_TRUE(res1.install_dir == ExtensionInstaller::DefaultInstallDir(work_dir), "Installed into expected directory");
     ASSERT_TRUE(ExtensionInstaller::ValidateExtensionDirectory(res1.install_dir), "All required files present and valid");
 
-    // Failed download must NOT overwrite existing v1.0.0
-    auto res_fail = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("2.0.0", true, false, false));
-    ASSERT_TRUE(!res_fail.success, "Mid-download failure returns error");
+    // 304 Not Modified / cache hit skips redundant re-extraction
+    fetch_calls = 0;
+    auto res_cached = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.0.0", 200, false, false, false));
+    ASSERT_TRUE(res_cached.success && res_cached.already_up_to_date && fetch_calls == 1,
+                "ETag cache hit returns already_up_to_date in 1 request");
+
+    // Corrupt ZIP must NOT overwrite existing v1.0.0
+    auto res_fail = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("2.0.0", 200, true, false, false));
+    ASSERT_TRUE(!res_fail.success, "Corrupt ZIP returns error");
     std::string intact_ver;
     ASSERT_TRUE(ExtensionInstaller::ValidateExtensionDirectory(res1.install_dir, &intact_ver) && intact_ver == "1.0.0",
-                "Existing v1.0.0 extension remains intact after failed download");
+                "Existing v1.0.0 extension remains intact after corrupt ZIP");
 
-    // Rate limit and traversal rejection
-    auto res_rl = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, true, false));
-    ASSERT_TRUE(!res_rl.success && res_rl.rate_limited, "GitHub rate limit handled cleanly");
-    auto res_trav = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, false, true));
-    ASSERT_TRUE(!res_trav.success && res_trav.error_code == "ERR_UNSAFE_PATH", "Path traversal in tree rejected");
+    // Rate limit (403 and 429) must fail immediately with 1 request (no retry loop)
+    fetch_calls = 0;
+    auto res_rl403 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", 403, false, false, false));
+    ASSERT_TRUE(!res_rl403.success && res_rl403.rate_limited && fetch_calls == 1,
+                "HTTP 403 rate limit fails cleanly without retry loop");
+    fetch_calls = 0;
+    auto res_rl429 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", 429, false, false, false));
+    ASSERT_TRUE(!res_rl429.success && res_rl429.rate_limited && fetch_calls == 1,
+                "HTTP 429 rate limit fails cleanly without retry loop");
 
-    // Settings update (v1.0.0 -> v1.1.0)
-    auto res2 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", false, false, false));
-    ASSERT_TRUE(res2.success && res2.version == "1.1.0", "Updating existing extension package succeeds");
+    // Zip Slip traversal rejection
+    auto res_trav = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", 200, false, true, false));
+    ASSERT_TRUE(!res_trav.success && (res_trav.error_code == "ERR_ZIP_SLIP" || res_trav.error_code == "ERR_UNSAFE_PATH"),
+                "Path traversal in ZIP rejected");
+
+    // Fallback to main.zip when release asset is 404 (Settings update v1.0.0 -> v1.1.0)
+    auto res2 = ExtensionInstaller::DownloadAndInstall(work_dir, {}, make_mock_fetcher("1.1.0", 200, false, false, true));
+    ASSERT_TRUE(res2.success && res2.version == "1.1.0", "Fallback main.zip update succeeds (v1.0.0 -> v1.1.0)");
 
     // 4. Settings & About UI view-model checks
     {
@@ -7806,11 +7941,420 @@ bool TestExtensionSetupOnboardingSettingsAndAbout() {
     return true;
 }
 
+bool TestSpeculativeBackgroundDownloadAndConfirmation() {
+    using namespace radium;
+
+    // Spin up a controlled loopback HTTP/1.1 server for deterministic speculative tests
+    WSADATA wsa{};
+    ASSERT_TRUE(WSAStartup(MAKEWORD(2, 2), &wsa) == 0, "WSAStartup succeeds");
+
+    SOCKET listen_sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ASSERT_TRUE(listen_sock != INVALID_SOCKET, "Listen socket created");
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    ASSERT_TRUE(::bind(listen_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0, "Bind loopback");
+    ASSERT_TRUE(::listen(listen_sock, 32) == 0, "Listen loopback");
+    int addr_len = sizeof(addr);
+    ASSERT_TRUE(::getsockname(listen_sock, reinterpret_cast<sockaddr*>(&addr), &addr_len) == 0, "Getsockname");
+    const uint16_t port = ntohs(addr.sin_port);
+
+    // Deterministic payloads
+    const std::vector<uint8_t> large_payload = []() {
+        std::vector<uint8_t> v(1024 * 1024); // 1 MiB
+        for (size_t i = 0; i < v.size(); ++i) v[i] = static_cast<uint8_t>((i * 131 + 17) & 0xFF);
+        return v;
+    }();
+    const std::vector<uint8_t> small_payload = []() {
+        std::vector<uint8_t> v(64 * 1024); // 64 KiB
+        for (size_t i = 0; i < v.size(); ++i) v[i] = static_cast<uint8_t>((i * 73 + 5) & 0xFF);
+        return v;
+    }();
+    const std::vector<uint8_t> norange_payload = []() {
+        std::vector<uint8_t> v(256 * 1024); // 256 KiB
+        for (size_t i = 0; i < v.size(); ++i) v[i] = static_cast<uint8_t>((i * 29 + 3) & 0xFF);
+        return v;
+    }();
+
+    std::atomic<bool> stop_server{false};
+    std::atomic<int> large_full_requests{0};
+    std::atomic<int> small_requests{0};
+    std::atomic<int> post_speculative_hits{0};
+    std::atomic<int> cancel_requests{0};
+
+    std::thread srv_thread([&]() {
+        while (!stop_server.load()) {
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(listen_sock, &fds);
+            timeval tv{0, 50000};
+            if (::select(0, &fds, nullptr, nullptr, &tv) <= 0) continue;
+            SOCKET cs = ::accept(listen_sock, nullptr, nullptr);
+            if (cs == INVALID_SOCKET) continue;
+            std::thread([&, cs]() {
+                char buf[4096]{};
+                int n = ::recv(cs, buf, sizeof(buf) - 1, 0);
+                if (n <= 0) {
+                    ::closesocket(cs);
+                    return;
+                }
+                std::string req(buf, static_cast<size_t>(n));
+                std::istringstream iss(req);
+                std::string method, path;
+                iss >> method >> path;
+
+                bool has_range = false;
+                uint64_t r_start = 0;
+                uint64_t r_end = UINT64_MAX;
+                std::string line;
+                while (std::getline(iss, line)) {
+                    std::string low = line;
+                    for (char& c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    if (low.rfind("range:", 0) == 0) {
+                        auto eq = low.find("bytes=");
+                        if (eq != std::string::npos) {
+                            has_range = true;
+                            std::string spec = low.substr(eq + 6);
+                            auto dash = spec.find('-');
+                            if (dash != std::string::npos) {
+                                std::string s1 = spec.substr(0, dash);
+                                std::string s2 = spec.substr(dash + 1);
+                                if (!s1.empty()) r_start = std::stoull(s1);
+                                if (!s2.empty() && std::isdigit(static_cast<unsigned char>(s2[0]))) r_end = std::stoull(s2);
+                            }
+                        }
+                    }
+                }
+
+                if (path == "/post_item.bin") {
+                    post_speculative_hits.fetch_add(1);
+                    std::string hdr = "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\n0123456789ABCDEF";
+                    ::send(cs, hdr.data(), static_cast<int>(hdr.size()), 0);
+                    ::closesocket(cs);
+                    return;
+                }
+
+                const std::vector<uint8_t>* payload = &large_payload;
+                bool support_range = true;
+                int pace_ms = 25;
+                if (path == "/small.bin") {
+                    small_requests.fetch_add(1);
+                    payload = &small_payload;
+                    pace_ms = 0;
+                } else if (path == "/norange.bin") {
+                    payload = &norange_payload;
+                    support_range = false;
+                    pace_ms = 5;
+                } else if (path == "/cancel.bin") {
+                    cancel_requests.fetch_add(1);
+                    payload = &large_payload;
+                    pace_ms = 40;
+                } else {
+                    if (!has_range || r_start == 0) {
+                        large_full_requests.fetch_add(1);
+                    }
+                }
+
+                uint64_t total = payload->size();
+                uint64_t start = (support_range && has_range) ? std::min(r_start, total - 1) : 0;
+                uint64_t end = (support_range && has_range && r_end < total) ? r_end : (total - 1);
+                uint64_t len = end - start + 1;
+
+                std::ostringstream hdr;
+                if (support_range && has_range) {
+                    hdr << "HTTP/1.1 206 Partial Content\r\n"
+                        << "Content-Range: bytes " << start << "-" << end << "/" << total << "\r\n"
+                        << "Accept-Ranges: bytes\r\n";
+                } else {
+                    hdr << "HTTP/1.1 200 OK\r\n";
+                    if (support_range) hdr << "Accept-Ranges: bytes\r\n";
+                }
+                hdr << "Content-Length: " << len << "\r\n"
+                    << "ETag: \"spec-v1\"\r\n"
+                    << "Connection: close\r\n\r\n";
+                std::string hdr_str = hdr.str();
+                ::send(cs, hdr_str.data(), static_cast<int>(hdr_str.size()), 0);
+
+                uint64_t sent = 0;
+                while (sent < len && !stop_server.load()) {
+                    size_t chunk = static_cast<size_t>(std::min<uint64_t>(32768, len - sent));
+                    int w = ::send(cs, reinterpret_cast<const char*>(payload->data() + start + sent),
+                                   static_cast<int>(chunk), 0);
+                    if (w <= 0) break;
+                    sent += static_cast<uint64_t>(w);
+                    if (pace_ms > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(pace_ms));
+                    }
+                }
+                ::closesocket(cs);
+            }).detach();
+        }
+    });
+
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / "radium_test_speculative_suite";
+    std::error_code ec;
+    std::filesystem::remove_all(work_dir, ec);
+    std::filesystem::create_directories(work_dir, ec);
+
+    ControllerConfig cfg;
+    cfg.state_db_path = work_dir / "state.db";
+    cfg.default_download_dir = work_dir / "downloads";
+    cfg.temp_root_dir = work_dir / "tmp";
+    cfg.allow_loopback = true;
+    std::filesystem::create_directories(cfg.default_download_dir, ec);
+    std::filesystem::create_directories(cfg.temp_root_dir, ec);
+
+    DownloadController ctrl(cfg);
+    ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initializes");
+    {
+        AppSettings s = ctrl.GetSettings();
+        s.conflict_policy = ConflictPolicy::kPrompt;
+        s.default_connections_per_task = 2;
+        ctrl.UpdateSettings(s);
+    }
+
+    auto compute_vec_sha256 = [&](const std::vector<uint8_t>& v, const std::string& name) {
+        std::filesystem::path tmp = work_dir / (name + ".ref");
+        std::ofstream ofs(tmp, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(v.data()), static_cast<std::streamsize>(v.size()));
+        ofs.close();
+        auto r = CryptoUtils::ComputeFileSha256Hex(tmp);
+        std::filesystem::remove(tmp, ec);
+        return r.ok() ? *r.value : std::string{};
+    };
+
+    const std::string large_sha = compute_vec_sha256(large_payload, "large");
+    const std::string small_sha = compute_vec_sha256(small_payload, "small");
+    const std::string norange_sha = compute_vec_sha256(norange_payload, "norange");
+
+    // [1/6] Delayed confirmation: background bytes arrive BEFORE AcceptSpeculativeTransaction, dispatch < 5ms, SHA-256 exact
+    std::cout << "  [1/6] Testing delayed confirmation & transfer continuity...\n";
+    {
+        TaskModel offer;
+        offer.url = "http://127.0.0.1:" + std::to_string(port) + "/large.bin";
+        offer.file_name = "large.bin";
+        offer.save_dir = cfg.default_download_dir.string();
+
+        std::mutex cb_mu;
+        std::condition_variable cb_cv;
+        bool decided = false;
+        DownloadController::IncomingConflictReport rep;
+        auto res = ctrl.BeginSpeculativeOffer(offer, [&](const std::string&, const TaskModel&, const DownloadController::IncomingConflictReport& r) {
+            std::lock_guard<std::mutex> lk(cb_mu);
+            rep = r;
+            decided = true;
+            cb_cv.notify_all();
+        });
+        ASSERT_TRUE(res.ok(), "BeginSpeculativeOffer succeeds");
+        const std::string tx_id = *res.value;
+
+        {
+            std::unique_lock<std::mutex> lk(cb_mu);
+            ASSERT_TRUE(cb_cv.wait_for(lk, std::chrono::seconds(3), [&]() { return decided; }), "Decision arrives");
+            ASSERT_TRUE(!rep.has_conflict(), "No conflict for fresh destination");
+        }
+
+        auto m_opt = ctrl.GetSpeculativeMetrics(tx_id);
+        ASSERT_TRUE(m_opt.has_value(), "Metrics available");
+        const int64_t dispatch_us = std::max(m_opt->t4_bg_queued_us, m_opt->t5_dest_check_queued_us) - m_opt->t2_ipc_recv_us;
+        std::cout << "    Measured internal dispatch latency: " << (dispatch_us / 1000.0) << " ms\n";
+        ASSERT_TRUE(dispatch_us < 5000, "Internal dispatch latency < 5 ms");
+
+        // Wait until real bytes are received in background BEFORE clicking Download
+        uint64_t pre_confirm_bytes = 0;
+        for (int i = 0; i < 60; ++i) {
+            if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes > 0) {
+                pre_confirm_bytes = snap->downloaded_bytes;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        std::cout << "    Bytes received before user confirmation: " << pre_confirm_bytes << "\n";
+        ASSERT_TRUE(pre_confirm_bytes > 0, "Real bytes received before confirmation");
+
+        auto acc = ctrl.AcceptSpeculativeTransaction(tx_id, "large.bin", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(acc.ok(), "AcceptSpeculativeTransaction succeeds");
+        ASSERT_TRUE(acc.value->downloaded_bytes >= pre_confirm_bytes, "Accepted task preserves pre-confirmation bytes");
+
+        auto done = ctrl.WaitForTaskCompletion(tx_id, 10000);
+        ASSERT_TRUE(done.ok() && done.value->state == TaskState::kCompleted, "Task completes");
+        auto out_sha = CryptoUtils::ComputeFileSha256Hex(cfg.default_download_dir / "large.bin");
+        ASSERT_TRUE(out_sha.ok() && *out_sha.value == large_sha, "Output SHA-256 matches");
+        ASSERT_TRUE(large_full_requests.load() == 1, "No duplicate GET from byte 0 after confirmation");
+    }
+
+    // [2/6] Existing destination conflict stops speculative transfer and cleans up staging
+    std::cout << "  [2/6] Testing existing destination conflict cancels speculation...\n";
+    {
+        std::filesystem::path existing_p = cfg.default_download_dir / "exists.bin";
+        {
+            std::ofstream ofs(existing_p, std::ios::binary);
+            ofs << "EXISTING_CONTENT";
+        }
+        TaskModel offer;
+        offer.url = "http://127.0.0.1:" + std::to_string(port) + "/large.bin";
+        offer.file_name = "exists.bin";
+        offer.save_dir = cfg.default_download_dir.string();
+
+        std::mutex cb_mu;
+        std::condition_variable cb_cv;
+        bool decided = false;
+        DownloadController::IncomingConflictReport rep;
+        auto res = ctrl.BeginSpeculativeOffer(offer, [&](const std::string&, const TaskModel&, const DownloadController::IncomingConflictReport& r) {
+            std::lock_guard<std::mutex> lk(cb_mu);
+            rep = r;
+            decided = true;
+            cb_cv.notify_all();
+        });
+        ASSERT_TRUE(res.ok(), "BeginSpeculativeOffer succeeds");
+        {
+            std::unique_lock<std::mutex> lk(cb_mu);
+            ASSERT_TRUE(cb_cv.wait_for(lk, std::chrono::seconds(3), [&]() { return decided; }), "Conflict decision arrives");
+            ASSERT_TRUE(rep.kind == DownloadController::IncomingConflictKind::kExistsOnDisk, "Detected kExistsOnDisk");
+        }
+        auto acc_fail = ctrl.AcceptSpeculativeTransaction(*res.value, "exists.bin", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(!acc_fail.ok(), "Rejected speculative tx cannot be accepted");
+    }
+
+    // [3/6] Cancel stops real background download and cleans up staging without creating a task
+    std::cout << "  [3/6] Testing Cancel stops background transfer & cleans staging...\n";
+    {
+        const size_t tasks_before = ctrl.GetTaskCount();
+        TaskModel offer;
+        offer.url = "http://127.0.0.1:" + std::to_string(port) + "/cancel.bin";
+        offer.file_name = "cancel.bin";
+        offer.save_dir = cfg.default_download_dir.string();
+
+        auto res = ctrl.BeginSpeculativeOffer(offer, nullptr);
+        ASSERT_TRUE(res.ok(), "BeginSpeculativeOffer succeeds");
+        const std::string tx_id = *res.value;
+        for (int i = 0; i < 40; ++i) {
+            if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes > 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ASSERT_TRUE(ctrl.CancelSpeculativeTransaction(tx_id).ok(), "CancelSpeculativeTransaction succeeds");
+        ASSERT_TRUE(!ctrl.AcceptSpeculativeTransaction(tx_id, "cancel.bin", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt).ok(),
+                    "Cannot accept after Cancel");
+        bool staging_cleaned = false;
+        for (int i = 0; i < 40; ++i) {
+            if (!std::filesystem::exists(cfg.temp_root_dir / ("spec_" + tx_id), ec)) {
+                staging_cleaned = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ASSERT_TRUE(ctrl.GetTaskCount() == tasks_before, "No task record created on Cancel");
+        ASSERT_TRUE(!std::filesystem::exists(cfg.default_download_dir / "cancel.bin", ec), "No destination file created on Cancel");
+        ASSERT_TRUE(staging_cleaned, "Staging dir cleaned up on Cancel");
+    }
+
+    // [4/6] Background completes BEFORE user clicks Download (and user renames file)
+    std::cout << "  [4/6] Testing background completion before confirmation with rename...\n";
+    {
+        TaskModel offer;
+        offer.url = "http://127.0.0.1:" + std::to_string(port) + "/small.bin";
+        offer.file_name = "small.bin";
+        offer.save_dir = cfg.default_download_dir.string();
+
+        auto res = ctrl.BeginSpeculativeOffer(offer, nullptr);
+        ASSERT_TRUE(res.ok(), "BeginSpeculativeOffer succeeds");
+        const std::string tx_id = *res.value;
+
+        // Wait until all 64 KiB are downloaded in staging
+        for (int i = 0; i < 60; ++i) {
+            if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes == small_payload.size()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        ASSERT_TRUE(!std::filesystem::exists(cfg.default_download_dir / "small.bin", ec), "Staged file not committed before user confirms");
+
+        auto acc = ctrl.AcceptSpeculativeTransaction(tx_id, "small_renamed.bin", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(acc.ok(), "Accept succeeds after background download finished");
+        auto done = ctrl.WaitForTaskCompletion(tx_id, 5000);
+        ASSERT_TRUE(done.ok() && done.value->state == TaskState::kCompleted, "Task completes");
+        auto out_sha = CryptoUtils::ComputeFileSha256Hex(cfg.default_download_dir / "small_renamed.bin");
+        ASSERT_TRUE(out_sha.ok() && *out_sha.value == small_sha, "Renamed output SHA-256 matches");
+        ASSERT_TRUE(small_requests.load() == 1, "Zero duplicate requests when background finished first");
+    }
+
+    // [5/6] Non-Range server fallback & POST conservative fallback
+    std::cout << "  [5/6] Testing non-Range speculative continuity & POST fallback...\n";
+    {
+        TaskModel nr;
+        nr.url = "http://127.0.0.1:" + std::to_string(port) + "/norange.bin";
+        nr.file_name = "norange.bin";
+        nr.save_dir = cfg.default_download_dir.string();
+        auto res = ctrl.BeginSpeculativeOffer(nr, nullptr);
+        ASSERT_TRUE(res.ok(), "BeginSpeculativeOffer succeeds for non-range");
+        for (int i = 0; i < 40; ++i) {
+            if (auto snap = ctrl.GetSpeculativeSnapshot(*res.value); snap && snap->downloaded_bytes > 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        ASSERT_TRUE(ctrl.AcceptSpeculativeTransaction(*res.value, "norange.bin", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt).ok(), "Accept non-range");
+        auto done = ctrl.WaitForTaskCompletion(*res.value, 5000);
+        ASSERT_TRUE(done.ok() && done.value->state == TaskState::kCompleted, "Non-range completes");
+        auto out_sha = CryptoUtils::ComputeFileSha256Hex(cfg.default_download_dir / "norange.bin");
+        ASSERT_TRUE(out_sha.ok() && *out_sha.value == norange_sha, "Non-range SHA-256 matches");
+
+        TaskModel post_offer;
+        post_offer.url = "http://127.0.0.1:" + std::to_string(port) + "/post_item.bin";
+        post_offer.file_name = "post_item.bin";
+        post_offer.save_dir = cfg.default_download_dir.string();
+        post_offer.http_method = "POST";
+        auto pres = ctrl.BeginSpeculativeOffer(post_offer, nullptr);
+        ASSERT_TRUE(pres.ok(), "POST offer accepted");
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        ASSERT_TRUE(post_speculative_hits.load() == 0, "POST request is NOT speculatively fetched before confirmation");
+        ASSERT_TRUE(ctrl.CancelSpeculativeTransaction(*pres.value).ok(), "POST tx canceled cleanly");
+    }
+
+    // [6/6] Simultaneous offers targeting same destination detect reservation conflict
+    std::cout << "  [6/6] Testing simultaneous offers targeting same destination...\n";
+    {
+        TaskModel o1;
+        o1.url = "http://127.0.0.1:" + std::to_string(port) + "/cancel.bin?a=1";
+        o1.file_name = "shared_name.bin";
+        o1.save_dir = cfg.default_download_dir.string();
+        auto r1 = ctrl.BeginSpeculativeOffer(o1, nullptr);
+        ASSERT_TRUE(r1.ok(), "First offer starts");
+
+        TaskModel o2;
+        o2.url = "http://127.0.0.1:" + std::to_string(port) + "/cancel.bin?a=2";
+        o2.file_name = "shared_name.bin";
+        o2.save_dir = cfg.default_download_dir.string();
+        std::mutex cb_mu;
+        std::condition_variable cb_cv;
+        bool decided2 = false;
+        DownloadController::IncomingConflictReport rep2;
+        auto r2 = ctrl.BeginSpeculativeOffer(o2, [&](const std::string&, const TaskModel&, const DownloadController::IncomingConflictReport& r) {
+            std::lock_guard<std::mutex> lk(cb_mu);
+            rep2 = r;
+            decided2 = true;
+            cb_cv.notify_all();
+        });
+        ASSERT_TRUE(r2.ok(), "Second offer starts");
+        {
+            std::unique_lock<std::mutex> lk(cb_mu);
+            ASSERT_TRUE(cb_cv.wait_for(lk, std::chrono::seconds(3), [&]() { return decided2; }), "Second offer decision arrives");
+            ASSERT_TRUE(rep2.kind == DownloadController::IncomingConflictKind::kReservedByAnotherTask, "Second offer detects kReservedByAnotherTask");
+        }
+        ctrl.CancelSpeculativeTransaction(*r1.value);
+    }
+
+    ctrl.Shutdown();
+    stop_server.store(true);
+    ::closesocket(listen_sock);
+    if (srv_thread.joinable()) srv_thread.join();
+    WSACleanup();
+    std::filesystem::remove_all(work_dir, ec);
+    return true;
+}
+
 int main() {
     int passed = 0;
     
 
-    const int total = 84;
+    const int total = 85;
 
     auto run = [&](int idx, const char* name, bool (*fn)()) {
         std::cout << "[" << idx << "/" << total << "] Running " << name << "..." << std::endl;
@@ -7904,6 +8448,7 @@ int main() {
     run(82, "TestRtlLogicalLayoutMirroringAndHitTesting", TestRtlLogicalLayoutMirroringAndHitTesting);
     run(83, "TestFailureNotificationPersistenceAndMigration", TestFailureNotificationPersistenceAndMigration);
     run(84, "TestExtensionSetupOnboardingSettingsAndAbout", TestExtensionSetupOnboardingSettingsAndAbout);
+    run(85, "TestSpeculativeBackgroundDownloadAndConfirmation", TestSpeculativeBackgroundDownloadAndConfirmation);
 
     std::cout << "\nC++20 Unit & Regression Test Summary: " << passed << " / " << total << " suites PASSED.\n";
     return (passed == total) ? 0 : 1;

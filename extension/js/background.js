@@ -183,16 +183,7 @@ async function persistSessionState(storageArea = null) {
     radium_recentClicks: recentClicks,
     radium_recentResponses: recentResponses,
     radium_redirectChains: redirectChains,
-    radium_reverseRedirects: reverseRedirects,
-
-    // Mirrored for backward compatibility with existing sessions
-    flux_cacheData: serializedTabs,
-    flux_disabledHosts: Array.from(G.disabledHosts),
-    flux_tabUrls: serializedTabUrls,
-    flux_recentClicks: recentClicks,
-    flux_recentResponses: recentResponses,
-    flux_redirectChains: redirectChains,
-    flux_reverseRedirects: reverseRedirects
+    radium_reverseRedirects: reverseRedirects
   });
   return true;
 }
@@ -1059,7 +1050,6 @@ function exactBase64ByteLength(b64) {
   return Math.max(0, Math.floor((len * 3) / 4) - padding);
 }
 
-var transferBlobToFlux = transferBlobToRadium;
 async function transferBlobToRadium(tabId, blobUrl, filename, mime, correlationId, customTransport = null) {
   let directDataB64 = "";
   let directTotalBytes = 0;
@@ -1290,8 +1280,6 @@ function exactBase64ByteLength(b64) {
   return Math.max(0, Math.floor((len * 3) / 4) - padding);
 }
 
-var transferBlobToFlux = transferBlobToRadium;
-
 async function onDownloadCreatedHandler(
   downloadItem,
   customTransport = null,
@@ -1388,7 +1376,7 @@ async function onDownloadCreatedHandler(
     }
   }
 
-  // If already accepted and handed off to Flux:
+  // If already accepted and handed off to Radium:
   if (rec.state === "HANDED_OFF" || rec.state === "ACCEPTED") {
     return { intercepted: true, reason: "ALREADY_ACCEPTED", taskId: rec.taskId };
   }
@@ -1701,7 +1689,7 @@ async function onDownloadCreatedHandler(
         G.handledDownloadUrls.set(normalizeCorrelationUrl(targetUrl), Date.now());
         G.handledDownloadUrls.set(normalizeCorrelationUrl(rec.originalUrl), Date.now());
 
-        // Hand off to Flux: cancel browser download cleanly and immediately now that Flux has accepted the task
+        // Hand off to Radium: cancel browser download cleanly and immediately now that Radium has accepted the task
         // and is presenting the Win32 New Download dialog on the desktop.
         rec.state = "HANDED_OFF";
         logPipelineStage(rec.correlationId, "BROWSER_HANDOFF", {
@@ -1748,7 +1736,7 @@ async function onDownloadCreatedHandler(
         return { intercepted: true, taskId: rec.taskId, fileName: result.fileName || cleanFilename, correlationId: rec.correlationId };
       }
 
-      // Flux declined: allow native browser download to continue seamlessly
+      // Radium declined: allow native browser download to continue seamlessly
       rec.state = "BROWSER_FALLBACK";
       logPipelineStage(rec.correlationId, "FALLBACK", {
         downloadId: rec.downloadId,
@@ -1773,7 +1761,7 @@ async function onDownloadCreatedHandler(
       return { intercepted: false, fallbackToBrowser: true, reason: (result && result.reason) || "DECLINED_BY_DESKTOP", mechanism: rec.mechanism, correlationId: rec.correlationId };
 
     } catch (err) {
-      // Flux unreachable or RPC error: resume native browser download safely
+      // Radium unreachable or RPC error: resume native browser download safely
       rec.state = "BROWSER_FALLBACK";
       logPipelineStage(rec.correlationId, "FALLBACK", {
         downloadId: rec.downloadId,
@@ -1807,7 +1795,7 @@ async function onDownloadCreatedHandler(
   return await offerPromise;
 }
 
-// 4. Submit a detected video or stream candidate to Flux with explicit 5-way typed source handling (Defect B fix)
+// 4. Submit a detected video or stream candidate to Radium with explicit 5-way typed source handling (Defect B fix)
 async function submitMediaCandidateToRadium(candidate, options = {}, customTransport = null, browserDownloadFn = null) {
   if (!candidate || typeof candidate !== "object") {
     throw new Error("Invalid media candidate");
@@ -1890,7 +1878,6 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
     }
     const updatedDesc = Object.assign({}, baseDesc, {
       radiumType: "YOUTUBE_STREAM",
-      fluxType: "YOUTUBE_STREAM",
       sourceType: SourceType.YOUTUBE_EXTRACTION,
       videoId: candidate.videoId || baseDesc.videoId || extractYouTubeVideoId(candidate.url || candidate.tabUrl || ""),
       title: options.pageTitle || candidate.pageTitle || baseDesc.title || "youtube_video",
@@ -2063,9 +2050,6 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
     throw err;
   }
 }
-
-var submitMediaCandidateToFlux = submitMediaCandidateToRadium;
-var submitMediaCandidateToOpenIDM = submitMediaCandidateToFlux;
 
 function isSupportedVideoSiteUrlDirect(url) {
   if (!url || typeof url !== "string") return false;
@@ -2378,7 +2362,6 @@ function handleRuntimeMessage(msg, sender, sendResponse) {
 
         const ytDesc = {
           radiumType: "YOUTUBE_STREAM",
-          fluxType: "YOUTUBE_STREAM",
           sourceType: SourceType.YOUTUBE_EXTRACTION,
           videoId: vidId,
           title: "YouTube Video",
@@ -3401,12 +3384,11 @@ if (typeof module !== "undefined" && module.exports) {
     onBeforeSendHeadersHandler,
     onHeadersReceivedHandler,
     onDownloadCreatedHandler,
-    submitMediaCandidateToFlux,
-    submitMediaCandidateToOpenIDM,
+    submitMediaCandidateToRadium,
     resolveCandidateForDownloadRequest,
     handleRuntimeMessage,
     downloadStateMachine,
-    transferBlobToFlux,
+    transferBlobToRadium,
     capturePostBodyFromRequest,
     consumeCapturedPostBody,
     registerRadiumContextMenus

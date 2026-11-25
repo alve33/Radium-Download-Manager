@@ -78,14 +78,14 @@ inline std::wstring BuildWindowsCommandLine(const std::vector<std::wstring>& arg
  * Spawns a process directly using CreateProcessW without shell interpretation.
  * Optionally captures stdout and stderr via an inherited pipe.
  */
-inline openidm::Result<std::pair<int, std::string>> RunProcessCaptureOutput(
+inline radium::Result<std::pair<int, std::string>> RunProcessCaptureOutput(
     const std::filesystem::path& executable_path,
     const std::vector<std::wstring>& args,
     const std::filesystem::path& working_dir = {},
     int timeout_ms = 30000) {
 
     if (!std::filesystem::exists(executable_path)) {
-        return openidm::Result<std::pair<int, std::string>>::Err(
+        return radium::Result<std::pair<int, std::string>>::Err(
             "ERR_EXEC_NOT_FOUND", "Executable not found: " + executable_path.string());
     }
 
@@ -95,7 +95,7 @@ inline openidm::Result<std::pair<int, std::string>> RunProcessCaptureOutput(
     sa.bInheritHandle = TRUE;
 
     if (!CreatePipe(&hStdOutRead, &hStdOutWrite, &sa, 0)) {
-        return openidm::Result<std::pair<int, std::string>>::Err(
+        return radium::Result<std::pair<int, std::string>>::Err(
             "ERR_PIPE", "Failed to create pipe for process output");
     }
     SetHandleInformation(hStdOutRead, HANDLE_FLAG_INHERIT, 0);
@@ -124,7 +124,7 @@ inline openidm::Result<std::pair<int, std::string>> RunProcessCaptureOutput(
 
     if (!ok) {
         CloseHandle(hStdOutRead);
-        return openidm::Result<std::pair<int, std::string>>::Err(
+        return radium::Result<std::pair<int, std::string>>::Err(
             "ERR_PROCESS_START", "CreateProcessW failed for: " + executable_path.string());
     }
 
@@ -161,7 +161,7 @@ inline openidm::Result<std::pair<int, std::string>> RunProcessCaptureOutput(
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
                 CloseHandle(hStdOutRead);
-                return openidm::Result<std::pair<int, std::string>>::Err(
+                return radium::Result<std::pair<int, std::string>>::Err(
                     "ERR_PROCESS_TIMEOUT", "Process timed out after " + std::to_string(timeout_ms) + " ms");
             }
         }
@@ -173,7 +173,7 @@ inline openidm::Result<std::pair<int, std::string>> RunProcessCaptureOutput(
     CloseHandle(pi.hThread);
     CloseHandle(hStdOutRead);
 
-    return openidm::Result<std::pair<int, std::string>>::Ok(
+    return radium::Result<std::pair<int, std::string>>::Ok(
         std::make_pair(static_cast<int>(exit_code), std::move(output)));
 }
 

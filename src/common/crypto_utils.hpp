@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// OpenIDM — File Checksum Verification (SHA-256 / MD5) & Credential Protection (DPAPI / AES-256-GCM)
+// Radium Download Manager — File Checksum Verification (SHA-256 / MD5) & Credential Protection (DPAPI / AES-256-GCM)
 // Implements FR-007, NFR-009, ADR-0007.
 #pragma once
 
@@ -9,7 +9,7 @@
 #include <vector>
 #include "common/types.hpp"
 
-namespace openidm {
+namespace radium {
 
 class CryptoUtils {
 public:
@@ -29,4 +29,4 @@ public:
     static std::vector<uint8_t> Base64Decode(std::string_view data);
 };
 
-} // namespace openidm
+} // namespace radium

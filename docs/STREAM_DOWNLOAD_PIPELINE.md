@@ -173,6 +173,6 @@ To support broad website compatibility beyond YouTube—including **Bilibili**, 
    - `AdultPlatformExtractor`: Extracts multi-resolution MP4 and HLS/DASH streams from `flashvars` / `mediaDefinitions`, `html5player.setVideo*`, and `<video>/<source>` structures across major adult video platforms, preserving signed CDN query parameters and site-specific `Referer`/`Origin` headers, with `yt-dlp` backend fallback.
    - `GeneralYtDlpExtractor`: Invokes `yt-dlp.exe --dump-single-json --no-playlist` inside a restricted temporary directory with root-domain Netscape cookie files (`ExtractRegistrableDomain`), site-specific `--referer`/`--user-agent`/`--add-header`, and parses real available formats without inventing fake resolutions.
 2. **Real Format Selection & Expiration Handling:**
-   - The Add Download dialog (`WM_OPENIDM_PROBE_COMPLETE`) and `video.extract` IPC method populate quality selectors strictly from actual formats returned by `VideoExtractionManager`.
+   - The Add Download dialog (`WM_RADIUM_PROBE_COMPLETE`) and `video.extract` IPC method populate quality selectors strictly from actual formats returned by `VideoExtractionManager`.
    - `ParseUrlExpirationEpoch` and `IsStreamUrlExpired` inspect `expire=`, `expires=`, `e=`, `oe=`, `validto=`, and `hdnea=` parameters so expired CDN URLs are automatically refreshed before transfer or retry.
    - `ExtractionDiagnosticReport::ToRedactedJson()` logs structured diagnostic telemetry with all sensitive cookies, tokens, and authorization headers redacted via `Logger::RedactSensitiveData`.

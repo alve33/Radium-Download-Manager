@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Lightweight, RFC 8259 compliant JSON parser & builder for OpenIDM IPC & meta.json
+// Lightweight, RFC 8259 compliant JSON parser & builder for Radium IPC & meta.json
 #pragma once
 
 #include <cctype>
@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-namespace openidm::json {
+namespace radium::json {
 
 struct Value;
 using Object = std::map<std::string, Value>;
@@ -340,4 +340,4 @@ inline Value Parse(std::string_view src) {
     return Parser(src).Parse();
 }
 
-} // namespace openidm::json
+} // namespace radium::json

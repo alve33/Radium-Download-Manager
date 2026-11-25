@@ -124,7 +124,7 @@ def main():
 
     yt_descriptor = {
         "radiumType": "YOUTUBE_STREAM",
-        "fluxType": "YOUTUBE_STREAM",
+        "radiumType": "YOUTUBE_STREAM",
         "sourceType": "YOUTUBE_EXTRACTION",
         "videoId": "7NWN3wivxhA",
         "title": "20 SECOND TIMER ⏲️",
@@ -168,8 +168,7 @@ def main():
 
     env = os.environ.copy()
     env["RADIUM_IPC_SOCKET"] = pipe_path
-    env["FLUX_IPC_SOCKET"] = pipe_path
-    env["OPENIDM_IPC_SOCKET"] = pipe_path
+    env["RADIUM_IPC_SOCKET"] = pipe_path
 
     nmh = subprocess.Popen([str(NMH_BIN)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, env=env)
