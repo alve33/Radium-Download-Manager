@@ -816,6 +816,11 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     break;
                 }
 
+                if (seg->owner_generation.load(std::memory_order_acquire) != my_owner_gen) {
+                    // Preempted by another worker; exit cleanly without clearing active_worker or counting as failure.
+                    break;
+                }
+
                 if (cancel_reason == "range_split") {
                     seg->split_pending.store(false);
                 }
@@ -1214,7 +1219,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                 if (range_supported && total_bytes > m_cfg.min_split_bytes && max_conns > 1) {
                     is_segmented = true;
                     scheduler = std::make_unique<SegmentScheduler>(total_bytes, max_conns, m_cfg.min_split_bytes);
-                    scheduler->SetPreemptAfterMs(std::max<int64_t>(20, 2 * t_connect_ms.load(std::memory_order_relaxed)));
+                    scheduler->SetPreemptAfterMs(std::max<int64_t>(1000, 4 * t_connect_ms.load(std::memory_order_relaxed)));
                     if (is_resume && !task.segments.empty()) {
                         scheduler->Initialize(task.segments);
                     } else {
