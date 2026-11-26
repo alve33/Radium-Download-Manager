@@ -2449,9 +2449,220 @@ bool TestConflictCheckLatencyWithManyTasks() {
     return true;
 }
 
+bool TestQueueSchedulerSlotPromotionAndPriority() {
+    using namespace radium;
+#ifdef _WIN32
+    WSADATA wsa{};
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+
+    SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    TEST_ASSERT(listen_sock != INVALID_SOCKET, "Create loopback listen socket for queue scheduler test");
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    TEST_ASSERT(bind(listen_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0, "Bind queue test socket");
+    TEST_ASSERT(listen(listen_sock, 32) == 0, "Listen queue test socket");
+    int alen = sizeof(addr);
+    getsockname(listen_sock, reinterpret_cast<sockaddr*>(&addr), &alen);
+    const uint16_t port = ntohs(addr.sin_port);
+
+    std::atomic<bool> stop_server{false};
+    std::thread server_thread([&]() {
+        while (!stop_server.load()) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(listen_sock, &rfds);
+            timeval tv{0, 20000};
+            if (select(0, &rfds, nullptr, nullptr, &tv) <= 0) continue;
+
+            SOCKET client = accept(listen_sock, nullptr, nullptr);
+            if (client == INVALID_SOCKET) continue;
+            std::thread([client, &stop_server]() {
+                char buf[2048];
+                int n = recv(client, buf, sizeof(buf) - 1, 0);
+                if (n > 0) {
+                    buf[n] = '\0';
+                    std::string req(buf, n);
+                    const bool is_head = req.rfind("HEAD ", 0) == 0;
+                    if (is_head) {
+                        const std::string hdr =
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Length: 1048576\r\n"
+                            "Accept-Ranges: bytes\r\n"
+                            "Connection: close\r\n\r\n";
+                        send(client, hdr.c_str(), static_cast<int>(hdr.size()), 0);
+                    } else {
+                        const std::string hdr =
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Length: 1048576\r\n"
+                            "Accept-Ranges: bytes\r\n"
+                            "Connection: close\r\n\r\n";
+                        send(client, hdr.c_str(), static_cast<int>(hdr.size()), 0);
+                        // Hold the stream open until the test stops or client closes
+                        const char chunk[256] = {0};
+                        while (!stop_server.load()) {
+                            int sent = send(client, chunk, sizeof(chunk), 0);
+                            if (sent <= 0) break;
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        }
+                    }
+                }
+                closesocket(client);
+            }).detach();
+        }
+    });
+
+    auto root = std::filesystem::temp_directory_path() / ("radium_queue_promo_" + GenerateUuidV4());
+    std::filesystem::create_directories(root);
+    ControllerConfig cfg;
+    cfg.state_db_path = root / "state.db";
+    cfg.default_download_dir = root / "downloads";
+    cfg.temp_root_dir = root / "tmp";
+    cfg.max_concurrent_tasks = 3;
+    cfg.allow_loopback = true;
+
+    auto is_active_state = [](TaskState s) {
+        return s == TaskState::kProbing || s == TaskState::kDownloading ||
+               s == TaskState::kMuxing || s == TaskState::kVerifying ||
+               s == TaskState::kFinalizing;
+    };
+
+    {
+        DownloadController ctrl(cfg);
+        TEST_ASSERT(ctrl.Initialize().ok(), "Initialize controller for queue promotion test");
+        ctrl.SetMaxConcurrentTasks(3);
+
+        auto make_task = [&](const std::string& name, int32_t order, int64_t created_ms) {
+            TaskModel t;
+            t.url = "http://127.0.0.1:" + std::to_string(port) + "/" + name;
+            t.file_name = name;
+            t.max_connections = 1;
+            t.queue_order = order;
+            t.created_at_ms = created_ms;
+            t.conflict_policy = ConflictPolicy::kOverwrite;
+            t.conflict_policy_explicit = true;
+            return t;
+        };
+
+        // 1. Add 3 active downloads + 1 queued download + 1 manually paused download
+        auto r1 = ctrl.AddTask(make_task("file1.bin", 0, 1000), true, true);
+        auto r2 = ctrl.AddTask(make_task("file2.bin", 0, 1001), true, true);
+        auto r3 = ctrl.AddTask(make_task("file3.bin", 0, 1002), true, true);
+        auto r4 = ctrl.AddTask(make_task("file4.bin", 0, 1003), true, true);
+        auto r5 = ctrl.AddTask(make_task("file5_paused.bin", -100, 999), false, true);
+        TEST_ASSERT(r1.ok() && r2.ok() && r3.ok() && r4.ok() && r5.ok(), "Added 5 tasks");
+
+        // Wait until tasks 1..3 are active and task 4 is Queued
+        bool initial_ready = false;
+        for (int i = 0; i < 60; ++i) {
+            auto t1 = ctrl.GetTask(r1.value->task_id);
+            auto t2 = ctrl.GetTask(r2.value->task_id);
+            auto t3 = ctrl.GetTask(r3.value->task_id);
+            auto t4 = ctrl.GetTask(r4.value->task_id);
+            auto t5 = ctrl.GetTask(r5.value->task_id);
+            if (t1 && t2 && t3 && t4 && t5 &&
+                is_active_state(t1->state) && is_active_state(t2->state) && is_active_state(t3->state) &&
+                t4->state == TaskState::kQueued && t5->state == TaskState::kPaused) {
+                initial_ready = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        TEST_ASSERT(initial_ready, "Tasks 1..3 active, task 4 Queued, task 5 Paused");
+
+        // 2. Pause task 3 -> task 4 must automatically start, while task 5 stays Paused
+        TEST_ASSERT(ctrl.PauseTask(r3.value->task_id).ok(), "Pause task 3");
+        bool t4_promoted = false;
+        for (int i = 0; i < 60; ++i) {
+            auto t4 = ctrl.GetTask(r4.value->task_id);
+            if (t4 && is_active_state(t4->state)) {
+                t4_promoted = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        TEST_ASSERT(t4_promoted, "Task 4 auto-promoted when task 3 paused");
+        auto t5_after = ctrl.GetTask(r5.value->task_id);
+        TEST_ASSERT(t5_after && t5_after->state == TaskState::kPaused, "Explicitly paused task 5 stayed Paused");
+
+        // 3. Resume task 3 while 3 slots (1, 2, 4) are full -> must stay Queued, not exceed limit
+        TEST_ASSERT(ctrl.ResumeTask(r3.value->task_id).ok(), "Resume task 3 while full");
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto t3_resumed = ctrl.GetTask(r3.value->task_id);
+        TEST_ASSERT(t3_resumed && t3_resumed->state == TaskState::kQueued, "Resumed task 3 waits in Queued when slots are full");
+        TEST_ASSERT(ctrl.CancelTask(r3.value->task_id).ok(), "Cancel task 3 before priority test");
+
+        // 4. Priority + FIFO promotion test: queue Low (10), Normal older (0, 2000), Normal newer (0, 2001), High (-10)
+        auto r_low = ctrl.AddTask(make_task("low.bin", 10, 2002), true, true);
+        auto r_norm_old = ctrl.AddTask(make_task("norm_old.bin", 0, 2000), true, true);
+        auto r_norm_new = ctrl.AddTask(make_task("norm_new.bin", 0, 2001), true, true);
+        auto r_high = ctrl.AddTask(make_task("high.bin", -10, 2003), true, true);
+        TEST_ASSERT(r_low.ok() && r_norm_old.ok() && r_norm_new.ok() && r_high.ok(), "Added priority queued tasks");
+
+        // Pause 2 active tasks (1 & 2) at once -> should promote High (-10) and Normal older (0, 2000)
+        TEST_ASSERT(ctrl.PauseTask(r1.value->task_id).ok(), "Pause task 1");
+        TEST_ASSERT(ctrl.PauseTask(r2.value->task_id).ok(), "Pause task 2");
+        bool two_promoted = false;
+        for (int i = 0; i < 60; ++i) {
+            auto th = ctrl.GetTask(r_high.value->task_id);
+            auto tno = ctrl.GetTask(r_norm_old.value->task_id);
+            auto tnn = ctrl.GetTask(r_norm_new.value->task_id);
+            auto tl = ctrl.GetTask(r_low.value->task_id);
+            if (th && tno && tnn && tl &&
+                is_active_state(th->state) && is_active_state(tno->state) &&
+                tnn->state == TaskState::kQueued && tl->state == TaskState::kQueued) {
+                two_promoted = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        TEST_ASSERT(two_promoted, "Pausing 2 active tasks promoted High and oldest Normal without exceeding limit");
+
+        // 5. Increasing max_concurrent_tasks to 4 promotes norm_new (order 0) before low (order 10)
+        ctrl.SetMaxConcurrentTasks(4);
+        bool norm_promoted = false;
+        for (int i = 0; i < 60; ++i) {
+            auto tnn = ctrl.GetTask(r_norm_new.value->task_id);
+            auto tl = ctrl.GetTask(r_low.value->task_id);
+            if (tnn && tl && is_active_state(tnn->state) && tl->state == TaskState::kQueued) {
+                norm_promoted = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        TEST_ASSERT(norm_promoted, "Increasing max_concurrent_tasks promoted norm_new before low");
+
+        // 6. Cancel an active task -> promotes low
+        TEST_ASSERT(ctrl.CancelTask(r4.value->task_id).ok(), "Cancel task 4");
+        bool low_promoted = false;
+        for (int i = 0; i < 60; ++i) {
+            auto tl = ctrl.GetTask(r_low.value->task_id);
+            if (tl && is_active_state(tl->state)) {
+                low_promoted = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        TEST_ASSERT(low_promoted, "Canceling active task promoted remaining Queued task");
+
+        stop_server.store(true);
+        ctrl.Shutdown();
+    }
+
+    stop_server.store(true);
+    closesocket(listen_sock);
+    if (server_thread.joinable()) server_thread.join();
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    WSACleanup();
+#endif
+    return true;
+}
+
 int main() {
     int passed = 0;
-    const int total = 20;
+    const int total = 21;
 
     std::cout << "====================================================\n";
     std::cout << " Radium Core Dedicated Unit Test Suite (Fast CTest)\n";
@@ -2495,6 +2706,7 @@ int main() {
     run_test("Repeated Same-URL Download (3+ Consecutive Attempts & Restart)", TestRepeatedSameUrlThreeAttemptsAndRestart);
     run_test("Startup Paused Task Restoration Does Not Trigger Conflict Dialogs", TestStartupPausedRestorationDoesNotTriggerConflicts);
     run_test("Conflict Check Latency Over 600+ Tasks", TestConflictCheckLatencyWithManyTasks);
+    run_test("Queue Scheduler Slot Promotion, Pause, Resume, Cancel & Priority", TestQueueSchedulerSlotPromotionAndPriority);
 
     std::cout << "\nResult: " << passed << " / " << total << " dedicated test suites PASSED.\n";
     return (passed == total) ? 0 : 1;

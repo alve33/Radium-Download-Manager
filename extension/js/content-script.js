@@ -24,6 +24,37 @@ function isVideoOrDocFullscreen(video, doc) {
   return false;
 }
 
+function isFacebookHomepage(doc, viewport) {
+  let loc = null;
+  if (doc && doc.location) {
+    loc = doc.location;
+  } else if (viewport && viewport.location) {
+    loc = viewport.location;
+  } else if (typeof window !== "undefined" && window.location) {
+    loc = window.location;
+  }
+  if (!loc) return false;
+
+  let hostname = "";
+  let pathname = "";
+  if (loc.hostname) {
+    hostname = String(loc.hostname).toLowerCase();
+    pathname = String(loc.pathname || "/");
+  } else if (loc.href) {
+    try {
+      const parsed = new URL(loc.href);
+      hostname = parsed.hostname.toLowerCase();
+      pathname = parsed.pathname || "/";
+    } catch (_) {
+      return false;
+    }
+  }
+  if (hostname !== "facebook.com" && hostname !== "www.facebook.com") {
+    return false;
+  }
+  return pathname === "/" || pathname === "" || pathname === "/home.php";
+}
+
 function positionOverlayHost(video, hostEl) {
   if (!video || !hostEl) return;
   const doc = (video && video.ownerDocument) ? video.ownerDocument : (typeof document !== "undefined" ? document : null);
@@ -45,11 +76,16 @@ function positionOverlayHost(video, hostEl) {
   const viewport = doc && doc.defaultView ? doc.defaultView : (typeof window !== "undefined" ? window : null);
   const maxLeft = Math.max(8, (viewport && viewport.innerWidth ? viewport.innerWidth : 1920) - (hostEl.offsetWidth || 240) - 8);
   const maxTop = Math.max(8, (viewport && viewport.innerHeight ? viewport.innerHeight : 1080) - (hostEl.offsetHeight || 40) - 8);
-  // Manual placement persists across player movement and fullscreen transitions.
-  const desiredLeft = hostEl.__radiumManualPosition ? hostEl.__radiumManualPosition.left
+  const fbHomepage = isFacebookHomepage(doc, viewport);
+  const defaultLeft = fbHomepage
+    ? Math.round((Number.isFinite(rect.right) ? rect.right : ((Number.isFinite(rect.left) ? rect.left : 20) + (Number.isFinite(rect.width) ? rect.width : 640))) + 8)
     : Math.round(Number.isFinite(rect.left) ? rect.left : 20);
-  const desiredTop = hostEl.__radiumManualPosition ? hostEl.__radiumManualPosition.top
+  const defaultTop = fbHomepage
+    ? Math.round(Number.isFinite(rect.top) ? rect.top : 20)
     : Math.round((Number.isFinite(rect.top) ? rect.top : 20) - 34);
+  // Manual placement persists across player movement and fullscreen transitions.
+  const desiredLeft = hostEl.__radiumManualPosition ? hostEl.__radiumManualPosition.left : defaultLeft;
+  const desiredTop = hostEl.__radiumManualPosition ? hostEl.__radiumManualPosition.top : defaultTop;
   const leftPx = Math.max(8, Math.min(maxLeft, desiredLeft));
   const topPx = Math.max(8, Math.min(maxTop, desiredTop));
 
@@ -651,6 +687,11 @@ function observeDynamicVideosAndFullscreen(doc, win, onDownloadClick) {
   if (win && typeof win.addEventListener === "function") {
     win.addEventListener("scroll", refreshPositions, { passive: true });
     win.addEventListener("resize", refreshPositions, { passive: true });
+    win.addEventListener("popstate", rescanAndRefresh, { passive: true });
+    win.addEventListener("hashchange", rescanAndRefresh, { passive: true });
+  }
+  if (win && win.navigation && typeof win.navigation.addEventListener === "function") {
+    win.navigation.addEventListener("navigatesuccess", rescanAndRefresh);
   }
   if (doc && typeof doc.addEventListener === "function") {
     doc.addEventListener("fullscreenchange", () => {
@@ -1403,6 +1444,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    isFacebookHomepage,
     positionOverlayHost,
     scanAndAttachVideoOverlays,
     observeDynamicVideosAndFullscreen,

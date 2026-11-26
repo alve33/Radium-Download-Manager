@@ -67,6 +67,45 @@ enum class PostCompletionAction {
     kRestartSystem = 3
 };
 
+enum class TaskPriority {
+    kLow = 0,
+    kNormal = 1,
+    kHigh = 2
+};
+
+inline std::string TaskPriorityToString(TaskPriority p) {
+    switch (p) {
+        case TaskPriority::kHigh: return "HIGH";
+        case TaskPriority::kLow: return "LOW";
+        case TaskPriority::kNormal:
+        default: return "NORMAL";
+    }
+}
+
+inline TaskPriority TaskPriorityFromString(const std::string& s) {
+    if (s == "HIGH" || s == "high" || s == "High") return TaskPriority::kHigh;
+    if (s == "LOW" || s == "low" || s == "Low") return TaskPriority::kLow;
+    return TaskPriority::kNormal;
+}
+
+inline std::string TaskPriorityDisplayName(TaskPriority p) {
+    switch (p) {
+        case TaskPriority::kHigh: return "High";
+        case TaskPriority::kLow: return "Low";
+        case TaskPriority::kNormal:
+        default: return "Normal";
+    }
+}
+
+inline uint32_t TaskPriorityWeight(TaskPriority p) {
+    switch (p) {
+        case TaskPriority::kHigh: return 4u;
+        case TaskPriority::kLow: return 1u;
+        case TaskPriority::kNormal:
+        default: return 2u;
+    }
+}
+
 struct Error {
     std::string code;
     std::string message;
@@ -188,6 +227,7 @@ struct TaskModel {
     PauseReason pause_reason{PauseReason::kNone};
     std::string queue_id{"main"};
     int32_t queue_order{0};
+    TaskPriority priority{TaskPriority::kNormal};
     std::string category{"General"};
     std::string url;
     std::string page_url;

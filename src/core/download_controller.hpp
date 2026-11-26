@@ -200,6 +200,10 @@ public:
     Result<void> SetTaskSpeedLimit(const std::string& task_id, uint64_t bps);
     uint64_t GetTaskSpeedLimit(const std::string& task_id) const;
 
+    // Task Priority Scheduling & Bandwidth Weighting (High / Normal / Low)
+    Result<void> SetTaskPriority(const std::string& task_id, TaskPriority priority);
+    TaskPriority GetTaskPriority(const std::string& task_id) const;
+
     // Alternate URLs / Mirrors (Phase 2 Feature B)
     Result<void> AddAlternateUrl(const std::string& task_id, const std::string& alt_url);
     std::vector<std::string> GetAlternateUrls(const std::string& task_id) const;
@@ -345,6 +349,8 @@ private:
         std::atomic<bool> pause_requested{false};
         std::atomic<bool> cancel_requested{false};
         std::atomic<uint64_t> task_speed_limit_bps{0};
+        std::atomic<int> task_priority{static_cast<int>(TaskPriority::kNormal)};
+        std::atomic<uint64_t> priority_speed_limit_bps{0};
         std::thread worker_thread;
         std::atomic<bool> finished{false};
     };
@@ -371,6 +377,9 @@ private:
         std::thread dest_thread;
     };
 
+    size_t CountActiveSlotsLocked() const;
+    void ProcessQueueLocked();
+    void RebalanceActivePrioritiesLocked();
     void ScheduleLoop();
     void RunTaskWorker(std::string task_id, std::shared_ptr<ActiveTaskControl> ctrl);
     static std::string DetermineCategoryImpl(const AppSettings& settings, const std::string& filename, const std::string& url);

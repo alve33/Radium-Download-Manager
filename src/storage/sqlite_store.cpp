@@ -124,7 +124,8 @@ Result<void> SqliteStore::Open(const std::filesystem::path& db_path) {
             schedule_stop_time_local TEXT,
             created_at_ms           INTEGER NOT NULL,
             updated_at_ms           INTEGER NOT NULL,
-            completed_at_ms         INTEGER
+            completed_at_ms         INTEGER,
+            priority                TEXT NOT NULL DEFAULT 'NORMAL'
         );
 
         CREATE INDEX IF NOT EXISTS idx_tasks_state_queue ON tasks(state, queue_id, queue_order);
@@ -166,6 +167,7 @@ Result<void> SqliteStore::Open(const std::filesystem::path& db_path) {
     try_add_col("ALTER TABLE tasks ADD COLUMN schedule_time_local TEXT;");
     try_add_col("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;");
     try_add_col("ALTER TABLE tasks ADD COLUMN failure_notification_sent INTEGER NOT NULL DEFAULT 0;");
+    try_add_col("ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'NORMAL';");
 
     if ((tasks_table_existed && !has_failure_notif_col) || current_schema_version < 2) {
         // Mark pre-existing failed downloads as already handled so upgrading does not
@@ -258,7 +260,7 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
             conflict_policy, scheduled, schedule_time_local, speed_limit_bps,
             etag, last_modified, headers_json, encrypted_auth_blob, stream_options_json,
             expected_sha256, error_code, error_message, alternate_urls_json, schedule_stop_time_local,
-            created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent
+            created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent, priority
         ) VALUES (
             ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
@@ -266,7 +268,7 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
             ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?
         )
         ON CONFLICT(task_id) DO UPDATE SET
             task_type=excluded.task_type,
@@ -303,7 +305,8 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
             updated_at_ms=excluded.updated_at_ms,
             completed_at_ms=excluded.completed_at_ms,
             retry_count=excluded.retry_count,
-            failure_notification_sent=excluded.failure_notification_sent;
+            failure_notification_sent=excluded.failure_notification_sent,
+            priority=excluded.priority;
     )SQL";
 
     sqlite3_stmt* stmt = nullptr;
@@ -370,6 +373,8 @@ Result<void> SqliteStore::UpsertTask(const TaskModel& task) {
     sqlite3_bind_int64(stmt, 35, task.completed_at_ms);
     sqlite3_bind_int(stmt, 36, static_cast<int>(task.retry_count));
     sqlite3_bind_int(stmt, 37, task.failure_notification_sent ? 1 : 0);
+    std::string priority_s = TaskPriorityToString(task.priority);
+    sqlite3_bind_text(stmt, 38, priority_s.c_str(), -1, SQLITE_TRANSIENT);
 
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -445,7 +450,11 @@ Result<void> SqliteStore::UpdateTaskProgressAndSegments(
     bool range_supported,
     const std::vector<Segment>& segments,
     const std::string& error_code,
-    const std::string& error_message) {
+    const std::string& error_message,
+    const std::string& part_path,
+    const std::string& file_name,
+    const std::string& etag,
+    const std::string& last_modified) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_db) return Result<void>::Err("ERR_SQLITE_CLOSED", "Database not open");
 
@@ -461,6 +470,10 @@ Result<void> SqliteStore::UpdateTaskProgressAndSegments(
             range_supported = ?,
             error_code = ?,
             error_message = ?,
+            part_path = CASE WHEN ? != '' THEN ? ELSE part_path END,
+            file_name = CASE WHEN ? != '' THEN ? ELSE file_name END,
+            etag = CASE WHEN ? != '' THEN ? ELSE etag END,
+            last_modified = CASE WHEN ? != '' THEN ? ELSE last_modified END,
             updated_at_ms = ?,
             completed_at_ms = CASE WHEN ? > 0 THEN ? ELSE completed_at_ms END,
             encrypted_auth_blob = CASE WHEN ? IN ('COMPLETED', 'CANCELED') THEN NULL ELSE encrypted_auth_blob END
@@ -478,12 +491,20 @@ Result<void> SqliteStore::UpdateTaskProgressAndSegments(
     sqlite3_bind_int(stmt, 5, range_supported ? 1 : 0);
     sqlite3_bind_text(stmt, 6, error_code.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 7, error_message.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 8, now_ms);
-    sqlite3_bind_int64(stmt, 9, comp_ms);
-    sqlite3_bind_int64(stmt, 10, comp_ms);
-    sqlite3_bind_text(stmt, 11, state_s.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 12, task_id.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 13, state_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 8, part_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 9, part_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 10, file_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 11, file_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 12, etag.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 13, etag.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 14, last_modified.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 15, last_modified.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 16, now_ms);
+    sqlite3_bind_int64(stmt, 17, comp_ms);
+    sqlite3_bind_int64(stmt, 18, comp_ms);
+    sqlite3_bind_text(stmt, 19, state_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 20, task_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 21, state_s.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
@@ -632,6 +653,7 @@ static TaskModel ParseTaskRow(sqlite3_stmt* stmt) {
     t.completed_at_ms = sqlite3_column_int64(stmt, 34);
     t.retry_count = static_cast<uint32_t>(std::max(0, sqlite3_column_int(stmt, 35)));
     t.failure_notification_sent = sqlite3_column_int(stmt, 36) != 0;
+    t.priority = TaskPriorityFromString(ColText(stmt, 37));
     return t;
 }
 
@@ -646,7 +668,7 @@ Result<std::optional<TaskModel>> SqliteStore::GetTask(const std::string& task_id
                conflict_policy, scheduled, schedule_time_local, speed_limit_bps,
                etag, last_modified, headers_json, encrypted_auth_blob, stream_options_json,
                expected_sha256, error_code, error_message, alternate_urls_json, schedule_stop_time_local,
-               created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent
+               created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent, priority
         FROM tasks
         WHERE task_id = ?;
     )SQL";
@@ -684,7 +706,7 @@ Result<std::vector<TaskModel>> SqliteStore::ListTasks() {
                conflict_policy, scheduled, schedule_time_local, speed_limit_bps,
                etag, last_modified, headers_json, encrypted_auth_blob, stream_options_json,
                expected_sha256, error_code, error_message, alternate_urls_json, schedule_stop_time_local,
-               created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent
+               created_at_ms, updated_at_ms, completed_at_ms, retry_count, failure_notification_sent, priority
         FROM tasks
         ORDER BY created_at_ms DESC;
     )SQL";
@@ -751,10 +773,28 @@ Result<int> SqliteStore::RecoverInterruptedTasks(uint64_t rollback_margin_bytes)
             t.speed_bps = 0;
             t.status_detail = "Paused (Recovered after restart)";
 
+            if (t.task_type == TaskType::kTorrent) {
+                // BitTorrent tasks store payload directly in save_dir (multi-file or single-file)
+                // and verify piece integrity via fastresume / SHA-1 check; part_path may hold
+                // the cached metainfo.torrent path, which must never clamp downloaded_bytes.
+                UpsertTask(t);
+                ++recovered_count;
+                continue;
+            }
+
             std::error_code ec;
-            std::filesystem::path part_path = t.part_path.empty() ?
-                (std::filesystem::path(t.save_dir) / (t.file_name + ".part")) :
-                std::filesystem::path(t.part_path);
+            std::filesystem::path part_path;
+            if (!t.part_path.empty()) {
+                part_path = std::filesystem::path(t.part_path);
+            } else {
+                auto id_part = std::filesystem::path(t.save_dir) / (t.file_name + "." + t.task_id + ".part");
+                if (std::filesystem::exists(id_part, ec)) {
+                    part_path = id_part;
+                    t.part_path = part_path.string();
+                } else {
+                    part_path = std::filesystem::path(t.save_dir) / (t.file_name + ".part");
+                }
+            }
             bool part_exists = std::filesystem::exists(part_path, ec);
             uint64_t actual_part_sz = part_exists ? std::filesystem::file_size(part_path, ec) : 0;
             bool has_explicit_part = !t.part_path.empty();

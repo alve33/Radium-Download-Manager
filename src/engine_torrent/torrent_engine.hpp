@@ -29,6 +29,11 @@ struct TorrentProgress {
     uint32_t completed_pieces{0};
     uint32_t total_pieces{0};
     std::string status_detail;
+    std::string fastresume_bitfield;
+    int64_t fastresume_mtime{0};
+    uint64_t fastresume_filesize{0};
+    std::vector<std::string> torrent_file_paths;
+    std::vector<uint8_t> torrent_file_selection;
 };
 
 struct TrackerEndpointInfo {
@@ -86,7 +91,9 @@ public:
         double max_seed_ratio = 1.0,
         uint32_t max_seed_time_sec = 0,
         TorrentMetadataSelectionCallback on_metadata = nullptr,
-        bool sequential_download = false);
+        bool sequential_download = false,
+        std::atomic<int>* task_priority = nullptr,
+        std::atomic<uint64_t>* priority_speed_limit_bps = nullptr);
 
     // Swarm inspection and dynamic control
     static Result<void> AddTrackersToTask(const std::string& task_id, const std::vector<std::string>& new_trackers);

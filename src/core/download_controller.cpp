@@ -771,6 +771,9 @@ Result<TaskModel> DownloadController::AddTask(TaskModel task, bool start_immedia
     }
 
     m_tasks[task.task_id] = task;
+    if (task.state == TaskState::kQueued) {
+        ProcessQueueLocked();
+    }
     lock.unlock();
 
     // Wake the scheduler before optional diagnostic persistence. Startup
@@ -1275,19 +1278,191 @@ Result<stream::StreamProbeResult> DownloadController::ProbeStream(
     return adapter.ProbeManifest(manifest_url, headers, auth_headers, cached_manifest_body);
 }
 
+size_t DownloadController::CountActiveSlotsLocked() const {
+    size_t count = 0;
+    for (const auto& [id, ctrl] : m_active) {
+        if (!ctrl || ctrl->finished.load() ||
+            ctrl->pause_requested.load() || ctrl->cancel_requested.load()) {
+            continue;
+        }
+        auto it = m_tasks.find(id);
+        if (it == m_tasks.end()) {
+            continue;
+        }
+        const TaskState s = it->second.state;
+        if (s == TaskState::kQueued || s == TaskState::kProbing ||
+            s == TaskState::kDownloading || s == TaskState::kMuxing ||
+            s == TaskState::kVerifying || s == TaskState::kFinalizing) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void DownloadController::RebalanceActivePrioritiesLocked() {
+    const uint64_t global_bps = m_global_speed_limit_bps.load(std::memory_order_relaxed);
+    if (m_active.size() <= 1) {
+        for (auto& [id, ctrl] : m_active) {
+            if (ctrl) ctrl->priority_speed_limit_bps.store(0, std::memory_order_relaxed);
+        }
+        return;
+    }
+
+    uint64_t total_weight = 0;
+    uint64_t aggregate_bps = 0;
+    bool has_mixed_priorities = false;
+    int first_prio = -1;
+    int highest_prio = static_cast<int>(TaskPriority::kLow);
+    for (const auto& [id, ctrl] : m_active) {
+        if (!ctrl || ctrl->finished.load(std::memory_order_relaxed)) continue;
+        const int prio_int = ctrl->task_priority.load(std::memory_order_relaxed);
+        if (first_prio < 0) first_prio = prio_int;
+        else if (prio_int != first_prio) has_mixed_priorities = true;
+        if (prio_int > highest_prio) highest_prio = prio_int;
+        total_weight += TaskPriorityWeight(static_cast<TaskPriority>(prio_int));
+        auto tit = m_tasks.find(id);
+        if (tit != m_tasks.end()) {
+            aggregate_bps += tit->second.speed_bps;
+        }
+    }
+
+    if (!has_mixed_priorities || total_weight == 0) {
+        for (auto& [id, ctrl] : m_active) {
+            if (ctrl) ctrl->priority_speed_limit_bps.store(0, std::memory_order_relaxed);
+        }
+        return;
+    }
+
+    for (auto& [id, ctrl] : m_active) {
+        if (!ctrl || ctrl->finished.load(std::memory_order_relaxed)) continue;
+        const int prio_int = ctrl->task_priority.load(std::memory_order_relaxed);
+        const auto prio = static_cast<TaskPriority>(prio_int);
+        if (prio_int == highest_prio) {
+            // Never artificially cap the highest active priority tier; let it consume
+            // full available link / global-limiter capacity.
+            ctrl->priority_speed_limit_bps.store(0, std::memory_order_relaxed);
+            continue;
+        }
+
+        uint64_t share_bps = 0;
+        if (global_bps > 0) {
+            const uint64_t w = TaskPriorityWeight(prio);
+            share_bps = std::max<uint64_t>(16384ULL, (global_bps * w) / total_weight);
+        } else if (prio == TaskPriority::kLow) {
+            share_bps = (aggregate_bps > 0)
+                ? std::max<uint64_t>(65536ULL, aggregate_bps / 4)
+                : 262144ULL;
+        } else {
+            // Normal yielding to an active High task
+            share_bps = (aggregate_bps > 0)
+                ? std::max<uint64_t>(131072ULL, aggregate_bps / 2)
+                : 524288ULL;
+        }
+        ctrl->priority_speed_limit_bps.store(share_bps, std::memory_order_relaxed);
+    }
+}
+
+void DownloadController::ProcessQueueLocked() {
+    if (m_stopping) {
+        return;
+    }
+    const uint32_t max_conc = m_max_concurrent.load();
+    size_t active_slots = CountActiveSlotsLocked();
+
+    // Preempt a lower-priority active task if a higher-priority task is waiting in kQueued
+    // and all concurrency slots are currently occupied.
+    if (active_slots >= max_conc) {
+        int highest_queued_prio = -1;
+        for (const auto& [id, t] : m_tasks) {
+            if (t.state == TaskState::kQueued && !m_deleted_tasks.count(id) && m_active.find(id) == m_active.end()) {
+                highest_queued_prio = std::max(highest_queued_prio, static_cast<int>(t.priority));
+            }
+        }
+        if (highest_queued_prio > static_cast<int>(TaskPriority::kLow)) {
+            std::string victim_id;
+            int lowest_active_prio = highest_queued_prio;
+            for (const auto& [id, ctrl] : m_active) {
+                if (!ctrl || ctrl->finished.load(std::memory_order_relaxed) || ctrl->pause_requested.load(std::memory_order_relaxed)) {
+                    continue;
+                }
+                const int aprio = ctrl->task_priority.load(std::memory_order_relaxed);
+                if (aprio < lowest_active_prio) {
+                    lowest_active_prio = aprio;
+                    victim_id = id;
+                }
+            }
+            if (!victim_id.empty()) {
+                auto act_it = m_active.find(victim_id);
+                auto task_it = m_tasks.find(victim_id);
+                if (act_it != m_active.end() && task_it != m_tasks.end()) {
+                    act_it->second->pause_requested.store(true, std::memory_order_relaxed);
+                    task_it->second.state = TaskState::kQueued;
+                    task_it->second.status_detail = "Queued (Preempted by higher priority)";
+                }
+            }
+        }
+    }
+    bool dispatched = false;
+    while (active_slots < max_conc) {
+        std::string next_id;
+        int best_priority = -1;
+        int32_t min_order = INT32_MAX;
+        int64_t oldest_ts = INT64_MAX;
+        for (const auto& [id, t] : m_tasks) {
+            if (t.state == TaskState::kQueued &&
+                !m_deleted_tasks.count(id) &&
+                m_active.find(id) == m_active.end()) {
+                const int prio = static_cast<int>(t.priority);
+                if (prio > best_priority ||
+                    (prio == best_priority &&
+                     (t.queue_order < min_order ||
+                      (t.queue_order == min_order &&
+                       (t.created_at_ms < oldest_ts ||
+                        (t.created_at_ms == oldest_ts && id < next_id)))))) {
+                    best_priority = prio;
+                    min_order = t.queue_order;
+                    oldest_ts = t.created_at_ms;
+                    next_id = id;
+                }
+            }
+        }
+        if (next_id.empty()) {
+            break;
+        }
+
+        m_tasks[next_id].state = TaskState::kProbing;
+        m_tasks[next_id].status_detail = "Connecting...";
+        auto ctrl = std::make_shared<ActiveTaskControl>();
+        ctrl->task_speed_limit_bps.store(m_tasks[next_id].speed_limit_bps);
+        ctrl->task_priority.store(static_cast<int>(m_tasks[next_id].priority));
+        m_active[next_id] = ctrl;
+        ctrl->worker_thread = std::thread(&DownloadController::RunTaskWorker, this, next_id, ctrl);
+        ++active_slots;
+        dispatched = true;
+    }
+    if (dispatched) {
+        RebalanceActivePrioritiesLocked();
+    }
+}
+
 void DownloadController::ScheduleLoop() {
     std::map<std::string, std::chrono::steady_clock::time_point> retry_schedule;
     bool had_active = false;
     std::string last_queue_hh_mm;
     std::vector<QueueConfig> cached_queues;
+    auto last_rebalance_tp = std::chrono::steady_clock::now();
 
     while (true) {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_cv.wait_for(lock, std::chrono::milliseconds(50), [&]() {
             if (m_stopping) return true;
-            if (m_active.size() < m_max_concurrent.load()) {
+            if (CountActiveSlotsLocked() < m_max_concurrent.load()) {
                 for (const auto& [id, t] : m_tasks) {
-                    if (t.state == TaskState::kQueued && m_active.find(id) == m_active.end()) return true;
+                    if (t.state == TaskState::kQueued &&
+                        !m_deleted_tasks.count(id) &&
+                        m_active.find(id) == m_active.end()) {
+                        return true;
+                    }
                 }
             }
             for (const auto& [id, ctrl] : m_active) {
@@ -1317,34 +1492,21 @@ void DownloadController::ScheduleLoop() {
         }
         lock.lock();
 
+        if (!finished_workers.empty()) {
+            RebalanceActivePrioritiesLocked();
+        } else if (m_active.size() > 1) {
+            auto now_rb = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now_rb - last_rebalance_tp).count() >= 500) {
+                last_rebalance_tp = now_rb;
+                RebalanceActivePrioritiesLocked();
+            }
+        }
         if (!m_active.empty()) {
             had_active = true;
         }
 
         // Fast-path task dispatch: dispatch eligible queued tasks immediately to worker threads
-        uint32_t max_conc = m_max_concurrent.load();
-        while (m_active.size() < max_conc) {
-            std::string next_id;
-            int32_t min_order = INT32_MAX;
-            int64_t oldest_ts = INT64_MAX;
-            for (const auto& [id, t] : m_tasks) {
-                if (t.state == TaskState::kQueued && m_active.find(id) == m_active.end()) {
-                    if (t.queue_order < min_order || (t.queue_order == min_order && t.created_at_ms < oldest_ts)) {
-                        min_order = t.queue_order;
-                        oldest_ts = t.created_at_ms;
-                        next_id = id;
-                    }
-                }
-            }
-            if (next_id.empty()) break;
-
-            m_tasks[next_id].state = TaskState::kProbing;
-            m_tasks[next_id].status_detail = "Connecting...";
-            auto ctrl = std::make_shared<ActiveTaskControl>();
-            ctrl->task_speed_limit_bps.store(m_tasks[next_id].speed_limit_bps);
-            m_active[next_id] = ctrl;
-            ctrl->worker_thread = std::thread(&DownloadController::RunTaskWorker, this, next_id, ctrl);
-        }
+        ProcessQueueLocked();
 
         // 1. Check for scheduled tasks that reached their local schedule time
         std::string cur_hh_mm;
@@ -1537,29 +1699,7 @@ void DownloadController::ScheduleLoop() {
             }
         }
 
-        max_conc = m_max_concurrent.load();
-        while (m_active.size() < max_conc) {
-            std::string next_id;
-            int32_t min_order = INT32_MAX;
-            int64_t oldest_ts = INT64_MAX;
-            for (const auto& [id, t] : m_tasks) {
-                if (t.state == TaskState::kQueued && m_active.find(id) == m_active.end()) {
-                    if (t.queue_order < min_order || (t.queue_order == min_order && t.created_at_ms < oldest_ts)) {
-                        min_order = t.queue_order;
-                        oldest_ts = t.created_at_ms;
-                        next_id = id;
-                    }
-                }
-            }
-            if (next_id.empty()) break;
-
-            m_tasks[next_id].state = TaskState::kProbing;
-            m_tasks[next_id].status_detail = "Connecting...";
-            auto ctrl = std::make_shared<ActiveTaskControl>();
-            ctrl->task_speed_limit_bps.store(m_tasks[next_id].speed_limit_bps);
-            m_active[next_id] = ctrl;
-            ctrl->worker_thread = std::thread(&DownloadController::RunTaskWorker, this, next_id, ctrl);
-        }
+        ProcessQueueLocked();
     }
 }
 
@@ -1771,8 +1911,22 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
     } else if (local_task.task_type == TaskType::kTorrent) {
         torrent::TorrentInfo tinfo;
         Result<torrent::TorrentInfo> parse_res = Result<torrent::TorrentInfo>::Err("ERR_TORRENT_MALFORMED", "Torrent metainfo was not parsed");
+        bool used_cached_metainfo = false;
         if (local_task.url.find("magnet:?") == 0) {
-            parse_res = torrent::TorrentParser::ParseMagnetUri(local_task.url);
+            std::error_code ec_meta;
+            if (!local_task.part_path.empty() && std::filesystem::exists(local_task.part_path, ec_meta)) {
+                auto cached_res = torrent::TorrentParser::ParseTorrentFile(local_task.part_path);
+                if (cached_res.ok()) {
+                    parse_res = std::move(cached_res);
+                    used_cached_metainfo = true;
+                }
+            }
+            if (!used_cached_metainfo) {
+                if (local_task.part_path.empty()) {
+                    local_task.part_path = (m_cfg.temp_root_dir / "torrents" / local_task.task_id / "metainfo.torrent").string();
+                }
+                parse_res = torrent::TorrentParser::ParseMagnetUri(local_task.url);
+            }
         } else {
             parse_res = torrent::TorrentParser::ParseTorrentFile(local_task.url);
         }
@@ -1793,10 +1947,11 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
             }
         }
         torrent::TorrentMetadataSelectionCallback metadata_selection;
-        {
+        if (!used_cached_metainfo) {
             std::lock_guard<std::mutex> lock(m_mutex);
             metadata_selection = m_cfg.torrent_metadata_selection_callback;
         }
+        auto last_torrent_db_sync = std::chrono::steady_clock::now();
         auto tor_dl = parse_res.ok() ? torrent::TorrentEngine::ExecuteTorrentDownload(
             local_task,
             tinfo,
@@ -1805,30 +1960,54 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
             ctrl->task_speed_limit_bps,
             [&](const torrent::TorrentProgress& tp) {
                 if (ctrl->cancel_requested.load() || ctrl->pause_requested.load()) return;
-                std::lock_guard<std::mutex> lock(m_mutex);
-                auto it = m_tasks.find(task_id);
-                if (it != m_tasks.end() && !m_deleted_tasks.count(task_id)) {
-                    if (it->second.state == TaskState::kCanceled || it->second.state == TaskState::kPaused) return;
-                    if ((it->second.state == TaskState::kCompleted || it->second.state == TaskState::kFailed) &&
-                        tp.state != TaskState::kCompleted && tp.state != TaskState::kFailed) {
-                        RADIUM_LOG_WARN("Controller", "Ignoring stale torrent progress task=" + task_id +
-                                         " phase=" + TaskStateToString(tp.state) + " after terminal state=" + TaskStateToString(it->second.state));
-                        return;
+                std::optional<TaskModel> persist_snapshot;
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    auto it = m_tasks.find(task_id);
+                    if (it != m_tasks.end() && !m_deleted_tasks.count(task_id)) {
+                        if (it->second.state == TaskState::kCanceled || it->second.state == TaskState::kPaused) return;
+                        if ((it->second.state == TaskState::kCompleted || it->second.state == TaskState::kFailed) &&
+                            tp.state != TaskState::kCompleted && tp.state != TaskState::kFailed) {
+                            RADIUM_LOG_WARN("Controller", "Ignoring stale torrent progress task=" + task_id +
+                                             " phase=" + TaskStateToString(tp.state) + " after terminal state=" + TaskStateToString(it->second.state));
+                            return;
+                        }
+                        it->second.state = tp.state;
+                        // received_bytes includes partial, not-yet-hash-verified
+                        // torrent blocks for live UI progress. ExecuteTorrentDownload
+                        // keeps local_task.downloaded_bytes verified-only, so these
+                        // transient bytes are never committed as resumable progress.
+                        it->second.downloaded_bytes = std::max(tp.downloaded_bytes, tp.received_bytes);
+                        it->second.total_bytes = tp.total_bytes;
+                        it->second.speed_bps = tp.speed_bps;
+                        it->second.uploaded_bytes = tp.uploaded_bytes;
+                        it->second.upload_speed_bps = tp.upload_speed_bps;
+                        it->second.completed_segments = tp.completed_pieces;
+                        it->second.total_segments = tp.total_pieces;
+                        it->second.status_detail = tp.status_detail;
+                        if (!local_task.part_path.empty()) {
+                            it->second.part_path = local_task.part_path;
+                        }
+                        if (!tp.torrent_file_paths.empty()) {
+                            it->second.torrent_file_paths = tp.torrent_file_paths;
+                            it->second.torrent_file_selection = tp.torrent_file_selection;
+                        }
+                        if (!tp.fastresume_bitfield.empty()) {
+                            it->second.torrent_fastresume_bitfield = tp.fastresume_bitfield;
+                            it->second.torrent_fastresume_filesize = tp.fastresume_filesize;
+                            it->second.torrent_fastresume_mtime = tp.fastresume_mtime;
+                            auto now = std::chrono::steady_clock::now();
+                            if (now - last_torrent_db_sync >= std::chrono::seconds(2)) {
+                                last_torrent_db_sync = now;
+                                persist_snapshot = it->second;
+                                persist_snapshot->downloaded_bytes = tp.downloaded_bytes;
+                            }
+                        }
+                        local_task.uploaded_bytes = tp.uploaded_bytes;
                     }
-                    it->second.state = tp.state;
-                    // received_bytes includes partial, not-yet-hash-verified
-                    // torrent blocks for live UI progress. ExecuteTorrentDownload
-                    // keeps local_task.downloaded_bytes verified-only, so these
-                    // transient bytes are never committed as resumable progress.
-                    it->second.downloaded_bytes = std::max(tp.downloaded_bytes, tp.received_bytes);
-                    it->second.total_bytes = tp.total_bytes;
-                    it->second.speed_bps = tp.speed_bps;
-                    it->second.uploaded_bytes = tp.uploaded_bytes;
-                    it->second.upload_speed_bps = tp.upload_speed_bps;
-                    it->second.completed_segments = tp.completed_pieces;
-                    it->second.total_segments = tp.total_pieces;
-                    it->second.status_detail = tp.status_detail;
-                    local_task.uploaded_bytes = tp.uploaded_bytes;
+                }
+                if (persist_snapshot.has_value() && !ctrl->cancel_requested.load() && !ctrl->pause_requested.load()) {
+                    m_store.UpsertTask(*persist_snapshot);
                 }
             },
             m_global_limiter,
@@ -1837,7 +2016,10 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
             false,
             1.0,
             0,
-            std::move(metadata_selection)) : Result<void>::Err(local_task.error_code, local_task.error_message);
+            std::move(metadata_selection),
+            false,
+            &ctrl->task_priority,
+            &ctrl->priority_speed_limit_bps) : Result<void>::Err(local_task.error_code, local_task.error_message);
         if (!tor_dl.ok() && parse_res.ok()) {
             if (ctrl->pause_requested.load() || tor_dl.error->code == "ERR_TORRENT_SELECTION_CANCELED") {
                 local_task.state = TaskState::kPaused;
@@ -2013,6 +2195,7 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                                 t.status_detail = local_task.status_detail;
                             }
                             if (!ep.resolved_filename.empty()) t.file_name = ep.resolved_filename;
+                            if (!ep.part_path.empty()) t.part_path = ep.part_path;
                             if (!ep.etag.empty()) t.etag = ep.etag;
                             if (!ep.last_modified.empty()) t.last_modified = ep.last_modified;
                             t.segments = ep.segments;
@@ -2025,12 +2208,16 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                         last_db_sync = now;
                         if (!ctrl->cancel_requested.load() && !ctrl->pause_requested.load()) {
                             m_store.UpdateTaskProgressAndSegments(
-                                task_id, ep.state, ep.downloaded_bytes, ep.total_bytes, ep.range_supported, ep.segments);
+                                task_id, ep.state, ep.downloaded_bytes, ep.total_bytes, ep.range_supported, ep.segments,
+                                "", "", ep.part_path, ep.resolved_filename, ep.etag, ep.last_modified);
                         }
                     }
                 },
                 m_global_limiter,
-                &m_global_speed_limit_bps);
+                &m_global_speed_limit_bps,
+                nullptr,
+                &ctrl->task_priority,
+                &ctrl->priority_speed_limit_bps);
 
             if (res.ok() || ctrl->cancel_requested.load() || ctrl->pause_requested.load()) {
                 break;
@@ -2246,6 +2433,15 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 t.etag = local_task.etag;
                 t.last_modified = local_task.last_modified;
                 t.segments = local_task.segments;
+                if (!local_task.torrent_file_paths.empty()) {
+                    t.torrent_file_paths = local_task.torrent_file_paths;
+                    t.torrent_file_selection = local_task.torrent_file_selection;
+                }
+                if (!local_task.torrent_fastresume_bitfield.empty()) {
+                    t.torrent_fastresume_bitfield = local_task.torrent_fastresume_bitfield;
+                    t.torrent_fastresume_filesize = local_task.torrent_fastresume_filesize;
+                    t.torrent_fastresume_mtime = local_task.torrent_fastresume_mtime;
+                }
                 t.error_code = local_task.error_code;
                 t.error_message = local_task.error_message;
                 if (t.state == TaskState::kFailed &&
@@ -2283,6 +2479,8 @@ void DownloadController::RunTaskWorker(std::string task_id, std::shared_ptr<Acti
                 should_persist = true;
             }
         }
+        // Promote queued work immediately whenever a task leaves an active state.
+        ProcessQueueLocked();
     }
     if (should_persist) {
         auto persist_res = m_store.UpsertTask(to_save);
@@ -2332,12 +2530,14 @@ Result<void> DownloadController::StartTask(const std::string& task_id) {
         it->second.error_code.clear();
         it->second.error_message.clear();
         m_store.UpsertTask(it->second);
+        ProcessQueueLocked();
         m_cv.notify_all();
     }
     return Result<void>::Ok();
 }
 
 Result<void> DownloadController::PauseTask(const std::string& task_id) {
+    bool notify_scheduler = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_tasks.find(task_id);
@@ -2347,19 +2547,25 @@ Result<void> DownloadController::PauseTask(const std::string& task_id) {
             it->second.state = TaskState::kPaused;
             it->second.status_detail = "Paused";
             m_store.UpsertTask(it->second);
-            return Result<void>::Ok();
+            notify_scheduler = true;
+        } else {
+            auto ait = m_active.find(task_id);
+            if (ait != m_active.end()) {
+                // Do not synchronously wait for network workers on the UI/IPC caller.
+                // The worker observes this flag, exits its current I/O operation, and
+                // performs the final persistence merge below without resurrecting the task.
+                ait->second->pause_requested.store(true);
+                it->second.state = TaskState::kPaused;
+                it->second.status_detail = "Pausing...";
+                it->second.speed_bps = 0;
+                m_store.UpsertTask(it->second);
+                ProcessQueueLocked();
+                notify_scheduler = true;
+            }
         }
-        auto ait = m_active.find(task_id);
-        if (ait != m_active.end()) {
-            // Do not synchronously wait for network workers on the UI/IPC caller.
-            // The worker observes this flag, exits its current I/O operation, and
-            // performs the final persistence merge below without resurrecting the task.
-            ait->second->pause_requested.store(true);
-            it->second.state = TaskState::kPaused;
-            it->second.status_detail = "Pausing...";
-            it->second.speed_bps = 0;
-            m_store.UpsertTask(it->second);
-        }
+    }
+    if (notify_scheduler) {
+        m_cv.notify_all();
     }
     return Result<void>::Ok();
 }
@@ -2378,6 +2584,7 @@ Result<void> DownloadController::ResumeTask(const std::string& task_id) {
         it->second.error_code.clear();
         it->second.error_message.clear();
         m_store.UpsertTask(it->second);
+        ProcessQueueLocked();
         m_cv.notify_all();
     }
     return Result<void>::Ok();
@@ -2411,6 +2618,8 @@ Result<void> DownloadController::CancelTask(const std::string& task_id) {
             it->second.error_message.clear();
             it->second.auth_headers.clear();
             m_store.UpsertTask(it->second);
+            ProcessQueueLocked();
+            m_cv.notify_all();
             return Result<void>::Ok();
         }
     }
@@ -2436,7 +2645,9 @@ Result<void> DownloadController::CancelTask(const std::string& task_id) {
             it->second.auth_headers.clear();
             m_store.UpsertTask(it->second);
         }
+        ProcessQueueLocked();
     }
+    m_cv.notify_all();
     return Result<void>::Ok();
 }
 
@@ -2479,6 +2690,7 @@ Result<void> DownloadController::RetryTask(const std::string& task_id) {
     t.error_code.clear();
     t.error_message.clear();
     m_store.UpsertTask(t);
+    ProcessQueueLocked();
     m_cv.notify_all();
     return Result<void>::Ok();
 }
@@ -2518,6 +2730,7 @@ Result<void> DownloadController::RemoveTask(const std::string& task_id, bool del
                 worker_to_join = std::move(ait->second->worker_thread);
             }
             m_active.erase(ait);
+            ProcessQueueLocked();
         }
     }
     if (worker_to_join.joinable()) {
@@ -2677,23 +2890,30 @@ Result<int> DownloadController::ClearCompletedHistory() {
 }
 
 void DownloadController::PauseAllTasks() {
-    std::vector<std::string> ids;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        for (const auto& [id, t] : m_tasks) {
-            if (t.state == TaskState::kQueued || t.state == TaskState::kProbing ||
-                t.state == TaskState::kDownloading || t.state == TaskState::kMuxing) {
-                ids.push_back(id);
+        for (auto& [id, t] : m_tasks) {
+            if (t.state == TaskState::kQueued) {
+                t.pause_reason = PauseReason::kUser;
+                t.state = TaskState::kPaused;
+                t.status_detail = "Paused";
+                m_store.UpsertTask(t);
+            } else if (t.state == TaskState::kProbing ||
+                       t.state == TaskState::kDownloading ||
+                       t.state == TaskState::kMuxing) {
+                t.pause_reason = PauseReason::kUser;
                 auto ait = m_active.find(id);
                 if (ait != m_active.end()) {
                     ait->second->pause_requested.store(true);
+                    t.state = TaskState::kPaused;
+                    t.status_detail = "Pausing...";
+                    t.speed_bps = 0;
+                    m_store.UpsertTask(t);
                 }
             }
         }
     }
-    for (const auto& id : ids) {
-        PauseTask(id);
-    }
+    m_cv.notify_all();
 }
 
 void DownloadController::ResumeAllTasks() {
@@ -2711,6 +2931,7 @@ void DownloadController::ResumeAllTasks() {
             m_store.UpsertTask(t);
         }
     }
+    ProcessQueueLocked();
     m_cv.notify_all();
 }
 
@@ -2729,6 +2950,7 @@ void DownloadController::StartAllTasks() {
             m_store.UpsertTask(t);
         }
     }
+    ProcessQueueLocked();
     m_cv.notify_all();
 }
 
@@ -2930,6 +3152,7 @@ void DownloadController::SetMaxConcurrentTasks(uint32_t max_tasks) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_settings.max_concurrent_tasks = clamped;
         SaveSettingsLocked();
+        ProcessQueueLocked();
     }
     m_cv.notify_all();
 }
@@ -2943,6 +3166,7 @@ void DownloadController::SetGlobalSpeedLimit(uint64_t bps) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_settings.speed_limit_bps = bps;
     SaveSettingsLocked();
+    RebalanceActivePrioritiesLocked();
 }
 
 uint64_t DownloadController::GetGlobalSpeedLimit() const {
@@ -2969,6 +3193,30 @@ uint64_t DownloadController::GetTaskSpeedLimit(const std::string& task_id) const
     auto it = m_tasks.find(task_id);
     if (it != m_tasks.end()) return it->second.speed_limit_bps;
     return 0;
+}
+
+Result<void> DownloadController::SetTaskPriority(const std::string& task_id, TaskPriority priority) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_tasks.find(task_id);
+    if (it == m_tasks.end() || m_deleted_tasks.count(task_id)) {
+        return Result<void>::Err("ERR_NOT_FOUND", "Task not found");
+    }
+    it->second.priority = priority;
+    auto ait = m_active.find(task_id);
+    if (ait != m_active.end() && ait->second) {
+        ait->second->task_priority.store(static_cast<int>(priority), std::memory_order_relaxed);
+    }
+    RebalanceActivePrioritiesLocked();
+    auto persist_res = m_store.UpsertTask(it->second);
+    m_cv.notify_all();
+    return persist_res;
+}
+
+TaskPriority DownloadController::GetTaskPriority(const std::string& task_id) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_tasks.find(task_id);
+    if (it != m_tasks.end()) return it->second.priority;
+    return TaskPriority::kNormal;
 }
 
 Result<void> DownloadController::AddAlternateUrl(const std::string& task_id, const std::string& alt_url) {
@@ -3768,6 +4016,7 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
                         should_persist = true;
                     }
                 }
+                ProcessQueueLocked();
             }
             if (should_persist) {
                 m_store.UpsertTask(to_save);
@@ -3780,6 +4029,7 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
                 notify_cb(TaskNotification{tx->tx_id, to_save.file_name, true, "Completed"});
             }
             tx->ctrl->finished.store(true);
+            m_cv.notify_all();
         });
     } else {
         tx->engine_finished = true;
@@ -3938,6 +4188,7 @@ Result<TaskModel> DownloadController::AcceptSpeculativeTransaction(
         }
         m_store.UpsertTask(accepted_task);
         if (need_fallback_start && start_immediately) {
+            ProcessQueueLocked();
             m_cv.notify_all();
         }
     }

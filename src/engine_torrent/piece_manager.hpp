@@ -222,29 +222,62 @@ public:
         return recovered;
     }
 
+    bool IsEndgame() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return isEndgameLocked();
+    }
+
+    size_t RemainingBlocks() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t remaining_blocks = 0;
+        for (size_t p : m_required_pieces) {
+            if (m_have_pieces[p]) continue;
+            auto it = m_active_pieces.find(static_cast<uint32_t>(p));
+            if (it != m_active_pieces.end()) {
+                remaining_blocks += (it->second.total_blocks - it->second.completed_blocks);
+            } else {
+                uint64_t p_sz = GetPieceSize(p);
+                remaining_blocks += static_cast<size_t>((p_sz + kBlockLength - 1) / kBlockLength);
+            }
+        }
+        return remaining_blocks;
+    }
+
+    std::optional<Error> LastStorageError() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_last_storage_error;
+    }
+
     // Rarest-First Piece Picker with Endgame Mode support
     std::vector<BlockRequest> GetNextRequestsForPeer(
         const std::vector<bool>& peer_have,
-        size_t max_requests = kDefaultMaxOutstandingRequests) {
+        size_t max_requests = kDefaultMaxOutstandingRequests,
+        const std::vector<BlockRequest>* already_in_flight = nullptr) {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::vector<BlockRequest> requests;
         if (m_completed_pieces >= m_required_pieces.size() || max_requests == 0) return requests;
 
-        // Check if we qualify for Endgame Mode:
-        // All remaining required pieces are active, or fewer than 20 blocks remain total
-        size_t remaining_pieces = m_required_pieces.size() - m_completed_pieces;
-        bool is_endgame = (remaining_pieces <= m_active_pieces.size()) || (remaining_pieces <= 2);
+        const bool is_endgame = isEndgameLocked();
+        auto is_already_in_flight_for_peer = [&](uint32_t piece_idx, uint32_t begin) -> bool {
+            if (!already_in_flight) return false;
+            for (const auto& br : *already_in_flight) {
+                if (br.piece_index == piece_idx && br.begin == begin) return true;
+            }
+            return false;
+        };
 
         // 1. First priority: complete existing in-flight active pieces
         for (auto& [piece_idx, inc] : m_active_pieces) {
             if (piece_idx < peer_have.size() && peer_have[piece_idx]) {
                 for (size_t b = 0; b < inc.total_blocks && requests.size() < max_requests; ++b) {
                     if (!inc.blocks_received[b]) {
+                        uint32_t begin = static_cast<uint32_t>(b * kBlockLength);
                         // In normal mode, request only unrequested blocks.
-                        // In Endgame mode, request unreceived blocks even if already requested from another peer.
-                        if (!inc.blocks_requested[b] || is_endgame) {
+                        // In Endgame mode, request unreceived blocks even if requested from other peers,
+                        // but avoid duplicating blocks already in flight on this same peer.
+                        if ((!inc.blocks_requested[b] || is_endgame) &&
+                            !is_already_in_flight_for_peer(piece_idx, begin)) {
                             inc.blocks_requested[b] = true;
-                            uint32_t begin = static_cast<uint32_t>(b * kBlockLength);
                             uint32_t len = static_cast<uint32_t>(std::min<uint64_t>(kBlockLength, inc.piece_size - begin));
                             requests.push_back(BlockRequest{piece_idx, begin, len});
                         }
@@ -390,6 +423,7 @@ public:
                     auto wr_res = m_storage->WriteBytes(torrent_offset, inc.buffer.data(), inc.buffer.size());
                     if (!wr_res.ok()) {
                         RADIUM_LOG_ERROR("PieceManager", "Failed to write piece to disk: " + wr_res.error->message);
+                        m_last_storage_error = wr_res.error;
                         return false;
                     }
                 }
@@ -430,6 +464,27 @@ public:
     }
 
 private:
+    bool isEndgameLocked() const {
+        if (m_completed_pieces >= m_required_pieces.size()) return false;
+        const size_t remaining_pieces = m_required_pieces.size() - m_completed_pieces;
+        if (remaining_pieces <= m_active_pieces.size() || remaining_pieces <= 2) {
+            return true;
+        }
+        size_t remaining_blocks = 0;
+        for (size_t p : m_required_pieces) {
+            if (m_have_pieces[p]) continue;
+            auto it = m_active_pieces.find(static_cast<uint32_t>(p));
+            if (it != m_active_pieces.end()) {
+                remaining_blocks += (it->second.total_blocks - it->second.completed_blocks);
+            } else {
+                uint64_t p_sz = GetPieceSize(p);
+                remaining_blocks += static_cast<size_t>((p_sz + kBlockLength - 1) / kBlockLength);
+            }
+            if (remaining_blocks > 32) return false;
+        }
+        return remaining_blocks > 0 && remaining_blocks <= 32;
+    }
+
     mutable std::mutex m_mutex;
     TorrentInfo m_info;
     std::shared_ptr<MultiFileStorage> m_storage;
@@ -443,6 +498,7 @@ private:
 
     std::vector<bool> m_have_pieces;
     std::map<uint32_t, IncompletePiece> m_active_pieces;
+    std::optional<Error> m_last_storage_error;
     bool m_sequential_mode{false};
     bool m_prioritize_head_tail{true};
 };

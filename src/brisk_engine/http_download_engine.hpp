@@ -55,6 +55,7 @@ struct EngineProgress {
     uint64_t speed_bps{0};
     bool range_supported{false};
     std::string resolved_filename;
+    std::string part_path;
     std::string etag;
     std::string last_modified;
     std::string status_detail;
@@ -125,7 +126,9 @@ public:
         ProgressCallback on_progress,
         std::shared_ptr<TokenBucketLimiter> global_limiter = nullptr,
         std::atomic<uint64_t>* global_speed_limit_bps = nullptr,
-        const SpeculativeHooks* speculative_hooks = nullptr);
+        const SpeculativeHooks* speculative_hooks = nullptr,
+        std::atomic<int>* task_priority = nullptr,
+        std::atomic<uint64_t>* priority_speed_limit_bps = nullptr);
 
 private:
     EngineConfig m_cfg;

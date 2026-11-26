@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     error_message           TEXT,
     created_at_ms           INTEGER NOT NULL,
     updated_at_ms           INTEGER NOT NULL,
-    completed_at_ms         INTEGER
+    completed_at_ms         INTEGER,
+    priority                TEXT NOT NULL DEFAULT 'NORMAL' -- 'LOW', 'NORMAL', 'HIGH'
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_state_queue ON tasks(state, queue_id, queue_order);

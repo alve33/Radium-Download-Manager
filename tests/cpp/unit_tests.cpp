@@ -4,6 +4,7 @@
 #include "common/settings_serializer.hpp"
 #include "ui/localization.hpp"
 #include "third_party/sqlite3/sqlite3.h"
+#include "../unit/lab_server.hpp"
 // SPDX-License-Identifier: Apache-2.0
 // Radium Download Manager — Automated C++20 Unit & Regression Test Suite
 // Verifies PathSanitizer, Dynamic Worker Discovery, Disk Space Guard, Logger Redaction,
@@ -8350,11 +8351,500 @@ bool TestSpeculativeBackgroundDownloadAndConfirmation() {
     return true;
 }
 
+bool TestTorrentEndgameStallRecoveryAndCompletion() {
+    using namespace radium;
+    using namespace radium::torrent;
+
+    std::error_code ec;
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path() / ("radium_bt_endgame_" + GenerateUuidV4().substr(0, 8));
+    std::filesystem::create_directories(temp_dir, ec);
+
+    // 1. Test PieceManager endgame activation and per-peer in-flight deduplication
+    TorrentInfo info;
+    info.name = "endgame_payload.bin";
+    info.piece_length = 32768; // 2 blocks per piece
+    info.total_length = 32768 * 3; // 3 pieces = 6 blocks total (<= 32 blocks -> endgame)
+    std::vector<uint8_t> full_data(static_cast<size_t>(info.total_length));
+    for (size_t i = 0; i < full_data.size(); ++i) {
+        full_data[i] = static_cast<uint8_t>((i * 31 + 7) & 0xFF);
+    }
+    for (size_t p = 0; p < 3; ++p) {
+        info.pieces.push_back(CryptoUtils::ComputeBufferSha1Raw(full_data.data() + p * 32768, 32768));
+    }
+    info.files.push_back(TorrentFileEntry{std::filesystem::path("endgame_payload.bin"), info.total_length, 0, true});
+
+    auto storage = std::make_shared<MultiFileStorage>();
+    ASSERT_TRUE(storage->Initialize(temp_dir, info).ok(), "Endgame storage initialized");
+    ASSERT_TRUE(storage->AllocateFiles().ok(), "Endgame storage allocated");
+
+    PieceManager mgr(info, storage);
+    // Regression: CheckExistingPieces() on freshly allocated 0-byte files hits EOF in ReadBytes();
+    // cached std::fstream must clear eofbit/failbit so subsequent ProcessBlock() writes succeed!
+    ASSERT_TRUE(mgr.CheckExistingPieces(false) == 0, "Initial 0-byte disk check recovers 0 pieces without poisoning stream");
+    ASSERT_TRUE(mgr.IsEndgame(), "Endgame activates when <= 32 blocks remain");
+
+    std::vector<bool> peer_have = {true, true, true};
+    std::vector<BlockRequest> peer1_in_flight = mgr.GetNextRequestsForPeer(peer_have, 4);
+    ASSERT_TRUE(!peer1_in_flight.empty(), "Peer 1 receives initial block requests");
+
+    // Calling GetNextRequestsForPeer again for Peer 1 with its own already_in_flight
+    // must NOT duplicate blocks already in flight on Peer 1.
+    auto peer1_dup = mgr.GetNextRequestsForPeer(peer_have, 4, &peer1_in_flight);
+    for (const auto& rq : peer1_dup) {
+        bool dup = std::any_of(peer1_in_flight.begin(), peer1_in_flight.end(), [&](const BlockRequest& ex) {
+            return ex.piece_index == rq.piece_index && ex.begin == rq.begin;
+        });
+        ASSERT_TRUE(!dup, "Endgame does not duplicate blocks already in flight on the same peer");
+    }
+
+    // Peer 2 (with empty in-flight) CAN request the same unreceived blocks in endgame!
+    std::vector<BlockRequest> peer2_in_flight;
+    auto peer2_reqs = mgr.GetNextRequestsForPeer(peer_have, 4, &peer2_in_flight);
+    ASSERT_TRUE(!peer2_reqs.empty(), "Peer 2 can race endgame blocks already requested from Peer 1");
+
+    // Simulate Peer 1 stalling and releasing its requests, then Peer 2 completing all pieces
+    mgr.CancelInFlightRequests(peer1_in_flight);
+    for (uint32_t p = 0; p < 3; ++p) {
+        bool verified = false, corrupt = false;
+        mgr.ProcessBlock(p, 0, full_data.data() + p * 32768, 16384, verified, corrupt);
+        ASSERT_TRUE(!verified && !corrupt, "First block of piece processed");
+        mgr.ProcessBlock(p, 16384, full_data.data() + p * 32768 + 16384, 16384, verified, corrupt);
+        ASSERT_TRUE(verified && !corrupt, "Second block completes and SHA-1 verifies piece");
+    }
+    ASSERT_TRUE(mgr.IsAllCompleted(), "All endgame pieces completed");
+
+    // 2. Verify FlushHandles + CloseHandles releases file locks cleanly for rename/move/remove
+    storage->FlushHandles();
+    storage->CloseHandles();
+    std::filesystem::path final_file = temp_dir / "endgame_payload.bin";
+    std::filesystem::path renamed_file = temp_dir / "endgame_payload_completed.bin";
+    std::filesystem::rename(final_file, renamed_file, ec);
+    ASSERT_TRUE(!ec && std::filesystem::exists(renamed_file), "File handle closed on completion so rename succeeds");
+
+    std::filesystem::remove_all(temp_dir, ec);
+    return true;
+}
+
+bool TestTaskPriorityPersistenceAndScheduling() {
+    using namespace radium;
+    std::error_code ec;
+    const auto temp_dir = std::filesystem::temp_directory_path() / "radium_test_priority_87";
+    std::filesystem::remove_all(temp_dir, ec);
+    std::filesystem::create_directories(temp_dir, ec);
+    const auto db_path = temp_dir / "state.db";
+
+    // 1. Verify TaskPriority helpers and SQLite persistence across restarts
+    {
+        SqliteStore store;
+        ASSERT_TRUE(store.Open(db_path).ok(), "Open SQLite store");
+
+        TaskModel t_def;
+        t_def.task_id = "prio_default";
+        t_def.url = "http://127.0.0.1/def.bin";
+        t_def.file_name = "def.bin";
+        t_def.save_dir = temp_dir.string();
+        t_def.created_at_ms = 1000;
+        t_def.updated_at_ms = 1000;
+        ASSERT_TRUE(t_def.priority == TaskPriority::kNormal, "Default TaskModel priority is Normal");
+        ASSERT_TRUE(store.UpsertTask(t_def).ok(), "Upsert default task");
+
+        TaskModel t_high = t_def;
+        t_high.task_id = "prio_high";
+        t_high.priority = TaskPriority::kHigh;
+        ASSERT_TRUE(store.UpsertTask(t_high).ok(), "Upsert high priority task");
+
+        TaskModel t_low = t_def;
+        t_low.task_id = "prio_low";
+        t_low.priority = TaskPriority::kLow;
+        ASSERT_TRUE(store.UpsertTask(t_low).ok(), "Upsert low priority task");
+        store.Close();
+    }
+
+    {
+        SqliteStore reopened;
+        ASSERT_TRUE(reopened.Open(db_path).ok(), "Reopen SQLite store");
+        auto g_def = reopened.GetTask("prio_default");
+        auto g_high = reopened.GetTask("prio_high");
+        auto g_low = reopened.GetTask("prio_low");
+        ASSERT_TRUE(g_def.ok() && g_def.value && *g_def.value && (*g_def.value)->priority == TaskPriority::kNormal, "Persisted Normal priority");
+        ASSERT_TRUE(g_high.ok() && g_high.value && *g_high.value && (*g_high.value)->priority == TaskPriority::kHigh, "Persisted High priority");
+        ASSERT_TRUE(g_low.ok() && g_low.value && *g_low.value && (*g_low.value)->priority == TaskPriority::kLow, "Persisted Low priority");
+        reopened.Close();
+    }
+
+    // 2. Verify DownloadController::SetTaskPriority, DesktopView details, and priority queue dispatch order
+    std::filesystem::remove(db_path, ec);
+    const std::string payload(65536, 'P');
+    radium::test::LabServer srv(payload);
+    ASSERT_TRUE(srv.Start(), "Start local LabServer");
+    const std::string base_url = "http://127.0.0.1:" + std::to_string(srv.Port());
+
+    ControllerConfig cfg;
+    cfg.state_db_path = db_path;
+    cfg.default_download_dir = temp_dir / "dl";
+    cfg.temp_root_dir = temp_dir / "tmp";
+    cfg.max_concurrent_tasks = 1;
+    cfg.allow_loopback = true;
+
+    {
+        DownloadController ctrl(cfg);
+        ASSERT_TRUE(ctrl.Initialize().ok(), "Initialize controller");
+        ui::DesktopView view(ctrl);
+
+        TaskModel t1;
+        t1.url = base_url + "/low.bin";
+        t1.file_name = "low.bin";
+        t1.save_dir = cfg.default_download_dir.string();
+        auto r1 = ctrl.AddTask(std::move(t1), false);
+        ASSERT_TRUE(r1.ok(), "Add low task paused");
+
+        TaskModel t2;
+        t2.url = base_url + "/high.bin";
+        t2.file_name = "high.bin";
+        t2.save_dir = cfg.default_download_dir.string();
+        auto r2 = ctrl.AddTask(std::move(t2), false);
+        ASSERT_TRUE(r2.ok(), "Add high task paused");
+
+        ASSERT_TRUE(ctrl.SetTaskPriority(r1.value->task_id, TaskPriority::kLow).ok(), "Set low priority");
+        ASSERT_TRUE(ctrl.SetTaskPriority(r2.value->task_id, TaskPriority::kHigh).ok(), "Set high priority");
+        ASSERT_TRUE(ctrl.GetTaskPriority(r1.value->task_id) == TaskPriority::kLow, "GetTaskPriority returns Low");
+        ASSERT_TRUE(ctrl.GetTaskPriority(r2.value->task_id) == TaskPriority::kHigh, "GetTaskPriority returns High");
+
+        view.SelectTask(r2.value->task_id);
+        auto details = view.BuildSelectedTaskDetails();
+        ASSERT_TRUE(details.priority_summary == "High", "DesktopView BuildSelectedTaskDetails reflects High priority");
+
+        // Start both: High must complete before or at least no later than Low despite being added second
+        ASSERT_TRUE(ctrl.StartTask(r1.value->task_id).ok(), "Start low task");
+        ASSERT_TRUE(ctrl.StartTask(r2.value->task_id).ok(), "Start high task");
+
+        auto w2 = ctrl.WaitForTaskCompletion(r2.value->task_id, 10000);
+        auto w1 = ctrl.WaitForTaskCompletion(r1.value->task_id, 10000);
+        ASSERT_TRUE(w2.ok() && w2.value->state == TaskState::kCompleted, "High priority task completed");
+        ASSERT_TRUE(w1.ok() && w1.value->state == TaskState::kCompleted, "Low priority task completed");
+        ctrl.Shutdown();
+    }
+
+    // Verify controller restart preserves SetTaskPriority
+    {
+        DownloadController ctrl2(cfg);
+        ASSERT_TRUE(ctrl2.Initialize().ok(), "Reinitialize controller");
+        auto tasks = ctrl2.ListTasks();
+        bool found_high = false, found_low = false;
+        for (const auto& t : tasks) {
+            if (t.file_name == "high.bin") found_high = (t.priority == TaskPriority::kHigh);
+            if (t.file_name == "low.bin") found_low = (t.priority == TaskPriority::kLow);
+        }
+        ASSERT_TRUE(found_high && found_low, "Priorities persisted across controller restart");
+        ctrl2.Shutdown();
+    }
+
+    std::filesystem::remove_all(temp_dir, ec);
+    return true;
+}
+
+bool TestDownloadResumePersistenceAcrossRestart() {
+    using namespace radium;
+#ifdef _WIN32
+    WSADATA wsa{};
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+
+    const std::string work_id = GenerateUuidV4().substr(0, 8);
+    const std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_resume_e2e_" + work_id);
+    std::error_code ec;
+    std::filesystem::create_directories(work_dir / "downloads", ec);
+    std::filesystem::create_directories(work_dir / "tmp", ec);
+
+    // Build deterministic 2 MiB and 1 MiB payloads
+    std::vector<uint8_t> payload_512k(2 * 1024 * 1024);
+    for (size_t i = 0; i < payload_512k.size(); ++i) {
+        payload_512k[i] = static_cast<uint8_t>((i * 131 + 17) & 0xFF);
+    }
+    std::vector<uint8_t> payload_256k(1024 * 1024);
+    for (size_t i = 0; i < payload_256k.size(); ++i) {
+        payload_256k[i] = static_cast<uint8_t>((i * 73 + 41) & 0xFF);
+    }
+    const std::string sha_512k = CryptoUtils::ComputeBufferSha256Hex(std::string_view(reinterpret_cast<const char*>(payload_512k.data()), payload_512k.size()));
+    const std::string sha_256k = CryptoUtils::ComputeBufferSha256Hex(std::string_view(reinterpret_cast<const char*>(payload_256k.data()), payload_256k.size()));
+
+    std::atomic<bool> stop_server{false};
+    std::atomic<int> resume_range_hits{0};
+
+    SOCKET listen_sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ASSERT_TRUE(listen_sock != INVALID_SOCKET, "Create loopback resume test socket");
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    ASSERT_TRUE(::bind(listen_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0, "Bind loopback socket");
+    ASSERT_TRUE(::listen(listen_sock, 16) == 0, "Listen on loopback socket");
+    sockaddr_in bound{};
+    int blen = sizeof(bound);
+    ::getsockname(listen_sock, reinterpret_cast<sockaddr*>(&bound), &blen);
+    const uint16_t port = ntohs(bound.sin_port);
+
+    std::thread server_thread;
+    struct ServerGuard {
+        std::atomic<bool>& stop;
+        SOCKET sock;
+        std::thread& th;
+        ~ServerGuard() {
+            stop.store(true);
+            if (sock != INVALID_SOCKET) ::closesocket(sock);
+            if (th.joinable()) th.join();
+        }
+    } server_guard{stop_server, listen_sock, server_thread};
+
+    server_thread = std::thread([&]() {
+        while (!stop_server.load()) {
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(listen_sock, &rfds);
+            timeval tv{0, 50000};
+            if (::select(0, &rfds, nullptr, nullptr, &tv) <= 0) continue;
+            SOCKET cs = ::accept(listen_sock, nullptr, nullptr);
+            if (cs == INVALID_SOCKET) continue;
+            std::thread([cs, &payload_512k, &payload_256k, &stop_server, &resume_range_hits]() {
+                char buf[4096];
+                int n = ::recv(cs, buf, sizeof(buf) - 1, 0);
+                if (n <= 0) { ::closesocket(cs); return; }
+                buf[n] = '\0';
+                std::string req(buf, static_cast<size_t>(n));
+                std::string path = "/seg.bin";
+                auto sp1 = req.find(' ');
+                if (sp1 != std::string::npos) {
+                    auto sp2 = req.find(' ', sp1 + 1);
+                    if (sp2 != std::string::npos) path = req.substr(sp1 + 1, sp2 - sp1 - 1);
+                }
+                bool has_range = false;
+                uint64_t r_start = 0, r_end = UINT64_MAX;
+                std::istringstream iss(req);
+                std::string line;
+                while (std::getline(iss, line)) {
+                    if (line.rfind("Range:", 0) == 0 || line.rfind("range:", 0) == 0) {
+                        auto eq = line.find("bytes=");
+                        if (eq != std::string::npos) {
+                            has_range = true;
+                            std::string spec = line.substr(eq + 6);
+                            auto dash = spec.find('-');
+                            if (dash != std::string::npos) {
+                                std::string s1 = spec.substr(0, dash);
+                                std::string s2 = spec.substr(dash + 1);
+                                while (!s2.empty() && (s2.back() == '\r' || s2.back() == '\n' || s2.back() == ' ')) s2.pop_back();
+                                if (!s1.empty()) r_start = std::stoull(s1);
+                                if (!s2.empty() && std::isdigit(static_cast<unsigned char>(s2[0]))) r_end = std::stoull(s2);
+                            }
+                        }
+                    }
+                }
+                if (has_range && r_start > 0) {
+                    resume_range_hits.fetch_add(1);
+                }
+                const auto& payload = (path == "/single.bin") ? payload_256k : payload_512k;
+                const uint64_t total = payload.size();
+                const uint64_t start = has_range ? std::min(r_start, total - 1) : 0;
+                const uint64_t end = (has_range && r_end < total) ? r_end : (total - 1);
+                const uint64_t len = end - start + 1;
+
+                std::ostringstream hdr;
+                if (has_range) {
+                    hdr << "HTTP/1.1 206 Partial Content\r\n"
+                        << "Content-Range: bytes " << start << "-" << end << "/" << total << "\r\n";
+                } else {
+                    hdr << "HTTP/1.1 200 OK\r\n";
+                }
+                hdr << "Accept-Ranges: bytes\r\n"
+                    << "Content-Length: " << len << "\r\n"
+                    << "ETag: \"resume-v1\"\r\n"
+                    << "Connection: close\r\n\r\n";
+                const std::string hstr = hdr.str();
+                ::send(cs, hstr.data(), static_cast<int>(hstr.size()), 0);
+
+                uint64_t sent = 0;
+                while (sent < len && !stop_server.load()) {
+                    size_t chunk = static_cast<size_t>(std::min<uint64_t>(16384, len - sent));
+                    int w = ::send(cs, reinterpret_cast<const char*>(payload.data() + start + sent), static_cast<int>(chunk), 0);
+                    if (w <= 0) break;
+                    sent += static_cast<uint64_t>(w);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                }
+                ::closesocket(cs);
+            }).detach();
+        }
+    });
+
+    ControllerConfig cfg;
+    cfg.state_db_path = work_dir / "state.db";
+    cfg.default_download_dir = work_dir / "downloads";
+    cfg.temp_root_dir = work_dir / "tmp";
+    cfg.allow_loopback = true;
+    cfg.min_split_bytes = 65536;
+    cfg.av_available_override = []() { return false; };
+
+    // 1. Segmented HTTP download: start -> ~50% -> Shutdown -> Reopen -> Resume -> Verify SHA-256
+    std::string seg_task_id;
+    {
+        DownloadController ctrl1(cfg);
+        ASSERT_TRUE(ctrl1.Initialize().ok(), "Init ctrl1 for segmented resume");
+        TaskModel req;
+        req.url = "http://127.0.0.1:" + std::to_string(port) + "/seg.bin";
+        req.file_name = "seg.bin";
+        req.save_dir = cfg.default_download_dir.string();
+        req.max_connections = 4;
+        req.conflict_policy = ConflictPolicy::kOverwrite;
+        auto added = ctrl1.AddTask(req, true, true);
+        ASSERT_TRUE(added.ok(), "Add segmented task");
+        seg_task_id = added.value->task_id;
+
+        bool reached_mid = false;
+        for (int i = 0; i < 300; ++i) {
+            auto t = ctrl1.GetTask(seg_task_id);
+            if (t && t->downloaded_bytes >= 256 * 1024 && t->state == TaskState::kDownloading) {
+                reached_mid = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        ASSERT_TRUE(reached_mid, "Segmented download reached partial progress before close");
+        ctrl1.Shutdown();
+    }
+
+    {
+        DownloadController ctrl2(cfg);
+        ASSERT_TRUE(ctrl2.Initialize().ok(), "Init ctrl2 after segmented shutdown");
+        auto t_reopen = ctrl2.GetTask(seg_task_id);
+        ASSERT_TRUE(t_reopen.has_value(), "Segmented task present after reopen");
+        ASSERT_TRUE(t_reopen->downloaded_bytes > 0 && t_reopen->downloaded_bytes < payload_512k.size(),
+                    "Segmented task preserved partial progress on reopen (not 0%)");
+        ASSERT_TRUE(!t_reopen->segments.empty(), "Segmented task preserved segment offsets");
+
+        const int hits_before = resume_range_hits.load();
+        ASSERT_TRUE(ctrl2.ResumeTask(seg_task_id).ok(), "Resume segmented task");
+        bool completed = false;
+        for (int i = 0; i < 150; ++i) {
+            auto t = ctrl2.GetTask(seg_task_id);
+            if (t && t->state == TaskState::kCompleted) { completed = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ASSERT_TRUE(completed, "Resumed segmented task completed");
+        ASSERT_TRUE(resume_range_hits.load() > hits_before, "Server received non-zero Range resume request");
+        auto sha = CryptoUtils::ComputeFileSha256Hex(cfg.default_download_dir / "seg.bin");
+        ASSERT_TRUE(sha.ok() && *sha.value == sha_512k, "Resumed segmented file SHA-256 matches exact payload");
+        ctrl2.Shutdown();
+    }
+
+    // 2. Single-stream HTTP download (max_connections = 1): start -> ~50% -> Shutdown -> Reopen -> Resume -> Verify SHA-256
+    std::string single_task_id;
+    {
+        DownloadController ctrl1(cfg);
+        ASSERT_TRUE(ctrl1.Initialize().ok(), "Init ctrl1 for single-stream resume");
+        TaskModel req;
+        req.url = "http://127.0.0.1:" + std::to_string(port) + "/single.bin";
+        req.file_name = "single.bin";
+        req.save_dir = cfg.default_download_dir.string();
+        req.max_connections = 1;
+        req.conflict_policy = ConflictPolicy::kOverwrite;
+        auto added = ctrl1.AddTask(req, true, true);
+        ASSERT_TRUE(added.ok(), "Add single-stream task");
+        single_task_id = added.value->task_id;
+
+        bool reached_mid = false;
+        for (int i = 0; i < 300; ++i) {
+            auto t = ctrl1.GetTask(single_task_id);
+            if (t && t->downloaded_bytes >= 128 * 1024 && t->state == TaskState::kDownloading) {
+                reached_mid = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        ASSERT_TRUE(reached_mid, "Single-stream download reached partial progress before close");
+        ctrl1.Shutdown();
+    }
+
+    {
+        DownloadController ctrl2(cfg);
+        ASSERT_TRUE(ctrl2.Initialize().ok(), "Init ctrl2 after single-stream shutdown");
+        auto t_reopen = ctrl2.GetTask(single_task_id);
+        ASSERT_TRUE(t_reopen.has_value(), "Single-stream task present after reopen");
+        ASSERT_TRUE(t_reopen->downloaded_bytes >= 80 * 1024 && t_reopen->downloaded_bytes < payload_256k.size(),
+                    "Single-stream task preserved partial progress on reopen (not 0%)");
+
+        const int hits_before = resume_range_hits.load();
+        ASSERT_TRUE(ctrl2.ResumeTask(single_task_id).ok(), "Resume single-stream task");
+        bool completed = false;
+        for (int i = 0; i < 150; ++i) {
+            auto t = ctrl2.GetTask(single_task_id);
+            if (t && t->state == TaskState::kCompleted) { completed = true; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ASSERT_TRUE(completed, "Resumed single-stream task completed");
+        ASSERT_TRUE(resume_range_hits.load() > hits_before, "Single-stream resume issued non-zero Range request");
+        auto sha = CryptoUtils::ComputeFileSha256Hex(cfg.default_download_dir / "single.bin");
+        ASSERT_TRUE(sha.ok() && *sha.value == sha_256k, "Resumed single-stream file SHA-256 matches exact payload");
+        ctrl2.Shutdown();
+    }
+
+    // 3. BitTorrent fastresume & crash recovery: verify RecoverInterruptedTasks does not clamp to metainfo.torrent
+    //    and PieceManager fastresume restores 50% pieces immediately across restart.
+    {
+        const std::filesystem::path bt_dir = work_dir / "bt_downloads";
+        std::filesystem::create_directories(bt_dir, ec);
+        const std::filesystem::path meta_path = work_dir / "tmp" / "metainfo.torrent";
+        {
+            std::ofstream mofs(meta_path, std::ios::binary);
+            mofs << "d8:announce19:http://127.0.0.1:1/a4:infod6:lengthi65536e4:name10:bt_res.bin12:piece lengthi32768e6:pieces40:"
+                 << std::string(40, 'A') << "ee";
+        }
+        std::vector<uint8_t> bt_payload(65536, 0x5A);
+        {
+            std::ofstream pofs(bt_dir / "bt_res.bin", std::ios::binary);
+            pofs.write(reinterpret_cast<const char*>(bt_payload.data()), 32768);
+        }
+        auto ftime = std::filesystem::last_write_time(bt_dir / "bt_res.bin", ec);
+        const int64_t mtime_sec = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
+
+        {
+            SqliteStore store;
+            ASSERT_TRUE(store.Open(cfg.state_db_path).ok(), "Open store for BT crash recovery test");
+            TaskModel bt_task;
+            bt_task.task_id = "bt-crash-resume-test";
+            bt_task.task_type = TaskType::kTorrent;
+            bt_task.state = TaskState::kDownloading;
+            bt_task.url = meta_path.string();
+            bt_task.file_name = "bt_res.bin";
+            bt_task.save_dir = bt_dir.string();
+            bt_task.part_path = meta_path.string();
+            bt_task.total_bytes = 65536;
+            bt_task.downloaded_bytes = 32768;
+            bt_task.completed_segments = 1;
+            bt_task.total_segments = 2;
+            bt_task.torrent_fastresume_bitfield = "8";
+            bt_task.torrent_fastresume_filesize = 32768;
+            bt_task.torrent_fastresume_mtime = mtime_sec;
+            ASSERT_TRUE(store.UpsertTask(bt_task).ok(), "Insert interrupted BT task");
+            store.Close();
+        }
+
+        DownloadController ctrl_bt(cfg);
+        ASSERT_TRUE(ctrl_bt.Initialize().ok(), "Reopen controller after BT interruption");
+        auto bt_loaded = ctrl_bt.GetTask("bt-crash-resume-test");
+        ASSERT_TRUE(bt_loaded.has_value(), "BT task loaded after restart");
+        ASSERT_TRUE(bt_loaded->state == TaskState::kPaused, "Interrupted BT task transitioned to PAUSED");
+        ASSERT_TRUE(bt_loaded->downloaded_bytes == 32768, "BT downloaded_bytes not clamped to metainfo.torrent size");
+        ASSERT_TRUE(bt_loaded->torrent_fastresume_bitfield == "8", "BT fastresume bitfield preserved");
+        ctrl_bt.Shutdown();
+    }
+
+    std::filesystem::remove_all(work_dir, ec);
+#endif
+    return true;
+}
+
 int main() {
     int passed = 0;
     
 
-    const int total = 85;
+    const int total = 88;
 
     auto run = [&](int idx, const char* name, bool (*fn)()) {
         std::cout << "[" << idx << "/" << total << "] Running " << name << "..." << std::endl;
@@ -8449,6 +8939,9 @@ int main() {
     run(83, "TestFailureNotificationPersistenceAndMigration", TestFailureNotificationPersistenceAndMigration);
     run(84, "TestExtensionSetupOnboardingSettingsAndAbout", TestExtensionSetupOnboardingSettingsAndAbout);
     run(85, "TestSpeculativeBackgroundDownloadAndConfirmation", TestSpeculativeBackgroundDownloadAndConfirmation);
+    run(86, "TestTorrentEndgameStallRecoveryAndCompletion", TestTorrentEndgameStallRecoveryAndCompletion);
+    run(87, "TestTaskPriorityPersistenceAndScheduling", TestTaskPriorityPersistenceAndScheduling);
+    run(88, "TestDownloadResumePersistenceAcrossRestart", TestDownloadResumePersistenceAcrossRestart);
 
     std::cout << "\nC++20 Unit & Regression Test Summary: " << passed << " / " << total << " suites PASSED.\n";
     return (passed == total) ? 0 : 1;

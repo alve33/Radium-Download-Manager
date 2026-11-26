@@ -33,7 +33,11 @@ public:
         bool range_supported,
         const std::vector<Segment>& segments,
         const std::string& error_code = "",
-        const std::string& error_message = "");
+        const std::string& error_message = "",
+        const std::string& part_path = "",
+        const std::string& file_name = "",
+        const std::string& etag = "",
+        const std::string& last_modified = "");
 
     Result<std::optional<TaskModel>> GetTask(const std::string& task_id);
     Result<std::vector<TaskModel>> ListTasks();

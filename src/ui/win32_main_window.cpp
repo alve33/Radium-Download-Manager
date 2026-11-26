@@ -2082,6 +2082,7 @@ TaskDetailsViewModel DesktopView::BuildSelectedTaskDetails() const {
     }
 
     vm.speed_limit_summary = (t.speed_limit_bps > 0) ? FormatSpeed(t.speed_limit_bps) : "Unlimited (Global Cap)";
+    vm.priority_summary = TaskPriorityDisplayName(t.priority);
     if (!t.alternate_urls.empty()) {
         vm.alternate_urls_summary = std::to_string(t.alternate_urls.size()) + " mirror URL(s) configured";
     } else {
@@ -4045,6 +4046,9 @@ constexpr int IDM_CTX_BATCH_URL           = 3034;
 constexpr int IDM_CTX_TRAY_PROGRESS       = 3035;
 constexpr int IDM_CTX_EXPORT_EF2          = 3036;
 constexpr int IDM_CTX_IMPORT_EF2          = 3037;
+constexpr int IDM_CTX_PRIORITY_HIGH       = 3038;
+constexpr int IDM_CTX_PRIORITY_NORMAL     = 3039;
+constexpr int IDM_CTX_PRIORITY_LOW        = 3040;
 constexpr int IDHOT_SHOW_RADIUM           = 9001;
 
 struct Win32WindowContext {
@@ -9829,8 +9833,13 @@ void PaintDetailsPanelWin32(HDC hdc, DesktopView& view, const RectI& rect, HFONT
             DrawTextW(hdc, wstream.c_str(), -1, &err_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         } else if (!details.speed_limit_summary.empty() && details.speed_limit_summary != "Unlimited") {
             SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
-            std::wstring wlimit = L"Speed Limit: " + Utf8ToW(details.speed_limit_summary);
+            std::wstring wlimit = L"Priority: " + Utf8ToW(details.priority_summary.empty() ? "Normal" : details.priority_summary)
+                                + L" \u2022 Speed Limit: " + Utf8ToW(details.speed_limit_summary);
             DrawTextW(hdc, wlimit.c_str(), -1, &err_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        } else if (!details.priority_summary.empty()) {
+            SetTextColor(hdc, pal.text_secondary.ToWin32ColorRef());
+            std::wstring wprio = L"Priority: " + Utf8ToW(details.priority_summary);
+            DrawTextW(hdc, wprio.c_str(), -1, &err_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     } else {
         // Compact single-column layout for narrower windows
@@ -10995,6 +11004,19 @@ void ExecuteContextCommandWin32(HWND hwnd, Win32WindowContext* ctx, int cmd, std
             else if (cmd == IDM_CTX_CANCEL) ctx->view->ActionCancelSelected();
             else if (cmd == IDM_CTX_OPEN_FILE) ctx->view->ActionOpenCompletedFile(false);
             else if (cmd == IDM_CTX_OPEN_FOLDER) ctx->view->ActionOpenDestinationFolder(false);
+            else if (cmd == IDM_CTX_PRIORITY_HIGH || cmd == IDM_CTX_PRIORITY_NORMAL || cmd == IDM_CTX_PRIORITY_LOW) {
+                if (has_sel) {
+                    TaskPriority new_prio = TaskPriority::kNormal;
+                    if (cmd == IDM_CTX_PRIORITY_HIGH) new_prio = TaskPriority::kHigh;
+                    else if (cmd == IDM_CTX_PRIORITY_LOW) new_prio = TaskPriority::kLow;
+                    auto r = ctx->controller->SetTaskPriority(sel, new_prio);
+                    if (r.ok()) {
+                        ctx->view->SetFeedbackMessage("Priority set to " + TaskPriorityDisplayName(new_prio));
+                    } else {
+                        MessageBoxW(hwnd, Utf8ToW(r.error->message).c_str(), L"Set Priority Failed", MB_OK | MB_ICONWARNING);
+                    }
+                }
+            }
             else if (cmd == IDM_CTX_RENAME) {
                 if (has_sel) {
                     std::wstring new_name;
@@ -12329,6 +12351,14 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
             AppendMenuW(hMenu, tb.can_open_file ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_OPEN_FILE, L"Open File (Enter)");
             AppendMenuW(hMenu, tb.can_open_folder ? MF_STRING : MF_STRING | MF_GRAYED, IDM_CTX_OPEN_FOLDER, L"Show in Folder");
 
+            // 1b. Priority Submenu
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            HMENU hPriorityMenu = CreatePopupMenu();
+            AppendMenuW(hPriorityMenu, MF_STRING | (sel_task->priority == TaskPriority::kHigh ? MF_CHECKED : 0), IDM_CTX_PRIORITY_HIGH, L"High");
+            AppendMenuW(hPriorityMenu, MF_STRING | (sel_task->priority == TaskPriority::kNormal ? MF_CHECKED : 0), IDM_CTX_PRIORITY_NORMAL, L"Normal");
+            AppendMenuW(hPriorityMenu, MF_STRING | (sel_task->priority == TaskPriority::kLow ? MF_CHECKED : 0), IDM_CTX_PRIORITY_LOW, L"Low");
+            AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hPriorityMenu), L"Set priority");
+
             // 2. State-Relevant Transfer Controls
             if (tb.can_start || tb.can_resume || tb.can_pause || tb.can_retry || tb.can_cancel) {
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
@@ -12970,6 +13000,15 @@ LRESULT CALLBACK RadiumWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                 InvalidateRect(hwnd, nullptr, TRUE);
             }
             break;
+        }
+        case WM_QUERYENDSESSION: {
+            return TRUE;
+        }
+        case WM_ENDSESSION: {
+            if (wParam == TRUE && ctx && ctx->controller) {
+                ctx->controller->Shutdown();
+            }
+            return 0;
         }
         case WM_CLOSE: {
             if (ctx->controller->GetSettings().close_to_tray && ctx->tray_added) {

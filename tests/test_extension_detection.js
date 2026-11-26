@@ -1149,6 +1149,55 @@ async function runTests() {
   assert.ok(fsHost.style.cssText.includes("top:180px") && fsHost.style.cssText.includes("left:320px"), "Automatic positioning preserves manually selected coordinates");
   assert.ok(contentScript.includes("radium-drag-handle") && contentScript.includes("pointermove"), "Overlay includes a mouse drag handle with pointer tracking");
 
+  // 1b. Verify Facebook homepage feed places overlay on the right side without covering post text,
+  // while Reels and other pages keep the original top-left position, including across SPA navigation.
+  const fbLocation = { hostname: "www.facebook.com", pathname: "/", href: "https://www.facebook.com/" };
+  const fbDoc = {
+    location: fbLocation,
+    defaultView: { innerWidth: 1920, innerHeight: 1080, location: fbLocation },
+    body: { appendChild: () => {} }
+  };
+  const fbVideo = {
+    ownerDocument: fbDoc,
+    getBoundingClientRect: () => ({ width: 680, height: 380, top: 260, bottom: 640, left: 500, right: 1180 })
+  };
+  const fbHost = { style: {}, offsetWidth: 240, offsetHeight: 40 };
+  positionOverlayHost(fbVideo, fbHost);
+  assert.ok(fbHost.style.cssText.includes("left:1188px") && fbHost.style.cssText.includes("top:260px"),
+    "Facebook homepage feed places overlay to the right of the video below post caption");
+
+  fbLocation.hostname = "facebook.com";
+  fbLocation.pathname = "/home.php";
+  fbLocation.href = "https://facebook.com/home.php";
+  positionOverlayHost(fbVideo, fbHost);
+  assert.ok(fbHost.style.cssText.includes("left:1188px") && fbHost.style.cssText.includes("top:260px"),
+    "Facebook /home.php places overlay to the right of the video");
+
+  // SPA transition: Homepage -> Reel -> Homepage
+  fbLocation.hostname = "www.facebook.com";
+  fbLocation.pathname = "/reel/1234567890";
+  fbLocation.href = "https://www.facebook.com/reel/1234567890";
+  positionOverlayHost(fbVideo, fbHost);
+  assert.ok(fbHost.style.cssText.includes("left:500px") && fbHost.style.cssText.includes("top:226px"),
+    "Facebook Reels keeps original top-left position after SPA navigation");
+
+  fbLocation.pathname = "/watch/";
+  fbLocation.href = "https://www.facebook.com/watch/?v=123";
+  positionOverlayHost(fbVideo, fbHost);
+  assert.ok(fbHost.style.cssText.includes("left:500px") && fbHost.style.cssText.includes("top:226px"),
+    "Facebook Watch keeps original top-left position");
+
+  fbLocation.pathname = "/";
+  fbLocation.href = "https://www.facebook.com/?sk=h_chr";
+  positionOverlayHost(fbVideo, fbHost);
+  assert.ok(fbHost.style.cssText.includes("left:1188px") && fbHost.style.cssText.includes("top:260px"),
+    "Navigating back to Facebook homepage restores right-side position");
+
+  fbHost.__radiumManualPosition = { left: 410, top: 300 };
+  positionOverlayHost(fbVideo, fbHost);
+  assert.ok(fbHost.style.cssText.includes("left:410px") && fbHost.style.cssText.includes("top:300px"),
+    "Manual drag coordinates are preserved on Facebook homepage");
+
   // 2. Verify scanAndAttachVideoOverlays creates a select element and download button
   let capturedDownloadMeta = null;
   const mockSelectVideo = {

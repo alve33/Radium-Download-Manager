@@ -143,10 +143,30 @@ public:
                     return Result<void>::Err("ERR_STORAGE_WRITE", "Cannot open for write: " + fm.full_path.string());
                 }
 
-                std::lock_guard<std::mutex> lock(m_stream_mutex);
-                fs_ptr->seekp(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
-                fs_ptr->write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(to_write));
-                if (!fs_ptr->good()) {
+                bool write_ok = false;
+                {
+                    std::lock_guard<std::mutex> lock(m_stream_mutex);
+                    fs_ptr->clear();
+                    fs_ptr->seekp(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
+                    fs_ptr->write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(to_write));
+                    write_ok = fs_ptr->good();
+                    if (!write_ok) {
+                        fs_ptr->close();
+                        m_stream_cache.erase(fm.full_path.string());
+                    }
+                }
+                if (!write_ok) {
+                    // Retry once with a freshly opened stream in case a prior EOF/handle state poisoned the cache
+                    auto retry_fs = GetOrCreateStream(fm.full_path);
+                    if (retry_fs && retry_fs->is_open()) {
+                        std::lock_guard<std::mutex> lock(m_stream_mutex);
+                        retry_fs->clear();
+                        retry_fs->seekp(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
+                        retry_fs->write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(to_write));
+                        write_ok = retry_fs->good();
+                    }
+                }
+                if (!write_ok) {
                     return Result<void>::Err("ERR_STORAGE_WRITE", "Write failed on: " + fm.full_path.string());
                 }
             }
@@ -195,9 +215,12 @@ public:
                 }
 
                 std::lock_guard<std::mutex> lock(m_stream_mutex);
+                fs_ptr->clear();
                 fs_ptr->seekg(static_cast<std::streamoff>(offset_in_file), std::ios::beg);
                 fs_ptr->read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(to_read));
-                if (!fs_ptr->good() && !fs_ptr->eof()) {
+                const bool had_io_error = fs_ptr->bad() || (fs_ptr->fail() && !fs_ptr->eof());
+                fs_ptr->clear(); // Always clear eofbit/failbit so cached stream remains writable!
+                if (had_io_error) {
                     return Result<void>::Err("ERR_STORAGE_READ", "Read failed on: " + fm.full_path.string());
                 }
             } else {

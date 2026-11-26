@@ -279,6 +279,7 @@ struct TaskDetailsViewModel {
     std::string error_code;
     std::string error_explanation;
     std::string speed_limit_summary;
+    std::string priority_summary;
     std::string alternate_urls_summary;
     std::string schedule_summary;
 };

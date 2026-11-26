@@ -153,7 +153,9 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     double max_seed_ratio,
     uint32_t max_seed_time_sec,
     TorrentMetadataSelectionCallback on_metadata,
-    bool sequential_download) {
+    bool sequential_download,
+    std::atomic<int>* task_priority,
+    std::atomic<uint64_t>* priority_speed_limit_bps) {
 
     EnsureWinSock();
 
@@ -320,6 +322,29 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                     torrent_info.announce_list);
                 if (parsed_res.ok()) {
                     torrent_info = parsed_res.value.value();
+                    if (!task.part_path.empty() && task.url.rfind("magnet:?", 0) == 0) {
+                        std::error_code ec_meta;
+                        auto cache_p = PathSanitizer::Utf8ToPath(task.part_path);
+                        std::filesystem::create_directories(cache_p.parent_path(), ec_meta);
+                        std::ofstream mofs(cache_p, std::ios::binary | std::ios::trunc);
+                        if (mofs) {
+                            mofs << "d";
+                            if (!torrent_info.announce.empty()) {
+                                mofs << "8:announce" << torrent_info.announce.size() << ":" << torrent_info.announce;
+                            }
+                            if (!torrent_info.announce_list.empty()) {
+                                mofs << "13:announce-listl";
+                                for (const auto& tr_url : torrent_info.announce_list) {
+                                    mofs << "l" << tr_url.size() << ":" << tr_url << "e";
+                                }
+                                mofs << "e";
+                            }
+                            mofs << "4:info";
+                            mofs.write(reinterpret_cast<const char*>(metadata_bytes.data()),
+                                       static_cast<std::streamsize>(metadata_bytes.size()));
+                            mofs << "e";
+                        }
+                    }
                     break;
                 }
             }
@@ -394,9 +419,14 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         TorrentProgress tp;
         tp.task_id = task.task_id;
         tp.state = task.state;
+        tp.downloaded_bytes = task.downloaded_bytes;
+        tp.received_bytes = task.downloaded_bytes;
         tp.total_bytes = total_bytes;
+        tp.completed_pieces = task.completed_segments;
         tp.total_pieces = static_cast<uint32_t>(torrent_info.num_pieces());
         tp.status_detail = task.status_detail;
+        tp.torrent_file_paths = task.torrent_file_paths;
+        tp.torrent_file_selection = task.torrent_file_selection;
         on_progress(tp);
     }
 
@@ -440,32 +470,36 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     if (sequential_download) piece_mgr->SetSequentialMode(true, true);
     task.total_segments = static_cast<uint32_t>(piece_mgr->RequiredPieces());
 
+    auto compute_disk_stats = [&]() -> std::pair<uint64_t, int64_t> {
+        std::error_code ec;
+        uint64_t current_disk_size = 0;
+        int64_t latest_mtime = 0;
+        for (const auto& f : torrent_info.files) {
+            auto p = std::filesystem::path(task.save_dir) / f.relative_path;
+            if (std::filesystem::exists(p, ec)) {
+                current_disk_size += std::filesystem::file_size(p, ec);
+                auto ftime = std::filesystem::last_write_time(p, ec);
+                auto s = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
+                latest_mtime = std::max(latest_mtime, static_cast<int64_t>(s));
+            }
+        }
+        if (torrent_info.files.empty()) {
+            auto p = std::filesystem::path(task.save_dir) / PathSanitizer::SanitizeFileName(torrent_info.name);
+            if (std::filesystem::exists(p, ec)) {
+                current_disk_size = std::filesystem::file_size(p, ec);
+                auto ftime = std::filesystem::last_write_time(p, ec);
+                latest_mtime = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
+            }
+        }
+        return {current_disk_size, latest_mtime};
+    };
+
     // Fastresume Bitfield & Bypass Full Disk SHA-1 Check on Resume:
     // Check if files are untouched using modification timestamp and file size
     if (needs_disk_check) {
         bool fastresume_applied = false;
         if (!task.torrent_fastresume_bitfield.empty()) {
-            // Check disk file modification time and size
-            std::error_code ec;
-            uint64_t current_disk_size = 0;
-            int64_t latest_mtime = 0;
-            for (const auto& f : torrent_info.files) {
-                auto p = std::filesystem::path(task.save_dir) / f.relative_path;
-                if (std::filesystem::exists(p, ec)) {
-                    current_disk_size += std::filesystem::file_size(p, ec);
-                    auto ftime = std::filesystem::last_write_time(p, ec);
-                    auto s = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
-                    latest_mtime = std::max(latest_mtime, static_cast<int64_t>(s));
-                }
-            }
-            if (torrent_info.files.empty()) {
-                auto p = std::filesystem::path(task.save_dir) / PathSanitizer::SanitizeFileName(torrent_info.name);
-                if (std::filesystem::exists(p, ec)) {
-                    current_disk_size = std::filesystem::file_size(p, ec);
-                    auto ftime = std::filesystem::last_write_time(p, ec);
-                    latest_mtime = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
-                }
-            }
+            auto [current_disk_size, latest_mtime] = compute_disk_stats();
 
             // If fastresume timestamp and file size match disk, bypass full hash checking!
             if (task.torrent_fastresume_filesize > 0 && current_disk_size == task.torrent_fastresume_filesize &&
@@ -521,9 +555,14 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         TorrentProgress tp;
         tp.task_id = task.task_id;
         tp.state = task.state;
+        tp.downloaded_bytes = task.downloaded_bytes;
+        tp.received_bytes = task.downloaded_bytes;
         tp.total_bytes = total_bytes;
+        tp.completed_pieces = task.completed_segments;
         tp.total_pieces = static_cast<uint32_t>(torrent_info.num_pieces());
         tp.status_detail = task.status_detail;
+        tp.torrent_file_paths = task.torrent_file_paths;
+        tp.torrent_file_selection = task.torrent_file_selection;
         on_progress(tp);
     }
 
@@ -606,14 +645,22 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
         TorrentProgress tp;
         tp.task_id = task.task_id;
         tp.state = task.state;
+        tp.downloaded_bytes = task.downloaded_bytes;
+        tp.received_bytes = piece_mgr->ReceivedBytes();
         tp.total_bytes = total_bytes;
         tp.completed_pieces = task.completed_segments;
         tp.total_pieces = task.total_segments;
         tp.status_detail = task.status_detail;
+        tp.fastresume_bitfield = task.torrent_fastresume_bitfield;
+        tp.fastresume_filesize = task.torrent_fastresume_filesize;
+        tp.fastresume_mtime = task.torrent_fastresume_mtime;
+        tp.torrent_file_paths = task.torrent_file_paths;
+        tp.torrent_file_selection = task.torrent_file_selection;
         on_progress(tp);
     }
 
     auto start_time = std::chrono::steady_clock::now();
+    auto last_fastresume_flush = start_time;
     TorrentRateMeter download_rate_meter;
     TorrentRateMeter upload_rate_meter;
     download_rate_meter.Reset(piece_mgr->ReceivedBytes(), start_time);
@@ -622,6 +669,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     std::atomic<uint64_t> live_download_bps{0};
     std::atomic<uint64_t> live_upload_bps{0};
     auto task_limiter = std::make_shared<brisk::TokenBucketLimiter>();
+    auto priority_limiter = std::make_shared<brisk::TokenBucketLimiter>();
 
     // Incoming peer support is intentionally kept in the same engine and
     // storage context as outbound peers. The listener advertises only pieces
@@ -795,6 +843,10 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     std::mutex swarm_mutex;
     std::atomic<uint32_t> active_connections{0};
     uint32_t connection_limit = std::max<uint32_t>(1, std::min<uint32_t>(max_peers, 64));
+    const int initial_prio = task_priority ? task_priority->load(std::memory_order_relaxed) : static_cast<int>(task.priority);
+    if (initial_prio == static_cast<int>(TaskPriority::kLow)) {
+        connection_limit = std::max<uint32_t>(4u, connection_limit / 2);
+    }
 
     auto peer_worker = [&](PeerEndpoint peer) {
         if (TorrentIpBlocklist::Global().IsBlocked(peer.ip)) {
@@ -904,164 +956,223 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                 std::memory_order_relaxed);
         }
 
+        auto last_any_msg_tp = std::chrono::steady_clock::now();
+        auto last_block_recv_tp = last_any_msg_tp;
+        uint32_t stall_count = 0;
+
         while (!cancel_requested.load() && !pause_requested.load() && !piece_mgr->IsAllCompleted()) {
-            uint8_t temp[16384];
-            int r = recv(sock.s, reinterpret_cast<char*>(temp), sizeof(temp), 0);
-            if (r <= 0) break;
+            fd_set read_set;
+            FD_ZERO(&read_set);
+            FD_SET(sock.s, &read_set);
+            timeval wait_tv{0, 250000}; // 250ms poll so endgame/cancel/stall checks stay responsive
+#ifdef _WIN32
+            int sel = select(0, &read_set, nullptr, nullptr, &wait_tv);
+#else
+            int sel = select(sock.s + 1, &read_set, nullptr, nullptr, &wait_tv);
+#endif
+            if (sel < 0) break;
 
-            if (speed_limit_bps.load(std::memory_order_relaxed) > 0) {
-                task_limiter->Consume(static_cast<size_t>(r), speed_limit_bps, cancel_requested);
-            }
-            if (global_limiter && global_speed_limit_bps && global_speed_limit_bps->load(std::memory_order_relaxed) > 0) {
-                global_limiter->Consume(static_cast<size_t>(r), *global_speed_limit_bps, cancel_requested);
-            }
+            const auto now = std::chrono::steady_clock::now();
+            if (sel > 0 && FD_ISSET(sock.s, &read_set)) {
+                uint8_t temp[16384];
+                int r = recv(sock.s, reinterpret_cast<char*>(temp), sizeof(temp), 0);
+                if (r <= 0) break;
+                last_any_msg_tp = now;
 
-            recv_buf.insert(recv_buf.end(), temp, temp + r);
-
-            while (recv_buf.size() >= 4) {
-                uint32_t payload_len = PeerWireProtocol::ReadUint32BE(recv_buf.data());
-                if (payload_len == 0) {
-                    recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4);
-                    continue;
+                if (speed_limit_bps.load(std::memory_order_relaxed) > 0) {
+                    task_limiter->Consume(static_cast<size_t>(r), speed_limit_bps, cancel_requested);
                 }
-                if (payload_len > 2 * 1024 * 1024) {
-                    break;
+                if (priority_speed_limit_bps && priority_speed_limit_bps->load(std::memory_order_relaxed) > 0) {
+                    priority_limiter->Consume(static_cast<size_t>(r), *priority_speed_limit_bps, cancel_requested);
                 }
-                if (recv_buf.size() < 4 + payload_len) break;
+                if (global_limiter && global_speed_limit_bps && global_speed_limit_bps->load(std::memory_order_relaxed) > 0) {
+                    global_limiter->Consume(static_cast<size_t>(r), *global_speed_limit_bps, cancel_requested);
+                }
 
-                auto msg_opt = PeerWireProtocol::ParseMessage(recv_buf.data(), 4 + payload_len);
-                recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4 + payload_len);
-                if (!msg_opt) continue;
-                const auto& msg = *msg_opt;
+                recv_buf.insert(recv_buf.end(), temp, temp + r);
 
-                if (msg.id == BtMessageId::kChoke) {
-                    peer_choked_us = true;
-                } else if (msg.id == BtMessageId::kUnchoke) {
-                    peer_choked_us = false;
-                } else if (msg.id == BtMessageId::kHaveAll) {
-                    std::fill(peer_have.begin(), peer_have.end(), true);
-                    piece_mgr->UpdatePeerAvailability(peer_have, true);
-                } else if (msg.id == BtMessageId::kHaveNone) {
-                    std::fill(peer_have.begin(), peer_have.end(), false);
-                } else if (msg.id == BtMessageId::kHave) {
-                    if (msg.piece_index < peer_have.size()) {
-                        peer_have[msg.piece_index] = true;
-                        piece_mgr->OnPeerHave(msg.piece_index);
-                    }
-                } else if (msg.id == BtMessageId::kBitfield) {
-                    for (size_t i = 0; i < peer_have.size(); ++i) {
-                        size_t byte_idx = i / 8;
-                        size_t bit_idx = 7 - (i % 8);
-                        if (byte_idx < msg.payload.size()) {
-                            peer_have[i] = (msg.payload[byte_idx] & (1 << bit_idx)) != 0;
-                        }
-                    }
-                    piece_mgr->UpdatePeerAvailability(peer_have, true);
-                } else if (msg.id == BtMessageId::kPiece) {
-                    auto fit = std::find_if(in_flight_requests.begin(), in_flight_requests.end(),
-                        [&](const BlockRequest& br) {
-                            return br.piece_index == msg.piece_index && br.begin == msg.block_begin;
-                        });
-                    if (fit != in_flight_requests.end()) {
-                        in_flight_requests.erase(fit);
-                    }
-
-                    bool verified = false;
-                    bool corrupt = false;
-                    session->downloaded_recent.fetch_add(msg.payload.size(), std::memory_order_relaxed);
-                    piece_mgr->ProcessBlock(msg.piece_index, msg.block_begin, msg.payload.data(), msg.payload.size(), verified, corrupt);
-                    if (!first_torrent_byte_logged.exchange(true)) {
-                        const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now() - torrent_engine_start_tp).count();
-                        RADIUM_LOG_INFO("TorrentStartupProfile",
-                            "task=" + task.task_id +
-                            " t_probe_ms=" + std::to_string(t_probe_ms) +
-                            " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms) +
-                            " t_connect_ms=" + std::to_string(t_connect_ms.load(std::memory_order_relaxed)) +
-                            " t_first_byte_ms=" + std::to_string(first_byte_ms));
-                    }
-
-                    if (verified) {
-                        auto have_msg = PeerWireProtocol::CreateHave(msg.piece_index);
-                        send(sock.s, reinterpret_cast<const char*>(have_msg.data()), static_cast<int>(have_msg.size()), 0);
-                        // Endgame kCancel (id=8): broadcast CANCEL for this piece's blocks to other active peers
-                        uint64_t p_sz = torrent_info.get_piece_size(msg.piece_index);
-                        std::lock_guard<std::mutex> slk(session_mutex);
-                        for (const auto& other : active_peer_sessions) {
-                            if (other == session) continue;
-                            std::lock_guard<std::mutex> clk(other->cancel_mu);
-                            for (uint32_t off = 0; off < p_sz; off += 16384U) {
-                                uint32_t blen = static_cast<uint32_t>(std::min<uint64_t>(16384U, p_sz - off));
-                                other->pending_cancels.push_back(
-                                    PeerWireProtocol::CreateCancel(msg.piece_index, off, blen));
-                            }
-                        }
-                    }
-
-                    // Report received blocks immediately so the task does not
-                    // sit at 0% while the first (possibly large) piece is being
-                    // assembled. Incomplete bytes remain transient; resume
-                    // recovery still trusts only hash-verified pieces.
-                    const uint64_t received_bytes = piece_mgr->ReceivedBytes();
-                    live_download_bps.store(download_rate_meter.Update(received_bytes), std::memory_order_relaxed);
-                    const uint32_t completed_now = static_cast<uint32_t>(piece_mgr->CompletedPieces());
-                    const std::string status_detail = "Downloading pieces: " + std::to_string(completed_now) +
-                                         " / " + std::to_string(task.total_segments) +
-                                         " verified; " + std::to_string(received_bytes / (1024 * 1024)) +
-                                         " MiB received (peers: " + std::to_string(active_connections.load()) + ")";
-
-                    bool emit_progress = false;
-                    if (on_progress) {
-                        std::lock_guard<std::mutex> emit_lock(progress_emit_mutex);
-                        const auto emit_now = std::chrono::steady_clock::now();
-                        if (emit_now - last_payload_progress_emit >= std::chrono::milliseconds(100)) {
-                            last_payload_progress_emit = emit_now;
-                            emit_progress = true;
-                        }
-                    }
-                    if (on_progress && emit_progress) {
-                        TorrentProgress tp;
-                        tp.task_id = task.task_id;
-                        tp.state = TaskState::kDownloading;
-                        tp.downloaded_bytes = piece_mgr->DownloadedBytes();
-                        tp.received_bytes = received_bytes;
-                        tp.total_bytes = total_bytes;
-                        tp.completed_pieces = completed_now;
-                        tp.total_pieces = task.total_segments;
-                        tp.speed_bps = live_download_bps.load(std::memory_order_relaxed);
-                        tp.uploaded_bytes = uploaded_payload_bytes.load(std::memory_order_relaxed);
-                        tp.upload_speed_bps = live_upload_bps.load(std::memory_order_relaxed);
-                        tp.status_detail = status_detail;
-                        on_progress(tp);
-                    }
-                } else if (msg.id == BtMessageId::kRequest) {
-                    // Upload piece block to peer only if peer is unchoked by us
-                    if (session->is_choked_by_us.load(std::memory_order_relaxed)) {
-                        // Peer is choked, ignore or reject upload request
+                while (recv_buf.size() >= 4) {
+                    uint32_t payload_len = PeerWireProtocol::ReadUint32BE(recv_buf.data());
+                    if (payload_len == 0) {
+                        recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4);
                         continue;
                     }
-                    if (msg.piece_index < torrent_info.num_pieces() &&
-                        msg.block_length > 0 && msg.block_length <= 32768) {
-                        auto cur_have = piece_mgr->HavePieces();
-                        if (msg.piece_index < cur_have.size() && cur_have[msg.piece_index]) {
-                            uint64_t piece_len = torrent_info.get_piece_size(msg.piece_index);
-                            if (static_cast<uint64_t>(msg.block_begin) + msg.block_length <= piece_len) {
-                                uint64_t torrent_offset = static_cast<uint64_t>(msg.piece_index) * torrent_info.piece_length + msg.block_begin;
-                                std::vector<uint8_t> block_buf(msg.block_length);
-                                auto r_res = storage->ReadBytes(torrent_offset, block_buf.data(), msg.block_length);
-                                if (r_res.ok()) {
-                                    auto p_msg = PeerWireProtocol::CreatePiece(msg.piece_index, msg.block_begin, block_buf.data(), msg.block_length);
-                                    if (SendAll(sock.s, p_msg.data(), p_msg.size())) {
-                                        std::lock_guard<std::mutex> metric_lock(upload_mutex);
-                                        const uint64_t uploaded = uploaded_payload_bytes.fetch_add(msg.block_length, std::memory_order_relaxed) + msg.block_length;
-                                        task.upload_speed_bps = upload_rate_meter.Update(uploaded);
-                                        live_upload_bps.store(task.upload_speed_bps, std::memory_order_relaxed);
+                    if (payload_len > 2 * 1024 * 1024) {
+                        break;
+                    }
+                    if (recv_buf.size() < 4 + payload_len) break;
+
+                    auto msg_opt = PeerWireProtocol::ParseMessage(recv_buf.data(), 4 + payload_len);
+                    recv_buf.erase(recv_buf.begin(), recv_buf.begin() + 4 + payload_len);
+                    if (!msg_opt) continue;
+                    const auto& msg = *msg_opt;
+
+                    if (msg.id == BtMessageId::kChoke) {
+                        peer_choked_us = true;
+                        if (!in_flight_requests.empty()) {
+                            piece_mgr->CancelInFlightRequests(in_flight_requests);
+                            in_flight_requests.clear();
+                        }
+                    } else if (msg.id == BtMessageId::kUnchoke) {
+                        peer_choked_us = false;
+                        last_block_recv_tp = now;
+                    } else if (msg.id == BtMessageId::kRejectRequest) {
+                        auto fit = std::find_if(in_flight_requests.begin(), in_flight_requests.end(),
+                            [&](const BlockRequest& br) {
+                                return br.piece_index == msg.piece_index && br.begin == msg.block_begin;
+                            });
+                        if (fit != in_flight_requests.end()) {
+                            BlockRequest rejected = *fit;
+                            in_flight_requests.erase(fit);
+                            piece_mgr->CancelInFlightRequests({rejected});
+                        }
+                    } else if (msg.id == BtMessageId::kHaveAll) {
+                        std::fill(peer_have.begin(), peer_have.end(), true);
+                        piece_mgr->UpdatePeerAvailability(peer_have, true);
+                    } else if (msg.id == BtMessageId::kHaveNone) {
+                        std::fill(peer_have.begin(), peer_have.end(), false);
+                    } else if (msg.id == BtMessageId::kHave) {
+                        if (msg.piece_index < peer_have.size()) {
+                            peer_have[msg.piece_index] = true;
+                            piece_mgr->OnPeerHave(msg.piece_index);
+                        }
+                    } else if (msg.id == BtMessageId::kBitfield) {
+                        for (size_t i = 0; i < peer_have.size(); ++i) {
+                            size_t byte_idx = i / 8;
+                            size_t bit_idx = 7 - (i % 8);
+                            if (byte_idx < msg.payload.size()) {
+                                peer_have[i] = (msg.payload[byte_idx] & (1 << bit_idx)) != 0;
+                            }
+                        }
+                        piece_mgr->UpdatePeerAvailability(peer_have, true);
+                    } else if (msg.id == BtMessageId::kPiece) {
+                        last_block_recv_tp = now;
+                        stall_count = 0;
+                        auto fit = std::find_if(in_flight_requests.begin(), in_flight_requests.end(),
+                            [&](const BlockRequest& br) {
+                                return br.piece_index == msg.piece_index && br.begin == msg.block_begin;
+                            });
+                        if (fit != in_flight_requests.end()) {
+                            in_flight_requests.erase(fit);
+                        }
+
+                        bool verified = false;
+                        bool corrupt = false;
+                        session->downloaded_recent.fetch_add(msg.payload.size(), std::memory_order_relaxed);
+                        piece_mgr->ProcessBlock(msg.piece_index, msg.block_begin, msg.payload.data(), msg.payload.size(), verified, corrupt);
+                        if (!first_torrent_byte_logged.exchange(true)) {
+                            const auto first_byte_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - torrent_engine_start_tp).count();
+                            RADIUM_LOG_INFO("TorrentStartupProfile",
+                                "task=" + task.task_id +
+                                " t_probe_ms=" + std::to_string(t_probe_ms) +
+                                " t_disk_alloc_ms=" + std::to_string(t_disk_alloc_ms) +
+                                " t_connect_ms=" + std::to_string(t_connect_ms.load(std::memory_order_relaxed)) +
+                                " t_first_byte_ms=" + std::to_string(first_byte_ms));
+                        }
+
+                        if (verified) {
+                            auto have_msg = PeerWireProtocol::CreateHave(msg.piece_index);
+                            send(sock.s, reinterpret_cast<const char*>(have_msg.data()), static_cast<int>(have_msg.size()), 0);
+                            // Endgame kCancel (id=8): broadcast CANCEL for this piece's blocks to other active peers
+                            uint64_t p_sz = torrent_info.get_piece_size(msg.piece_index);
+                            std::lock_guard<std::mutex> slk(session_mutex);
+                            for (const auto& other : active_peer_sessions) {
+                                if (other == session) continue;
+                                std::lock_guard<std::mutex> clk(other->cancel_mu);
+                                for (uint32_t off = 0; off < p_sz; off += 16384U) {
+                                    uint32_t blen = static_cast<uint32_t>(std::min<uint64_t>(16384U, p_sz - off));
+                                    other->pending_cancels.push_back(
+                                        PeerWireProtocol::CreateCancel(msg.piece_index, off, blen));
+                                }
+                            }
+                        }
+
+                        // Report received blocks immediately so the task does not
+                        // sit at 0% while the first (possibly large) piece is being
+                        // assembled. Incomplete bytes remain transient; resume
+                        // recovery still trusts only hash-verified pieces.
+                        const uint64_t received_bytes = piece_mgr->ReceivedBytes();
+                        live_download_bps.store(download_rate_meter.Update(received_bytes), std::memory_order_relaxed);
+                        const uint32_t completed_now = static_cast<uint32_t>(piece_mgr->CompletedPieces());
+                        const std::string status_detail = "Downloading pieces: " + std::to_string(completed_now) +
+                                             " / " + std::to_string(task.total_segments) +
+                                             " verified; " + std::to_string(received_bytes / (1024 * 1024)) +
+                                             " MiB received (peers: " + std::to_string(active_connections.load()) + ")";
+
+                        bool emit_progress = false;
+                        if (on_progress) {
+                            std::lock_guard<std::mutex> emit_lock(progress_emit_mutex);
+                            const auto emit_now = std::chrono::steady_clock::now();
+                            if (emit_now - last_payload_progress_emit >= std::chrono::milliseconds(100)) {
+                                last_payload_progress_emit = emit_now;
+                                emit_progress = true;
+                            }
+                        }
+                        if (on_progress && emit_progress) {
+                            TorrentProgress tp;
+                            tp.task_id = task.task_id;
+                            tp.state = TaskState::kDownloading;
+                            tp.downloaded_bytes = piece_mgr->DownloadedBytes();
+                            tp.received_bytes = received_bytes;
+                            tp.total_bytes = total_bytes;
+                            tp.completed_pieces = completed_now;
+                            tp.total_pieces = task.total_segments;
+                            tp.speed_bps = live_download_bps.load(std::memory_order_relaxed);
+                            tp.uploaded_bytes = uploaded_payload_bytes.load(std::memory_order_relaxed);
+                            tp.upload_speed_bps = live_upload_bps.load(std::memory_order_relaxed);
+                            tp.status_detail = status_detail;
+                            on_progress(tp);
+                        }
+                    } else if (msg.id == BtMessageId::kRequest) {
+                        // Upload piece block to peer only if peer is unchoked by us
+                        if (session->is_choked_by_us.load(std::memory_order_relaxed)) {
+                            // Peer is choked, ignore or reject upload request
+                            continue;
+                        }
+                        if (msg.piece_index < torrent_info.num_pieces() &&
+                            msg.block_length > 0 && msg.block_length <= 32768) {
+                            auto cur_have = piece_mgr->HavePieces();
+                            if (msg.piece_index < cur_have.size() && cur_have[msg.piece_index]) {
+                                uint64_t piece_len = torrent_info.get_piece_size(msg.piece_index);
+                                if (static_cast<uint64_t>(msg.block_begin) + msg.block_length <= piece_len) {
+                                    uint64_t torrent_offset = static_cast<uint64_t>(msg.piece_index) * torrent_info.piece_length + msg.block_begin;
+                                    std::vector<uint8_t> block_buf(msg.block_length);
+                                    auto r_res = storage->ReadBytes(torrent_offset, block_buf.data(), msg.block_length);
+                                    if (r_res.ok()) {
+                                        auto p_msg = PeerWireProtocol::CreatePiece(msg.piece_index, msg.block_begin, block_buf.data(), msg.block_length);
+                                        if (SendAll(sock.s, p_msg.data(), p_msg.size())) {
+                                            std::lock_guard<std::mutex> metric_lock(upload_mutex);
+                                            const uint64_t uploaded = uploaded_payload_bytes.fetch_add(msg.block_length, std::memory_order_relaxed) + msg.block_length;
+                                            task.upload_speed_bps = upload_rate_meter.Update(uploaded);
+                                            live_upload_bps.store(task.upload_speed_bps, std::memory_order_relaxed);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+            }
+
+            if (piece_mgr->IsAllCompleted()) break;
+
+            // Request-stall recovery: if peer has outstanding requests but delivered no block for 15s,
+            // release those blocks back to PieceManager so faster/endgame peers can fetch them.
+            if (!in_flight_requests.empty() &&
+                (now - last_block_recv_tp >= std::chrono::seconds(15))) {
+                piece_mgr->CancelInFlightRequests(in_flight_requests);
+                in_flight_requests.clear();
+                last_block_recv_tp = now;
+                stall_count++;
+                if (stall_count >= 2) {
+                    break; // Snubbed/stalled peer; free connection slot for another peer
+                }
+            }
+
+            // Dead-peer inactivity timeout (90s without any wire message)
+            if (now - last_any_msg_tp >= std::chrono::seconds(90)) {
+                break;
             }
 
             {
@@ -1071,15 +1182,25 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                     cancels.swap(session->pending_cancels);
                 }
                 for (const auto& cmsg : cancels) {
-                    SendAll(sock.s, cmsg.data(), cmsg.size());
+                    if (!SendAll(sock.s, cmsg.data(), cmsg.size())) break;
                 }
             }
 
             if (!peer_choked_us && !piece_mgr->IsAllCompleted()) {
-                size_t slots = (kDefaultMaxOutstandingRequests > in_flight_requests.size())
-                    ? (kDefaultMaxOutstandingRequests - in_flight_requests.size()) : 0;
+                const int cur_prio = task_priority ? task_priority->load(std::memory_order_relaxed) : static_cast<int>(task.priority);
+                size_t max_outstanding = kDefaultMaxOutstandingRequests;
+                if (cur_prio == static_cast<int>(TaskPriority::kHigh)) {
+                    max_outstanding = std::max<size_t>(kDefaultMaxOutstandingRequests, 16u);
+                } else if (cur_prio == static_cast<int>(TaskPriority::kLow)) {
+                    max_outstanding = std::min<size_t>(kDefaultMaxOutstandingRequests, 4u);
+                }
+                size_t slots = (max_outstanding > in_flight_requests.size())
+                    ? (max_outstanding - in_flight_requests.size()) : 0;
                 if (slots > 0) {
-                    auto reqs = piece_mgr->GetNextRequestsForPeer(peer_have, slots);
+                    auto reqs = piece_mgr->GetNextRequestsForPeer(peer_have, slots, &in_flight_requests);
+                    if (!reqs.empty() && in_flight_requests.empty()) {
+                        last_block_recv_tp = now;
+                    }
                     for (const auto& rq : reqs) {
                         auto req_bytes = PeerWireProtocol::CreateRequest(rq.piece_index, rq.begin, rq.length);
                         if (SendAll(sock.s, req_bytes.data(), req_bytes.size())) {
@@ -1109,9 +1230,15 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     std::condition_variable queue_cv;
     std::atomic<bool> dispatcher_stop{false};
     std::deque<PeerEndpoint> peer_queue(peer_swarm.begin(), peer_swarm.end());
+    std::vector<PeerEndpoint> known_peers(peer_swarm.begin(), peer_swarm.end());
+    std::map<std::string, std::chrono::steady_clock::time_point> peer_retry_after;
     std::set<std::string> active_endpoints;
     auto last_announce_time = std::chrono::steady_clock::now();
-    const auto discovery_deadline = last_announce_time + std::chrono::seconds(8);
+    auto last_progress_tp = last_announce_time;
+    auto last_endgame_diag_tp = last_announce_time;
+    bool endgame_logged = false;
+    size_t last_progress_pieces = piece_mgr->CompletedPieces();
+    uint64_t last_progress_bytes = piece_mgr->ReceivedBytes();
 
     auto swarm_worker = [&]() {
         while (!dispatcher_stop.load() && !cancel_requested.load() && !pause_requested.load() && !piece_mgr->IsAllCompleted()) {
@@ -1129,6 +1256,10 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                 if (active_endpoints.count(ep_key)) {
                     continue;
                 }
+                auto retry_it = peer_retry_after.find(ep_key);
+                if (retry_it != peer_retry_after.end() && std::chrono::steady_clock::now() < retry_it->second) {
+                    continue;
+                }
                 active_endpoints.insert(ep_key);
             }
 
@@ -1138,6 +1269,8 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                 std::lock_guard<std::mutex> lk(queue_mutex);
                 std::string ep_key = peer.ip + ":" + std::to_string(peer.port);
                 active_endpoints.erase(ep_key);
+                // Put peer on a 10s cooldown so it can be retried if endgame/stall recovery needs it
+                peer_retry_after[ep_key] = std::chrono::steady_clock::now() + std::chrono::seconds(10);
             }
 
             // Brief pause before pulling next peer to avoid socket thrashing
@@ -1186,6 +1319,19 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                 tp.completed_pieces = static_cast<uint32_t>(piece_mgr->CompletedPieces());
                 tp.total_pieces = task.total_segments;
                 tp.status_detail = "Downloading torrent payload";
+                if (stats_now - last_fastresume_flush >= std::chrono::seconds(2)) {
+                    last_fastresume_flush = stats_now;
+                    if (storage) storage->FlushHandles();
+                    task.torrent_fastresume_bitfield = piece_mgr->ExportBitfieldHex();
+                    auto [cur_sz, cur_mt] = compute_disk_stats();
+                    task.torrent_fastresume_filesize = cur_sz;
+                    task.torrent_fastresume_mtime = cur_mt;
+                    tp.fastresume_bitfield = task.torrent_fastresume_bitfield;
+                    tp.fastresume_filesize = cur_sz;
+                    tp.fastresume_mtime = cur_mt;
+                }
+                tp.torrent_file_paths = task.torrent_file_paths;
+                tp.torrent_file_selection = task.torrent_file_selection;
                 on_progress(tp);
             }
         }
@@ -1222,9 +1368,62 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
             }
         }
 
-        // Keep workers alive while discovery replenishes a dead initial peer batch.
+        // Track real payload progress so we never false-fail during active transfers or endgame
         auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_announce_time).count() >= 1) {
+        if (piece_mgr->LastStorageError().has_value()) {
+            RADIUM_LOG_ERROR("TorrentEngine", "Aborting torrent task=" + task.task_id +
+                " due to storage error: " + piece_mgr->LastStorageError()->message);
+            break;
+        }
+        const size_t cur_pieces = piece_mgr->CompletedPieces();
+        const uint64_t cur_received = piece_mgr->ReceivedBytes();
+        if (cur_pieces > last_progress_pieces || cur_received > last_progress_bytes) {
+            last_progress_pieces = cur_pieces;
+            last_progress_bytes = cur_received;
+            last_progress_tp = now;
+        }
+        if ((piece_mgr->IsEndgame() || (task.total_segments > 0 && cur_pieces * 100 >= task.total_segments * 98)) &&
+            (!endgame_logged || std::chrono::duration_cast<std::chrono::seconds>(now - last_endgame_diag_tp).count() >= 10)) {
+            endgame_logged = true;
+            last_endgame_diag_tp = now;
+            size_t q_sz = 0;
+            {
+                std::lock_guard<std::mutex> lk(queue_mutex);
+                q_sz = peer_queue.size();
+            }
+            const auto stall_s = std::chrono::duration_cast<std::chrono::seconds>(now - last_progress_tp).count();
+            RADIUM_LOG_INFO("TorrentEngine",
+                "98-100% diag task=" + task.task_id +
+                " pieces=" + std::to_string(cur_pieces) + "/" + std::to_string(task.total_segments) +
+                " received=" + std::to_string(cur_received) + "/" + std::to_string(total_bytes) +
+                " remaining_blocks=" + std::to_string(piece_mgr->RemainingBlocks()) +
+                " endgame=" + std::string(piece_mgr->IsEndgame() ? "1" : "0") +
+                " active_peers=" + std::to_string(active_connections.load()) +
+                " queued_peers=" + std::to_string(q_sz) +
+                " stall_elapsed_s=" + std::to_string(stall_s));
+        }
+
+        // Re-queue cooled-down known peers when queue is empty and we have spare connection slots
+        {
+            std::lock_guard<std::mutex> lk(queue_mutex);
+            if (peer_queue.empty() && active_connections.load() < connection_limit) {
+                bool added_retry = false;
+                for (const auto& kp : known_peers) {
+                    std::string ep_key = kp.ip + ":" + std::to_string(kp.port);
+                    if (active_endpoints.count(ep_key)) continue;
+                    auto retry_it = peer_retry_after.find(ep_key);
+                    if (retry_it == peer_retry_after.end() || now >= retry_it->second) {
+                        peer_queue.push_back(kp);
+                        added_retry = true;
+                    }
+                }
+                if (added_retry) queue_cv.notify_all();
+            }
+        }
+
+        // Keep workers alive while discovery replenishes a dead initial peer batch.
+        const int64_t announce_interval_sec = (active_connections.load() == 0) ? 5 : 15;
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - last_announce_time).count() >= announce_interval_sec) {
             last_announce_time = now;
             {
                 std::lock_guard<std::mutex> aslk(active_session->session_lock);
@@ -1276,7 +1475,14 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
                 std::lock_guard<std::mutex> lk(queue_mutex);
                 for (const auto& p : discovered) {
                     std::string ep_key = p.ip + ":" + std::to_string(p.port);
-                    if (!active_endpoints.count(ep_key) &&
+                    if (std::none_of(known_peers.begin(), known_peers.end(), [&](const PeerEndpoint& kp) {
+                            return kp.ip == p.ip && kp.port == p.port;
+                        })) {
+                        known_peers.push_back(p);
+                    }
+                    auto retry_it = peer_retry_after.find(ep_key);
+                    bool cooled_down = (retry_it == peer_retry_after.end() || now >= retry_it->second);
+                    if (cooled_down && !active_endpoints.count(ep_key) &&
                         std::none_of(peer_queue.begin(), peer_queue.end(), [&](const PeerEndpoint& queued) {
                             return queued.ip == p.ip && queued.port == p.port;
                         })) {
@@ -1287,12 +1493,14 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
             }
         }
 
-        // Only fail after the bounded discovery window; a temporarily empty queue
-        // is recoverable because the waiting workers remain available.
+        // Only fail after an extended no-progress stall window (90s) when no peers are active or queued
         bool any_active = (active_connections.load() > 0);
         {
             std::lock_guard<std::mutex> lk(queue_mutex);
-            if (now >= discovery_deadline && !any_active && peer_queue.empty()) {
+            if (!piece_mgr->IsAllCompleted() &&
+                now >= start_time + std::chrono::seconds(30) &&
+                now - last_progress_tp >= std::chrono::seconds(90) &&
+                !any_active && peer_queue.empty()) {
                 break;
             }
         }
@@ -1354,38 +1562,29 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
 
         // Update fastresume metadata in task so state persistence captures verified pieces & timestamps
         task.torrent_fastresume_bitfield = piece_mgr->ExportBitfieldHex();
-        uint64_t current_disk_size = 0;
-        int64_t latest_mtime = 0;
-        std::error_code ec;
-        for (const auto& f : torrent_info.files) {
-            auto p = std::filesystem::path(task.save_dir) / f.relative_path;
-            if (std::filesystem::exists(p, ec)) {
-                current_disk_size += std::filesystem::file_size(p, ec);
-                auto ftime = std::filesystem::last_write_time(p, ec);
-                auto s = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
-                latest_mtime = std::max(latest_mtime, static_cast<int64_t>(s));
-            }
-        }
-        if (torrent_info.files.empty()) {
-            auto p = std::filesystem::path(task.save_dir) / PathSanitizer::SanitizeFileName(torrent_info.name);
-            if (std::filesystem::exists(p, ec)) {
-                current_disk_size = std::filesystem::file_size(p, ec);
-                auto ftime = std::filesystem::last_write_time(p, ec);
-                latest_mtime = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
-            }
-        }
+        auto [current_disk_size, latest_mtime] = compute_disk_stats();
         task.torrent_fastresume_filesize = current_disk_size;
         task.torrent_fastresume_mtime = latest_mtime;
+        if (storage) storage->CloseHandles();
 
         return Result<void>::Err("ERR_PAUSED", "BitTorrent task paused by user");
     }
 
     if (piece_mgr->IsAllCompleted()) {
+        RADIUM_LOG_INFO("TorrentEngine", "All " + std::to_string(task.total_segments) +
+            " pieces verified for task=" + task.task_id + "; flushing and closing storage handles");
+        if (storage) {
+            storage->FlushHandles();
+            if (!seed_after_completion) {
+                storage->CloseHandles();
+            }
+        }
         task.uploaded_bytes = uploaded_payload_bytes.load(std::memory_order_relaxed);
         task.state = TaskState::kCompleted;
         task.downloaded_bytes = total_bytes;
         task.completed_segments = task.total_segments;
         task.speed_bps = 0;
+        task.upload_speed_bps = 0;
         task.status_detail = "Completed (BitTorrent)";
 
         // Announce completion to tracker
@@ -1396,6 +1595,7 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
             tp.task_id = task.task_id;
             tp.state = TaskState::kCompleted;
             tp.downloaded_bytes = total_bytes;
+            tp.received_bytes = total_bytes;
             tp.total_bytes = total_bytes;
             tp.completed_pieces = task.total_segments;
             tp.total_pieces = task.total_segments;
@@ -1468,6 +1668,10 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
             // Announce stopped to tracker
             task.uploaded_bytes = uploaded_payload_bytes.load(std::memory_order_relaxed);
             TrackerClient::AnnounceAny(announce_urls, torrent_info.info_hash_raw, client_peer_id, 6881, task.uploaded_bytes, total_bytes, 0, "stopped", 3000);
+            if (storage) {
+                storage->FlushHandles();
+                storage->CloseHandles();
+            }
         }
 
         UnregisterSession(task.task_id);
@@ -1476,6 +1680,19 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
 
     UnregisterSession(task.task_id);
     task.state = TaskState::kFailed;
+    if (auto storage_err = piece_mgr->LastStorageError(); storage_err.has_value()) {
+        task.uploaded_bytes = uploaded_payload_bytes.load(std::memory_order_relaxed);
+        task.downloaded_bytes = piece_mgr->DownloadedBytes();
+        task.completed_segments = static_cast<uint32_t>(piece_mgr->CompletedPieces());
+        task.speed_bps = 0;
+        task.upload_speed_bps = 0;
+        task.error_code = storage_err->code;
+        task.error_message = storage_err->message;
+        task.status_detail = "Failed: " + storage_err->message;
+        RADIUM_LOG_ERROR("TorrentEngine", "Task " + task.task_id + " failed with storage error [" +
+            task.error_code + "]: " + task.error_message);
+        return Result<void>::Err(task.error_code, task.error_message);
+    }
     if (!ever_discovered_peer) {
         task.uploaded_bytes = uploaded_payload_bytes.load(std::memory_order_relaxed);
         task.speed_bps = 0;
@@ -1493,6 +1710,11 @@ Result<void> TorrentEngine::ExecuteTorrentDownload(
     task.upload_speed_bps = 0;
     task.error_message = "Peer connection closed before torrent completion";
     task.status_detail = "Failed: Transfer interrupted";
+    RADIUM_LOG_ERROR("TorrentEngine", "Task " + task.task_id + " failed [" + task.error_code +
+        "] pieces=" + std::to_string(task.completed_segments) + "/" + std::to_string(task.total_segments) +
+        " received=" + std::to_string(piece_mgr->ReceivedBytes()) + "/" + std::to_string(total_bytes) +
+        " remaining_blocks=" + std::to_string(piece_mgr->RemainingBlocks()) +
+        " known_peers=" + std::to_string(known_peers.size()));
     return Result<void>::Err("ERR_TORRENT_TRANSFER_INTERRUPTED", task.error_message);
 }
 

@@ -357,7 +357,9 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     ProgressCallback on_progress,
     std::shared_ptr<TokenBucketLimiter> global_limiter,
     std::atomic<uint64_t>* global_speed_limit_bps,
-    const SpeculativeHooks* speculative_hooks) {
+    const SpeculativeHooks* speculative_hooks,
+    std::atomic<int>* task_priority,
+    std::atomic<uint64_t>* priority_speed_limit_bps) {
 
     const bool http_trace_enabled = HttpRangeTraceEnabled();
     const auto engine_start_tp = std::chrono::steady_clock::now();
@@ -373,11 +375,15 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     EmitHttpPhaseTrace("initialization_start", engine_start_tp);
 
     auto task_limiter = std::make_shared<TokenBucketLimiter>();
+    auto priority_limiter = std::make_shared<TokenBucketLimiter>();
 
     auto consume_both_limiters = [&](size_t bytes, std::atomic<bool>& cancel_flag) {
         if (bytes == 0) return;
         if (task_speed_limit_bps.load(std::memory_order_relaxed) > 0) {
             task_limiter->Consume(bytes, task_speed_limit_bps, cancel_flag);
+        }
+        if (priority_speed_limit_bps && priority_speed_limit_bps->load(std::memory_order_relaxed) > 0) {
+            priority_limiter->Consume(bytes, *priority_speed_limit_bps, cancel_flag);
         }
         if (global_limiter && global_speed_limit_bps && global_speed_limit_bps->load(std::memory_order_relaxed) > 0) {
             global_limiter->Consume(bytes, *global_speed_limit_bps, cancel_flag);
@@ -396,11 +402,44 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     // SegmentScheduler upon response headers, streaming first segment bytes
     // without destroying the TCP/TLS connection.
     // -------------------------------------------------------------------------
-    bool is_resume = !task.segments.empty() && task.downloaded_bytes > 0;
+    PlatformPartFile part_file;
+    std::filesystem::path part_path;
+    {
+        std::error_code ec_part;
+        if (speculative_hooks && speculative_hooks->use_explicit_part_path && !task.part_path.empty()) {
+            part_path = PathSanitizer::Utf8ToPath(task.part_path);
+        } else if (!task.part_path.empty() && std::filesystem::exists(task.part_path, ec_part) &&
+                   task.part_path.find(task.task_id) != std::string::npos) {
+            part_path = task.part_path;
+        } else {
+            part_path = std::filesystem::path(task.save_dir) / (task.file_name + "." + task.task_id + ".part");
+        }
+    }
+    std::error_code ec_exist;
+    const bool part_exists_on_disk = !part_path.empty() && std::filesystem::exists(part_path, ec_exist);
+    const uint64_t actual_part_bytes = part_exists_on_disk ? std::filesystem::file_size(part_path, ec_exist) : 0;
+
+    if (task.segments.empty() && task.downloaded_bytes > 0 && task.range_supported &&
+        task.total_bytes > 0 && part_exists_on_disk && actual_part_bytes > 0) {
+        uint64_t clamped = std::min(task.downloaded_bytes, actual_part_bytes);
+        task.segments = { Segment{0, 0, clamped, task.total_bytes - 1, false} };
+        task.downloaded_bytes = clamped;
+    }
+
+    bool is_resume = !task.segments.empty() && task.downloaded_bytes > 0 && part_exists_on_disk && actual_part_bytes > 0;
     uint64_t resume_start = 0;
     std::optional<uint64_t> resume_end = std::nullopt;
 
     if (is_resume) {
+        uint64_t recomputed_dl = 0;
+        for (auto& s : task.segments) {
+            if (s.current_offset > actual_part_bytes) {
+                s.current_offset = std::max(s.start_offset, actual_part_bytes);
+                s.completed = (s.current_offset > s.end_offset);
+            }
+            recomputed_dl += s.downloaded_bytes();
+        }
+        task.downloaded_bytes = recomputed_dl;
         for (const auto& s : task.segments) {
             if (!s.completed && s.current_offset <= s.end_offset) {
                 resume_start = s.current_offset;
@@ -413,11 +452,12 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
         } else if (!task.last_modified.empty()) {
             req_headers["If-Range"] = task.last_modified;
         }
+    } else if (!part_exists_on_disk || actual_part_bytes == 0) {
+        task.segments.clear();
+        task.downloaded_bytes = 0;
     }
 
     // Shared state between Worker 0 and secondary workers
-    PlatformPartFile part_file;
-    std::filesystem::path part_path;
     std::unique_ptr<SegmentScheduler> scheduler;
     std::shared_ptr<LiveSegment> seg0;
     bool is_segmented = false;
@@ -427,22 +467,27 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
     std::mutex err_mu;
     std::optional<Error> fatal_error;
     std::vector<std::thread> secondary_workers;
-    uint64_t single_stream_written = 0;
+    uint64_t single_stream_written = is_resume ? resume_start : 0;
     uint64_t single_stream_speed = 0;
     auto transfer_start_tp = std::chrono::steady_clock::now();
     auto last_progress_tp = transfer_start_tp;
-    uint64_t last_progress_bytes = 0;
+    uint64_t last_progress_bytes = single_stream_written;
     std::mutex progress_mu;
     auto seg_last_progress_tp = transfer_start_tp;
     uint64_t seg_last_progress_bytes = 0;
     bool seg_first_progress_emitted = false;
-    uint32_t max_conns = std::clamp(task.max_connections > 0 ? task.max_connections : 8u, 1u, 32u);
+    uint32_t base_max_conns = std::clamp(task.max_connections > 0 ? task.max_connections : 8u, 1u, 32u);
     std::string target_host;
     if (auto pu = HttpClient::ParseUrl(task.url); pu.ok()) {
         target_host = pu.value->host;
         if (auto learned_cap = HostLimits::Global().GetCap(target_host)) {
-            max_conns = std::min(max_conns, *learned_cap);
+            base_max_conns = std::min(base_max_conns, *learned_cap);
         }
+    }
+    uint32_t max_conns = base_max_conns;
+    const int initial_prio = task_priority ? task_priority->load(std::memory_order_relaxed) : static_cast<int>(task.priority);
+    if (initial_prio == static_cast<int>(TaskPriority::kLow)) {
+        max_conns = std::max<uint32_t>(1u, base_max_conns / 2);
     }
     std::atomic<uint64_t> link_peak_single_bps{0};
     constexpr uint64_t kHoldMaxBytes = 256ULL << 20; // 256 MiB disk backpressure cap
@@ -474,6 +519,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
         ep.speed_bps = physical_bps;
         ep.range_supported = true;
         ep.resolved_filename = task.file_name;
+        ep.part_path = task.part_path;
         ep.etag = task.etag;
         ep.last_modified = task.last_modified;
         ep.status_detail = "Downloading (" + std::to_string(std::max<size_t>(1, scheduler->ActiveWorkerCount())) + " active connections)";
@@ -1245,6 +1291,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         ep.speed_bps = 0;
                         ep.range_supported = true;
                         ep.resolved_filename = task.file_name;
+                        ep.part_path = task.part_path;
                         ep.etag = task.etag;
                         ep.last_modified = task.last_modified;
                         ep.status_detail = task.status_detail;
@@ -1265,14 +1312,18 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         EngineProgress ep;
                         ep.task_id = task.task_id;
                         ep.state = TaskState::kDownloading;
-                        ep.downloaded_bytes = 0;
+                        ep.downloaded_bytes = single_stream_written;
                         ep.total_bytes = task.total_bytes;
                         ep.speed_bps = 0;
-                        ep.range_supported = false;
+                        ep.range_supported = task.range_supported;
                         ep.resolved_filename = task.file_name;
+                        ep.part_path = task.part_path;
                         ep.etag = task.etag;
                         ep.last_modified = task.last_modified;
                         ep.status_detail = task.status_detail;
+                        if (task.total_bytes > 0 && task.range_supported) {
+                            ep.segments = { Segment{0, 0, single_stream_written, task.total_bytes - 1, false} };
+                        }
                         on_progress(ep);
                     }
                 }
@@ -1410,10 +1461,14 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                         ep.downloaded_bytes = single_stream_written;
                         ep.total_bytes = task.total_bytes;
                         ep.speed_bps = single_stream_speed;
-                        ep.range_supported = false;
+                        ep.range_supported = task.range_supported;
                         ep.resolved_filename = task.file_name;
+                        ep.part_path = task.part_path;
                         ep.etag = task.etag;
                         ep.last_modified = task.last_modified;
+                        if (task.total_bytes > 0 && task.range_supported) {
+                            ep.segments = { Segment{0, 0, single_stream_written, task.total_bytes - 1, false} };
+                        }
                         on_progress(ep);
                     }
                 }
@@ -1513,7 +1568,14 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
         while (!scheduler->AllCompleted() && !fatal_abort.load() && !pause_requested.load() && !cancel_requested.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             auto now = std::chrono::steady_clock::now();
-            uint32_t dynamic_max = std::min(max_conns, scheduler->GetMaxConnections());
+            const int live_prio = task_priority ? task_priority->load(std::memory_order_relaxed) : initial_prio;
+            const uint32_t prio_max_conns = (live_prio == static_cast<int>(TaskPriority::kLow))
+                ? std::max<uint32_t>(1u, base_max_conns / 2)
+                : base_max_conns;
+            if (live_prio != static_cast<int>(TaskPriority::kLow) && scheduler->GetMaxConnections() < prio_max_conns) {
+                scheduler->TryRampUpConnections(prio_max_conns);
+            }
+            uint32_t dynamic_max = std::min(prio_max_conns, scheduler->GetMaxConnections());
             if (running_workers.load() < dynamic_max && spawned < 256 &&
                 (scheduler->HasIncompleteUnassignedSegment() || (!disable_splitting.load() && scheduler->CanSplitAnySegment()))) {
                 secondary_workers.emplace_back(worker_fn, spawned++);
@@ -1541,6 +1603,7 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
                     ep.speed_bps = current_speed;
                     ep.range_supported = true;
                     ep.resolved_filename = task.file_name;
+                    ep.part_path = task.part_path;
                     ep.etag = task.etag;
                     ep.last_modified = task.last_modified;
                     ep.status_detail = task.status_detail;
@@ -1559,16 +1622,22 @@ Result<std::filesystem::path> HttpDownloadEngine::ExecuteDownload(
         task.segments = scheduler->GetSnapshots();
     } else {
         part_file.SyncAndClose();
-        if (pause_requested.load() && single_stream_written > 0 && task.total_bytes > 0 && task.range_supported) {
-            task.segments = { Segment{0, 0, single_stream_written, task.total_bytes - 1, false} };
-            task.downloaded_bytes = single_stream_written;
-        } else if (task.total_bytes > 0 && single_stream_written < task.total_bytes && !pause_requested.load() && !cancel_requested.load()) {
+        if (pause_requested.load()) {
+            if (single_stream_written > 0 && task.total_bytes > 0 && task.range_supported) {
+                task.segments = { Segment{0, 0, single_stream_written, task.total_bytes - 1, false} };
+                task.downloaded_bytes = single_stream_written;
+            } else if (!is_resume && single_stream_written > 0) {
+                task.downloaded_bytes = single_stream_written;
+            }
+            // If paused while connecting/probing on resume (single_stream_written == 0),
+            // preserve existing task.total_bytes, task.downloaded_bytes, and task.segments.
+        } else if (task.total_bytes > 0 && single_stream_written < task.total_bytes && !cancel_requested.load()) {
             task.state = TaskState::kFailed;
             task.error_code = "ERR_CONNECTION_CLOSED_PREMATURELY";
             task.error_message = "Single-stream transfer closed before receiving advertised content length";
             task.status_detail = task.error_message;
             return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
-        } else {
+        } else if (!cancel_requested.load()) {
             task.total_bytes = single_stream_written;
             task.downloaded_bytes = single_stream_written;
         }
