@@ -9275,7 +9275,7 @@ int main() {
     int passed = 0;
     
 
-    const int total = 88;
+    const int total = 89;
 
     auto run = [&](int idx, const char* name, bool (*fn)()) {
         std::cout << "[" << idx << "/" << total << "] Running " << name << "..." << std::endl;
