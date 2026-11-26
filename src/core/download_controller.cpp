@@ -3756,12 +3756,16 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
     AppSettings settings_copy;
     std::filesystem::path default_dl_dir;
     std::filesystem::path temp_root;
+    std::filesystem::path nm3u8dl_bin;
+    std::filesystem::path ffmpeg_bin;
     bool allow_loopback = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         settings_copy = m_settings;
         default_dl_dir = m_cfg.default_download_dir;
         temp_root = m_cfg.temp_root_dir;
+        nm3u8dl_bin = m_cfg.nm3u8dl_binary_path;
+        ffmpeg_bin = m_cfg.ffmpeg_binary_path;
         allow_loopback = m_cfg.allow_loopback;
 
         // Reap completed/cancelled speculative transactions whose threads are finished
@@ -3814,10 +3818,17 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
         draft_task.http_method != "POST" &&
         !PathSanitizer::IsWebpageWatchUrl(draft_task.url);
 
+    const bool is_stream_eligible =
+        draft_task.task_type == TaskType::kStreamHls ||
+        draft_task.task_type == TaskType::kStreamDash ||
+        (draft_task.task_type == TaskType::kHttpFile && PathSanitizer::IsWebpageWatchUrl(draft_task.url));
+
+    const bool is_speculative_eligible = is_http_get || is_stream_eligible;
+
     auto tx = std::make_shared<SpeculativeTransaction>();
     tx->tx_id = tx_id;
     tx->draft_task = draft_task;
-    tx->speculative_eligible = is_http_get;
+    tx->speculative_eligible = is_speculative_eligible;
     tx->state = SpeculativeTxState::kPreflighting;
     tx->metrics.t2_ipc_recv_us = t2;
     tx->metrics.t3_tx_created_us = QpcNowUs();
@@ -3826,6 +3837,9 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
         tx->staging_dir = temp_root / ("spec_" + tx_id);
         std::filesystem::path part_p = tx->staging_dir / (draft_task.file_name + "." + tx_id + ".part");
         tx->draft_task.part_path = PathSanitizer::PathToUtf8(part_p);
+    } else if (is_stream_eligible) {
+        tx->staging_dir = temp_root / tx_id;
+        tx->draft_task.part_path = PathSanitizer::PathToUtf8(tx->staging_dir);
     }
 
     {
@@ -3836,10 +3850,10 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
         m_pending_txs[tx_id] = tx;
     }
 
-    // Task A: Launch speculative background HTTP download immediately (if eligible)
-    if (is_http_get) {
+    // Task A: Launch speculative background HTTP or stream download immediately (if eligible)
+    if (is_speculative_eligible) {
         tx->metrics.t4_bg_queued_us = QpcNowUs();
-        tx->bg_thread = std::thread([this, tx, settings_copy, allow_loopback]() {
+        tx->bg_thread = std::thread([this, tx, settings_copy, temp_root, nm3u8dl_bin, ffmpeg_bin, allow_loopback, is_stream_eligible]() {
             TaskModel local_task;
             {
                 std::lock_guard<std::mutex> tx_lk(tx->mu);
@@ -3853,14 +3867,7 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
                 tx->metrics.t6_http_init_us = QpcNowUs();
             }
 
-            brisk::EngineConfig ecfg;
-            ecfg.stall_timeout_ms = settings_copy.stall_timeout_ms;
-            ecfg.min_split_bytes = settings_copy.min_split_bytes;
-            ecfg.allow_loopback_redirect = allow_loopback;
-
-            brisk::HttpDownloadEngine::SpeculativeHooks hooks;
-            hooks.use_explicit_part_path = true;
-            hooks.wait_for_acceptance = [tx](std::atomic<bool>& cancel_flag, TaskModel& task_to_commit) -> bool {
+            auto wait_fn = [tx](std::atomic<bool>& cancel_flag, TaskModel& task_to_commit) -> bool {
                 std::unique_lock<std::mutex> tx_lk(tx->mu);
                 tx->cv.wait(tx_lk, [&]() {
                     return tx->accepted || tx->cancelled || cancel_flag.load();
@@ -3873,7 +3880,7 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
                 task_to_commit.conflict_policy = tx->draft_task.conflict_policy;
                 return true;
             };
-            hooks.sync_before_commit = [tx](TaskModel& task_to_commit) {
+            auto sync_fn = [tx](TaskModel& task_to_commit) {
                 std::lock_guard<std::mutex> tx_lk(tx->mu);
                 if (tx->accepted) {
                     task_to_commit.save_dir = tx->draft_task.save_dir;
@@ -3882,30 +3889,33 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
                 }
             };
 
-            brisk::HttpDownloadEngine engine(ecfg);
             bool first_byte_seen = false;
-            auto res = engine.ExecuteDownload(
-                local_task,
-                tx->ctrl->pause_requested,
-                tx->ctrl->cancel_requested,
-                tx->ctrl->task_speed_limit_bps,
-                [this, tx, &first_byte_seen](const brisk::EngineProgress& ep) {
+            Result<std::filesystem::path> res = Result<std::filesystem::path>::Err("ERR_NOT_STARTED", "Download not started");
+
+            if (is_stream_eligible) {
+                stream::StreamAdapterConfig scfg{nm3u8dl_bin, ffmpeg_bin, temp_root, allow_loopback};
+                stream::Nm3u8dlReAdapter adapter(std::move(scfg));
+                stream::Nm3u8dlReAdapter::SpeculativeHooks shooks;
+                shooks.speculative_mode = true;
+                shooks.wait_for_acceptance = wait_fn;
+                shooks.sync_before_commit = sync_fn;
+
+                auto progress_cb = [this, tx, &first_byte_seen](const stream::StreamProgress& sp) {
                     bool is_accepted = false;
                     {
                         std::lock_guard<std::mutex> tx_lk(tx->mu);
-                        if (!first_byte_seen && ep.downloaded_bytes > 0) {
+                        if (!first_byte_seen && sp.downloaded_bytes > 0) {
                             first_byte_seen = true;
                             tx->metrics.t7_first_byte_us = QpcNowUs();
                         }
                         if (tx->cancelled || tx->state == SpeculativeTxState::kConflictRejected) return;
-                        tx->draft_task.downloaded_bytes = ep.downloaded_bytes;
-                        tx->draft_task.total_bytes = ep.total_bytes;
-                        tx->draft_task.speed_bps = ep.speed_bps;
-                        tx->draft_task.range_supported = ep.range_supported;
-                        if (!ep.resolved_filename.empty()) tx->draft_task.file_name = ep.resolved_filename;
-                        if (!ep.etag.empty()) tx->draft_task.etag = ep.etag;
-                        if (!ep.last_modified.empty()) tx->draft_task.last_modified = ep.last_modified;
-                        tx->draft_task.segments = ep.segments;
+                        tx->draft_task.downloaded_bytes = sp.downloaded_bytes;
+                        if (sp.total_bytes > 0) tx->draft_task.total_bytes = sp.total_bytes;
+                        tx->draft_task.speed_bps = sp.speed_bps;
+                        tx->draft_task.stream_percent = sp.percent;
+                        tx->draft_task.completed_segments = sp.completed_segments;
+                        tx->draft_task.total_segments = sp.total_segments;
+                        if (!sp.status_line.empty()) tx->draft_task.status_detail = sp.status_line;
                         is_accepted = tx->accepted;
                     }
                     if (is_accepted) {
@@ -3914,21 +3924,101 @@ Result<std::string> DownloadController::BeginSpeculativeOffer(
                         if (it != m_tasks.end() && !m_deleted_tasks.count(tx->tx_id)) {
                             auto& t = it->second;
                             if (t.state == TaskState::kCanceled || t.state == TaskState::kPaused) return;
-                            t.state = ep.state;
-                            t.downloaded_bytes = ep.downloaded_bytes;
-                            t.total_bytes = ep.total_bytes;
-                            t.speed_bps = ep.speed_bps;
-                            t.range_supported = ep.range_supported;
-                            if (!ep.status_detail.empty()) t.status_detail = ep.status_detail;
-                            if (!ep.etag.empty()) t.etag = ep.etag;
-                            if (!ep.last_modified.empty()) t.last_modified = ep.last_modified;
-                            t.segments = ep.segments;
+                            t.state = sp.phase;
+                            t.downloaded_bytes = sp.downloaded_bytes;
+                            if (sp.total_bytes > 0) t.total_bytes = sp.total_bytes;
+                            t.speed_bps = sp.speed_bps;
+                            t.stream_percent = sp.percent;
+                            t.completed_segments = sp.completed_segments;
+                            t.total_segments = sp.total_segments;
+                            if (!sp.status_line.empty()) t.status_detail = sp.status_line;
                         }
                     }
-                },
-                m_global_limiter,
-                &m_global_speed_limit_bps,
-                &hooks);
+                };
+
+                bool is_yt = (local_task.url.find("googlevideo.com") != std::string::npos ||
+                              local_task.url.find("youtube.com/watch") != std::string::npos ||
+                              local_task.url.find("youtu.be/") != std::string::npos ||
+                              local_task.url.find("youtube.com/shorts/") != std::string::npos ||
+                              PathSanitizer::IsWebpageWatchUrl(local_task.url) ||
+                              local_task.stream_options.cached_manifest_body.find("\"radiumType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
+                              local_task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
+                              local_task.stream_options.cached_manifest_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos);
+                if (is_yt) {
+                    res = adapter.ExecuteYouTubeExtraction(
+                        local_task,
+                        tx->ctrl->pause_requested,
+                        tx->ctrl->cancel_requested,
+                        tx->ctrl->task_speed_limit_bps.load(),
+                        progress_cb,
+                        &shooks);
+                } else {
+                    res = adapter.ExecuteStreamDownload(
+                        local_task,
+                        tx->ctrl->pause_requested,
+                        tx->ctrl->cancel_requested,
+                        tx->ctrl->task_speed_limit_bps.load(),
+                        progress_cb,
+                        &shooks);
+                }
+            } else {
+                brisk::EngineConfig ecfg;
+                ecfg.stall_timeout_ms = settings_copy.stall_timeout_ms;
+                ecfg.min_split_bytes = settings_copy.min_split_bytes;
+                ecfg.allow_loopback_redirect = allow_loopback;
+
+                brisk::HttpDownloadEngine::SpeculativeHooks hooks;
+                hooks.use_explicit_part_path = true;
+                hooks.wait_for_acceptance = wait_fn;
+                hooks.sync_before_commit = sync_fn;
+
+                brisk::HttpDownloadEngine engine(ecfg);
+                res = engine.ExecuteDownload(
+                    local_task,
+                    tx->ctrl->pause_requested,
+                    tx->ctrl->cancel_requested,
+                    tx->ctrl->task_speed_limit_bps,
+                    [this, tx, &first_byte_seen](const brisk::EngineProgress& ep) {
+                        bool is_accepted = false;
+                        {
+                            std::lock_guard<std::mutex> tx_lk(tx->mu);
+                            if (!first_byte_seen && ep.downloaded_bytes > 0) {
+                                first_byte_seen = true;
+                                tx->metrics.t7_first_byte_us = QpcNowUs();
+                            }
+                            if (tx->cancelled || tx->state == SpeculativeTxState::kConflictRejected) return;
+                            tx->draft_task.downloaded_bytes = ep.downloaded_bytes;
+                            tx->draft_task.total_bytes = ep.total_bytes;
+                            tx->draft_task.speed_bps = ep.speed_bps;
+                            tx->draft_task.range_supported = ep.range_supported;
+                            if (!ep.resolved_filename.empty()) tx->draft_task.file_name = ep.resolved_filename;
+                            if (!ep.etag.empty()) tx->draft_task.etag = ep.etag;
+                            if (!ep.last_modified.empty()) tx->draft_task.last_modified = ep.last_modified;
+                            tx->draft_task.segments = ep.segments;
+                            is_accepted = tx->accepted;
+                        }
+                        if (is_accepted) {
+                            std::lock_guard<std::mutex> lock(m_mutex);
+                            auto it = m_tasks.find(tx->tx_id);
+                            if (it != m_tasks.end() && !m_deleted_tasks.count(tx->tx_id)) {
+                                auto& t = it->second;
+                                if (t.state == TaskState::kCanceled || t.state == TaskState::kPaused) return;
+                                t.state = ep.state;
+                                t.downloaded_bytes = ep.downloaded_bytes;
+                                t.total_bytes = ep.total_bytes;
+                                t.speed_bps = ep.speed_bps;
+                                t.range_supported = ep.range_supported;
+                                if (!ep.status_detail.empty()) t.status_detail = ep.status_detail;
+                                if (!ep.etag.empty()) t.etag = ep.etag;
+                                if (!ep.last_modified.empty()) t.last_modified = ep.last_modified;
+                                t.segments = ep.segments;
+                            }
+                        }
+                    },
+                    m_global_limiter,
+                    &m_global_speed_limit_bps,
+                    &hooks);
+            }
 
             bool was_accepted = false;
             {

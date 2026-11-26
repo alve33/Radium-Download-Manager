@@ -1340,13 +1340,52 @@ Result<StreamProbeResult> Nm3u8dlReAdapter::ProbeManifest(
     return parsed;
 }
 
+static Result<std::filesystem::path> WaitAndCommitSpeculativeOutput(
+    const Nm3u8dlReAdapter::SpeculativeHooks* speculative_hooks,
+    std::atomic<bool>& cancel_requested,
+    TaskModel& task,
+    const std::filesystem::path& staged_output,
+    const std::filesystem::path& task_tmp_dir,
+    const std::string& fallback_stem,
+    const std::string& fmt) {
+    std::error_code ec;
+    const bool is_speculative = (speculative_hooks && speculative_hooks->speculative_mode);
+    if (is_speculative && speculative_hooks->wait_for_acceptance) {
+        if (!speculative_hooks->wait_for_acceptance(cancel_requested, task)) {
+            std::filesystem::remove_all(task_tmp_dir, ec);
+            task.state = TaskState::kCanceled;
+            task.status_detail = "Canceled";
+            return Result<std::filesystem::path>::Err("ERR_CANCELED", "Stream task canceled before confirmation");
+        }
+    }
+    if (is_speculative && speculative_hooks->sync_before_commit) {
+        speculative_hooks->sync_before_commit(task);
+    }
+
+    std::string commit_stem = fallback_stem;
+    if (!task.file_name.empty()) {
+        std::string sanitized = PathSanitizer::SanitizeFileName(task.file_name);
+        if (!sanitized.empty()) {
+            auto dot_pos = sanitized.find_last_of('.');
+            commit_stem = (dot_pos != std::string::npos && dot_pos > 0) ? sanitized.substr(0, dot_pos) : sanitized;
+        }
+    }
+    std::string desired_final_name = commit_stem + "." + fmt;
+    std::filesystem::create_directories(task.save_dir, ec);
+    auto commit_res = PathSanitizer::CommitPartFile(staged_output, task.save_dir, desired_final_name, task.conflict_policy);
+    std::filesystem::remove_all(task_tmp_dir, ec);
+    return commit_res;
+}
+
 Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
     TaskModel& task,
     std::atomic<bool>& pause_requested,
     std::atomic<bool>& cancel_requested,
     uint64_t speed_limit_bps,
-    ProgressCallback on_progress) {
+    ProgressCallback on_progress,
+    const SpeculativeHooks* speculative_hooks) {
 
+    const bool is_speculative = (speculative_hooks && speculative_hooks->speculative_mode);
     std::error_code ec;
     bool is_yt = (task.url.find("googlevideo.com") != std::string::npos ||
                   task.url.find("youtube.com/watch") != std::string::npos ||
@@ -1359,7 +1398,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
                   task.stream_options.cached_manifest_body.find("\"fluxType\":\"YOUTUBE_STREAM\"") != std::string::npos ||
                   task.stream_options.cached_manifest_body.find("\"fluxType\": \"YOUTUBE_STREAM\"") != std::string::npos);
     if (is_yt) {
-        return ExecuteYouTubeExtraction(task, pause_requested, cancel_requested, speed_limit_bps, on_progress);
+        return ExecuteYouTubeExtraction(task, pause_requested, cancel_requested, speed_limit_bps, on_progress, speculative_hooks);
     }
 
     if (!std::filesystem::exists(m_cfg.nm3u8dl_binary_path, ec)) {
@@ -1425,7 +1464,9 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
 
     std::filesystem::path task_tmp_dir = m_cfg.temp_root_dir / task.task_id;
     std::filesystem::create_directories(task_tmp_dir, ec);
-    std::filesystem::create_directories(task.save_dir, ec);
+    if (!is_speculative) {
+        std::filesystem::create_directories(task.save_dir, ec);
+    }
     task.part_path = task_tmp_dir.string();
 
     if (task.headers.find("User-Agent") == task.headers.end() && task.headers.find("user-agent") == task.headers.end()) {
@@ -1477,8 +1518,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
     }
     std::string desired_final_name = base_stem + "." + fmt;
 
-    // Preflight conflict check: fail fast BEFORE downloading any stream segments
-    if (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists) {
+    // Preflight conflict check: fail fast BEFORE downloading any stream segments (skipped in speculative mode where dest_thread checks concurrently)
+    if (!is_speculative && (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists)) {
         auto pre_dest = PathSanitizer::ResolveSafeOutputPath(task.save_dir, desired_final_name, task.conflict_policy);
         if (!pre_dest.ok() && pre_dest.error->code == "ERR_FILE_EXISTS") {
             task.state = TaskState::kFailed;
@@ -1490,6 +1531,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
         }
     }
 
+    const std::filesystem::path worker_save_dir = is_speculative ? task_tmp_dir : std::filesystem::path(task.save_dir);
     std::string temp_save_name = base_stem + ".radium_mux";
 
     std::vector<std::string> rsp_lines;
@@ -1498,7 +1540,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
         rsp_lines.push_back("--base-url \"" + EscapeRspArg(task.url) + "\"");
     }
     rsp_lines.push_back("--tmp-dir \"" + EscapeRspArg(task_tmp_dir.string()) + "\"");
-    rsp_lines.push_back("--save-dir \"" + EscapeRspArg(task.save_dir) + "\"");
+    rsp_lines.push_back("--save-dir \"" + EscapeRspArg(worker_save_dir.string()) + "\"");
     rsp_lines.push_back("--save-name \"" + EscapeRspArg(temp_save_name) + "\"");
     rsp_lines.push_back("--thread-count " + std::to_string(std::clamp(task.stream_options.thread_count, 1u, 64u)));
     rsp_lines.push_back("--download-retry-count 3");
@@ -1511,6 +1553,9 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
     rsp_lines.push_back("--auto-subtitle-fix true");
     rsp_lines.push_back("--sub-format SRT");
     rsp_lines.push_back("--no-log");
+    if (m_cfg.allow_loopback_manifests) {
+        rsp_lines.push_back("--allow-loopback");
+    }
     rsp_lines.push_back("--ffmpeg-binary-path \"" + EscapeRspArg(m_cfg.ffmpeg_binary_path.string()) + "\"");
 
     bool is_audio_only = (fmt == "m4a" || fmt == "mp3" || task.stream_options.video_filter == "none");
@@ -1775,6 +1820,12 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
         if (!stop_signaled && (pause_requested.load() || cancel_requested.load())) {
             stop_signaled = true;
             stop_signaled_at = std::chrono::steady_clock::now();
+            if (cancel_requested.load() && is_speculative) {
+                TerminateJobObject(hJob, 1);
+                WaitForSingleObject(pi.hProcess, 1000);
+                child_exited = true;
+                break;
+            }
             if (hStopEvent) {
                 SetEvent(hStopEvent);
             }
@@ -1931,11 +1982,11 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
         return Result<std::filesystem::path>::Err("ERR_PAUSED", "Stream task paused by user");
     }
 
-    std::filesystem::path muxed_output = std::filesystem::path(task.save_dir) / (temp_save_name + "." + fmt);
+    std::filesystem::path muxed_output = worker_save_dir / (temp_save_name + "." + fmt);
 
-    // Fallback: If exact path doesn't exist, search task.save_dir for matching *.radium_mux.* output produced by the worker
+    // Fallback: If exact path doesn't exist, search worker_save_dir for matching *.radium_mux.* output produced by the worker
     if (!std::filesystem::exists(muxed_output, ec)) {
-        for (const auto& entry : std::filesystem::directory_iterator(task.save_dir, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(worker_save_dir, ec)) {
             if (entry.is_regular_file()) {
                 std::string fname = entry.path().filename().string();
                 if (fname.find(".radium_mux.") != std::string::npos &&
@@ -2052,12 +2103,14 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteStreamDownload(
         on_progress(sp);
     }
 
-    desired_final_name = base_stem + "." + fmt;
-    auto commit_res = PathSanitizer::CommitPartFile(muxed_output, task.save_dir, desired_final_name, task.conflict_policy);
-    std::filesystem::remove_all(task_tmp_dir, ec);
+    auto commit_res = WaitAndCommitSpeculativeOutput(
+        speculative_hooks, cancel_requested, task, muxed_output, task_tmp_dir, base_stem, fmt);
 
     if (!commit_res.ok()) {
         std::filesystem::remove(muxed_output, ec);
+        if (commit_res.error->code == "ERR_CANCELED") {
+            return commit_res;
+        }
         task.state = TaskState::kFailed;
         task.error_code = commit_res.error->code;
         task.error_message = commit_res.error->message;
@@ -2098,8 +2151,10 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
     std::atomic<bool>& pause_requested,
     std::atomic<bool>& cancel_requested,
     uint64_t speed_limit_bps,
-    ProgressCallback on_progress) {
+    ProgressCallback on_progress,
+    const SpeculativeHooks* speculative_hooks) {
 
+    const bool is_speculative = (speculative_hooks && speculative_hooks->speculative_mode);
     std::error_code ec;
     if (!std::filesystem::exists(m_cfg.ffmpeg_binary_path, ec)) {
         task.state = TaskState::kFailed;
@@ -2120,7 +2175,9 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
 
     std::filesystem::path task_tmp_dir = m_cfg.temp_root_dir / task.task_id;
     std::filesystem::create_directories(task_tmp_dir, ec);
-    std::filesystem::create_directories(task.save_dir, ec);
+    if (!is_speculative) {
+        std::filesystem::create_directories(task.save_dir, ec);
+    }
     task.part_path = task_tmp_dir.string();
 
     std::string fmt = (task.stream_options.output_format == "mkv") ? "mkv" : "mp4";
@@ -2131,8 +2188,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
     }
     std::string desired_final_name = base_stem + "." + fmt;
 
-    // Preflight conflict check: fail fast BEFORE downloading any video/audio tracks
-    if (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists) {
+    // Preflight conflict check: fail fast BEFORE downloading any video/audio tracks (skipped in speculative mode where dest_thread checks concurrently)
+    if (!is_speculative && (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists)) {
         std::string cand_name_to_check = desired_final_name;
         if (!task.stream_options.video_filter.empty() && task.stream_options.video_filter != "best" && task.stream_options.video_filter != "Auto") {
             if (base_stem.find(task.stream_options.video_filter) == std::string::npos) {
@@ -2732,7 +2789,7 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             delegated.task_type = TaskType::kStreamDash;
         }
         delegated.stream_options.cached_manifest_body.clear();
-        auto res = ExecuteStreamDownload(delegated, pause_requested, cancel_requested, speed_limit_bps, on_progress);
+        auto res = ExecuteStreamDownload(delegated, pause_requested, cancel_requested, speed_limit_bps, on_progress, speculative_hooks);
         task.state = delegated.state;
         task.file_name = delegated.file_name;
         task.downloaded_bytes = delegated.downloaded_bytes;
@@ -2772,8 +2829,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             return Result<std::filesystem::path>::Err(task.error_code, task.error_message);
         }
 
-        // Pre-check conflict before downloading any track bytes
-        if (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists) {
+        // Pre-check conflict before downloading any track bytes (skipped in speculative mode)
+        if (!is_speculative && (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists)) {
             std::string cand_name = desired_final_name;
             auto pre_dest = PathSanitizer::ResolveSafeOutputPath(task.save_dir, cand_name, task.conflict_policy);
             if (!pre_dest.ok() && pre_dest.error->code == "ERR_FILE_EXISTS") {
@@ -3203,11 +3260,13 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
             on_progress(sp);
         }
 
-        desired_final_name = base_stem + "." + fmt;
-        auto commit_res = PathSanitizer::CommitPartFile(muxed_output, task.save_dir, desired_final_name, task.conflict_policy);
-        std::filesystem::remove_all(task_tmp_dir, ec);
+        auto commit_res = WaitAndCommitSpeculativeOutput(
+            speculative_hooks, cancel_requested, task, muxed_output, task_tmp_dir, base_stem, fmt);
 
         if (!commit_res.ok()) {
+            if (commit_res.error->code == "ERR_CANCELED") {
+                return commit_res;
+            }
             task.state = TaskState::kFailed;
             task.error_code = commit_res.error->code;
             task.error_message = commit_res.error->message;
@@ -3283,8 +3342,8 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
         }
     }
 
-    // Pre-check conflict before direct download
-    if (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists) {
+    // Pre-check conflict before direct download (skipped in speculative mode)
+    if (!is_speculative && (task.conflict_policy == ConflictPolicy::kPrompt || task.conflict_policy == ConflictPolicy::kFailIfExists)) {
         std::string cand_name = desired_final_name;
         auto pre_dest = PathSanitizer::ResolveSafeOutputPath(task.save_dir, cand_name, task.conflict_policy);
         if (!pre_dest.ok() && pre_dest.error->code == "ERR_FILE_EXISTS") {
@@ -3873,18 +3932,40 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                     CloseHandle(hWritePipe);
                     std::string line_buf;
                     char rbuf[4096];
-                    DWORD got = 0;
-                    while (ReadFile(hReadPipe, rbuf, sizeof(rbuf), &got, nullptr) && got > 0) {
+                    bool yt_exited = false;
+                    while (!yt_exited) {
                         if (cancel_requested.load() || pause_requested.load()) {
                             if (hYtJob) TerminateJobObject(hYtJob, 1);
                             else TerminateProcess(pi.hProcess, 1);
                             break;
                         }
-                        line_buf.append(rbuf, got);
-                        size_t nl;
-                        while ((nl = line_buf.find_first_of("\r\n")) != std::string::npos) {
-                            parse_yt_line(line_buf.substr(0, nl));
-                            line_buf.erase(0, nl + 1);
+                        DWORD avail = 0;
+                        if (PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+                            DWORD got = 0;
+                            if (ReadFile(hReadPipe, rbuf, std::min<DWORD>(avail, sizeof(rbuf)), &got, nullptr) && got > 0) {
+                                line_buf.append(rbuf, got);
+                                size_t nl;
+                                while ((nl = line_buf.find_first_of("\r\n")) != std::string::npos) {
+                                    parse_yt_line(line_buf.substr(0, nl));
+                                    line_buf.erase(0, nl + 1);
+                                }
+                            }
+                        } else if (WaitForSingleObject(pi.hProcess, 25) == WAIT_OBJECT_0) {
+                            yt_exited = true;
+                        }
+                    }
+                    DWORD rem_avail = 0;
+                    while (PeekNamedPipe(hReadPipe, nullptr, 0, nullptr, &rem_avail, nullptr) && rem_avail > 0) {
+                        DWORD got = 0;
+                        if (ReadFile(hReadPipe, rbuf, std::min<DWORD>(rem_avail, sizeof(rbuf)), &got, nullptr) && got > 0) {
+                            line_buf.append(rbuf, got);
+                            size_t nl;
+                            while ((nl = line_buf.find_first_of("\r\n")) != std::string::npos) {
+                                parse_yt_line(line_buf.substr(0, nl));
+                                line_buf.erase(0, nl + 1);
+                            }
+                        } else {
+                            break;
                         }
                     }
                     WaitForSingleObject(pi.hProcess, 300000);
@@ -4115,10 +4196,12 @@ Result<std::filesystem::path> Nm3u8dlReAdapter::ExecuteYouTubeExtraction(
                 on_progress(sp);
             }
 
-            desired_final_name = base_stem + "." + detected_fmt;
-            auto commit_res = PathSanitizer::CommitPartFile(actual_output, task.save_dir, desired_final_name, task.conflict_policy);
-            std::filesystem::remove_all(task_tmp_dir, ec);
+            auto commit_res = WaitAndCommitSpeculativeOutput(
+                speculative_hooks, cancel_requested, task, actual_output, task_tmp_dir, base_stem, detected_fmt);
             if (!commit_res.ok()) {
+                if (commit_res.error->code == "ERR_CANCELED") {
+                    return commit_res;
+                }
                 task.state = TaskState::kFailed;
                 task.error_code = commit_res.error->code;
                 task.error_message = commit_res.error->message;

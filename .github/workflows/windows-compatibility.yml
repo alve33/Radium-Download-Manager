@@ -47,7 +47,7 @@ jobs:
         shell: powershell
         run: |
           $versionFile = "VERSION"
-          $ver = "2.0.0"
+          $ver = "2.1.0"
           if (Test-Path $versionFile) {
             $ver = (Get-Content $versionFile -Raw).Trim()
           } elseif (Test-Path "CMakeLists.txt") {

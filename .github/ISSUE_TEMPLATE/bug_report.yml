@@ -11,8 +11,8 @@ body:
     id: version
     attributes:
       label: Radium Version
-      description: e.g. v2.0.0 (x64 Installer / Portable / ARM64 / MSIX)
-      placeholder: v2.0.0
+      description: e.g. v2.1.0 (x64 Installer / Portable / ARM64 / MSIX)
+      placeholder: v2.1.0
     validations:
       required: true
   - type: input

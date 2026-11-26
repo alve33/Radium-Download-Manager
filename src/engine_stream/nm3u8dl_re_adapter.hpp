@@ -121,13 +121,20 @@ public:
         const std::string& cached_manifest_body = "");
 
     // Phase 2: Executes HLS/DASH stream downloading and FFmpeg muxing via N_m3u8DL-RE worker process
+    struct SpeculativeHooks {
+        bool speculative_mode{false};
+        std::function<bool(std::atomic<bool>& cancel_flag, TaskModel& task_to_commit)> wait_for_acceptance;
+        std::function<void(TaskModel& task_to_commit)> sync_before_commit;
+    };
+
     using ProgressCallback = std::function<void(const StreamProgress&)>;
     Result<std::filesystem::path> ExecuteStreamDownload(
         TaskModel& task,
         std::atomic<bool>& pause_requested,
         std::atomic<bool>& cancel_requested,
         uint64_t speed_limit_bps,
-        ProgressCallback on_progress);
+        ProgressCallback on_progress,
+        const SpeculativeHooks* speculative_hooks = nullptr);
 
     // Phase 3: Executes YouTube / site-specific extraction, adaptive video+audio track download, and FFmpeg muxing
     // without passing JSON descriptors as .m3u8 manifests to N_m3u8DL-RE (Defect B fix).
@@ -136,7 +143,8 @@ public:
         std::atomic<bool>& pause_requested,
         std::atomic<bool>& cancel_requested,
         uint64_t speed_limit_bps,
-        ProgressCallback on_progress);
+        ProgressCallback on_progress,
+        const SpeculativeHooks* speculative_hooks = nullptr);
 
 private:
     StreamAdapterConfig m_cfg;

@@ -52,6 +52,7 @@
 - **[WINDOWS_BUILD_AND_PACKAGING.md](WINDOWS_BUILD_AND_PACKAGING.md)** — MSVC/CMake compilation pipeline, binary size targets, and installer packaging.
 - **[WINDOWS_COMPATIBILITY_AND_CLOUD_TESTING.md](WINDOWS_COMPATIBILITY_AND_CLOUD_TESTING.md)** — Windows 10/11 compatibility matrix and CI verification.
 - **[RELEASE_AND_UPDATE_PROCESS.md](RELEASE_AND_UPDATE_PROCESS.md)** — Release workflow, checksum generation, and update channel policies.
+- **[RELEASE_NOTES_2.1.0.md](RELEASE_NOTES_2.1.0.md)** — Official release notes and upgrade guide for Radium Download Manager 2.1.0.
 - **[RELEASE_NOTES_2.0.0.md](RELEASE_NOTES_2.0.0.md)** — Official release notes and upgrade guide for Radium Download Manager 2.0.0.
 - **[PERFORMANCE_AND_SIZE_BUDGET.md](PERFORMANCE_AND_SIZE_BUDGET.md)** — Resource budgets and binary footprint benchmarks.
 - **[ROADMAP.md](ROADMAP.md)** — Milestone definitions and future platform goals.

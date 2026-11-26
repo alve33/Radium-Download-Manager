@@ -4,6 +4,24 @@ All notable changes to **Radium Download Manager** will be documented in this fi
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-11-26
+
+### New Features
+- **Per-Download Priority Scheduling (`src/core/download_controller.cpp`, `src/ui/win32_main_window.cpp`, `src/storage/sqlite_store.cpp`):** Added `High`, `Normal`, and `Low` download priorities via a right-click context submenu, with priority-aware queue ordering, live bandwidth and connection weighting across the HTTP and BitTorrent engines, and SQLite persistence (`priority` column).
+- **Speculative Background Video & Stream Downloading (`src/core/download_controller.cpp`, `src/engine_stream/nm3u8dl_re_adapter.cpp`):** Extended speculative background downloading to direct MP4, HLS (`.m3u8`), DASH (`.mpd`), and YouTube dual-track adaptive streams so media transfers begin immediately upon `download.offer` / `stream.add` while awaiting user confirmation.
+
+### Improvements
+- **Dynamic Quality Switching in New Download Dialog (`src/ui/win32_main_window.cpp`):** Changing the selected video quality, `itag`, or format in the New Download dialog cancels the in-flight speculative stream transaction and immediately starts a new background transfer for the chosen quality.
+- **BitTorrent Engine (`src/engine_torrent/`):** Updated `TorrentEngine`, `PieceManager`, and `MultiFileStorage` for priority-aware scheduling and improved piece and multi-file storage handling.
+
+### Browser Extension
+- **YouTube Player Bounds Detection (`extension/js/content-script.js`):** Added `getPlayerTargetRect(video)` to resolve `#movie_player`, `.html5-video-player`, and `ytd-player` container bounds for accurate floating download overlay placement and detection, with expanded regression coverage in `tests/test_extension_detection.js`.
+
+### Bug Fixes
+- **Non-Blocking YouTube Worker Pipe Polling (`src/engine_stream/nm3u8dl_re_adapter.cpp`):** Replaced blocking `ReadFile` reads with `PeekNamedPipe` polling in `ExecuteYouTubeExtraction` so cancel and pause requests terminate the worker promptly even when output pauses.
+- **IPC Speculative Offer Dispatch (`src/ipc/ipc_server.cpp`):** Routed incoming `download.offer` requests through `BeginSpeculativeOffer` when a speculative callback is registered, falling back cleanly to standard offer queuing if speculative setup fails.
+- **Speculative Stream Cancellation & Conflict Handling:** Added `WaitAndCommitSpeculativeOutput` so cancelled speculative stream tasks clean up temporary staging directories and destination file conflicts are detected without leaving partial artifacts.
+
 ## [2.0.0] - 2026-11-25
 
 ### Major New Features

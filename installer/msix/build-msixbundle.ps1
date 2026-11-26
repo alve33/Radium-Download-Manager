@@ -30,7 +30,7 @@ if (-not $Version) {
         $Version = $env:RADIUM_VERSION
     } else {
         $versionFilePath = Join-Path $RepoRoot "VERSION"
-        $Version = if (Test-Path $versionFilePath) { (Get-Content $versionFilePath -Raw).Trim() } else { "2.0.0" }
+        $Version = if (Test-Path $versionFilePath) { (Get-Content $versionFilePath -Raw).Trim() } else { "2.1.0" }
     }
 }
 if ($Version -match '^v?(\d+)\.(\d+)\.(\d+)\.(\d+)$') {

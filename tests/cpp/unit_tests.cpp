@@ -8351,6 +8351,437 @@ bool TestSpeculativeBackgroundDownloadAndConfirmation() {
     return true;
 }
 
+bool TestVideoSpeculativeBackgroundDownloadAndConfirmation() {
+    using namespace radium;
+
+    // Load real media fixtures (source.mp4, seg_000.ts, seg_001.ts) so FFmpeg & ffprobe validate real media!
+    auto read_fixture = [](const std::filesystem::path& p) -> std::vector<uint8_t> {
+        std::ifstream ifs(p, std::ios::binary);
+        if (!ifs) return {};
+        return std::vector<uint8_t>(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+    };
+    const std::filesystem::path fixture_dir = std::filesystem::current_path() / "tests" / "fixtures" / "media";
+    const auto mp4_bytes = read_fixture(fixture_dir / "source.mp4");
+    const auto ts0_bytes = read_fixture(fixture_dir / "seg_000.ts");
+    const auto ts1_bytes = read_fixture(fixture_dir / "seg_001.ts");
+    ASSERT_TRUE(!mp4_bytes.empty() && !ts0_bytes.empty() && !ts1_bytes.empty(), "Media fixtures loaded");
+
+    WSADATA wsa{};
+    ASSERT_TRUE(WSAStartup(MAKEWORD(2, 2), &wsa) == 0, "WSAStartup succeeds");
+    SOCKET listen_sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ASSERT_TRUE(listen_sock != INVALID_SOCKET, "Listen socket created");
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    ASSERT_TRUE(::bind(listen_sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0, "Bind loopback");
+    ASSERT_TRUE(::listen(listen_sock, 32) == 0, "Listen loopback");
+    int addr_len = sizeof(addr);
+    ASSERT_TRUE(::getsockname(listen_sock, reinterpret_cast<sockaddr*>(&addr), &addr_len) == 0, "Getsockname");
+    const uint16_t port = ntohs(addr.sin_port);
+
+    std::atomic<bool> stop_server{false};
+    std::atomic<int> mp4_reqs{0};
+    std::atomic<int> hls_m3u8_reqs{0};
+    std::atomic<int> hls_seg0_reqs{0};
+    std::atomic<int> hls_seg1_reqs{0};
+    std::atomic<int> yt_video_reqs{0};
+    std::atomic<int> yt_audio_reqs{0};
+    std::atomic<int> dash_mpd_reqs{0};
+    std::atomic<int> dash_v_reqs{0};
+    std::atomic<int> dash_a_reqs{0};
+
+    const std::string hls_manifest =
+        "#EXTM3U\n"
+        "#EXT-X-VERSION:3\n"
+        "#EXT-X-TARGETDURATION:4\n"
+        "#EXT-X-MEDIA-SEQUENCE:0\n"
+        "#EXTINF:2.0,\n"
+        "/hls/seg_0.ts\n"
+        "#EXTINF:2.0,\n"
+        "/hls/seg_1.ts\n"
+        "#EXT-X-ENDLIST\n";
+
+    const std::string dash_manifest =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\" mediaPresentationDuration=\"PT4S\">\n"
+        "  <Period>\n"
+        "    <AdaptationSet mimeType=\"video/mp2t\" contentType=\"video\">\n"
+        "      <Representation id=\"v720\" bandwidth=\"1000000\" width=\"1280\" height=\"720\">\n"
+        "        <SegmentTemplate timescale=\"1\" duration=\"2\" startNumber=\"0\" media=\"/dash/v$Number$.ts\"/>\n"
+        "      </Representation>\n"
+        "    </AdaptationSet>\n"
+        "    <AdaptationSet mimeType=\"audio/mp2t\" contentType=\"audio\">\n"
+        "      <Representation id=\"a128\" bandwidth=\"128000\" lang=\"en\">\n"
+        "        <SegmentTemplate timescale=\"1\" duration=\"2\" startNumber=\"0\" media=\"/dash/a$Number$.ts\"/>\n"
+        "      </Representation>\n"
+        "    </AdaptationSet>\n"
+        "  </Period>\n"
+        "</MPD>\n";
+
+    std::thread srv_thread([&]() {
+        while (!stop_server.load()) {
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(listen_sock, &fds);
+            timeval tv{0, 50000};
+            if (::select(0, &fds, nullptr, nullptr, &tv) <= 0) continue;
+            SOCKET cs = ::accept(listen_sock, nullptr, nullptr);
+            if (cs == INVALID_SOCKET) continue;
+            std::thread([&, cs]() {
+                char buf[4096]{};
+                int n = ::recv(cs, buf, sizeof(buf) - 1, 0);
+                if (n <= 0) { ::closesocket(cs); return; }
+                std::string req(buf, static_cast<size_t>(n));
+                std::istringstream iss(req);
+                std::string method, path;
+                iss >> method >> path;
+
+                auto send_bytes = [&](const std::string& ctype, const uint8_t* data, size_t len, int pace_ms = 0) {
+                    std::ostringstream oss;
+                    oss << "HTTP/1.1 200 OK\r\n"
+                        << "Content-Type: " << ctype << "\r\n"
+                        << "Content-Length: " << len << "\r\n"
+                        << "Connection: close\r\n\r\n";
+                    std::string hdr = oss.str();
+                    ::send(cs, hdr.data(), static_cast<int>(hdr.size()), 0);
+                    if (method != "HEAD") {
+                        size_t off = 0;
+                        while (off < len && !stop_server.load()) {
+                            size_t chunk = std::min<size_t>(16384, len - off);
+                            if (::send(cs, reinterpret_cast<const char*>(data + off), static_cast<int>(chunk), 0) <= 0) break;
+                            off += chunk;
+                            if (pace_ms > 0 && off < len) std::this_thread::sleep_for(std::chrono::milliseconds(pace_ms));
+                        }
+                    }
+                    ::closesocket(cs);
+                };
+
+                if (path == "/video.mp4" || path == "/conflict_video.mp4") {
+                    if (method == "GET") mp4_reqs.fetch_add(1);
+                    send_bytes("video/mp4", mp4_bytes.data(), mp4_bytes.size(), 15);
+                } else if (path == "/hls/master.m3u8" || path == "/hls/cancel.m3u8") {
+                    hls_m3u8_reqs.fetch_add(1);
+                    send_bytes("application/vnd.apple.mpegurl",
+                               reinterpret_cast<const uint8_t*>(hls_manifest.data()), hls_manifest.size());
+                } else if (path == "/hls/seg_0.ts") {
+                    hls_seg0_reqs.fetch_add(1);
+                    send_bytes("video/mp2t", ts0_bytes.data(), ts0_bytes.size(), 0);
+                } else if (path == "/hls/seg_1.ts") {
+                    hls_seg1_reqs.fetch_add(1);
+                    send_bytes("video/mp2t", ts1_bytes.data(), ts1_bytes.size(), 60);
+                } else if (path == "/dash/manifest.mpd") {
+                    dash_mpd_reqs.fetch_add(1);
+                    send_bytes("application/dash+xml",
+                               reinterpret_cast<const uint8_t*>(dash_manifest.data()), dash_manifest.size());
+                } else if (path == "/dash/v0.ts" || path == "/dash/v1.ts") {
+                    dash_v_reqs.fetch_add(1);
+                    send_bytes("video/mp2t", ts0_bytes.data(), ts0_bytes.size(), 25);
+                } else if (path == "/dash/a0.ts" || path == "/dash/a1.ts") {
+                    dash_a_reqs.fetch_add(1);
+                    send_bytes("video/mp2t", ts1_bytes.data(), ts1_bytes.size(), 25);
+                } else if (path == "/yt_video.mp4") {
+                    yt_video_reqs.fetch_add(1);
+                    send_bytes("video/mp4", mp4_bytes.data(), mp4_bytes.size(), 30);
+                } else if (path == "/yt_audio.m4a") {
+                    yt_audio_reqs.fetch_add(1);
+                    send_bytes("audio/mp4", mp4_bytes.data(), mp4_bytes.size(), 30);
+                } else {
+                    std::string not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    ::send(cs, not_found.data(), static_cast<int>(not_found.size()), 0);
+                    ::closesocket(cs);
+                }
+            }).detach();
+        }
+    });
+
+    std::error_code ec;
+    std::filesystem::path work_dir = std::filesystem::temp_directory_path() / ("radium_vid_spec_" + GenerateUuidV4().substr(0, 8));
+    ControllerConfig cfg;
+    cfg.state_db_path = work_dir / "state.db";
+    cfg.default_download_dir = work_dir / "downloads";
+    cfg.temp_root_dir = work_dir / "temp";
+    cfg.nm3u8dl_binary_path = std::filesystem::current_path() / "build" / "Release" / "N_m3u8DL-RE.exe";
+    cfg.ffmpeg_binary_path = std::filesystem::current_path() / "tools" / "win-x64" / "ffmpeg.exe";
+    cfg.allow_loopback = true;
+    cfg.av_available_override = []() { return false; };
+
+    DownloadController ctrl(cfg);
+    ASSERT_TRUE(ctrl.Initialize().ok(), "Controller initialized");
+    {
+        AppSettings s = ctrl.GetSettings();
+        s.conflict_policy = ConflictPolicy::kPrompt;
+        s.default_download_dir = cfg.default_download_dir.string();
+        s.last_download_dir = cfg.default_download_dir.string();
+        ctrl.UpdateSettings(s);
+    }
+
+    ipc::IpcServer ipc(ctrl, "\\\\.\\pipe\\radium_test_vid_spec_" + GenerateUuidV4().substr(0, 6));
+    ipc.SetHeadlessDaemonMode(false); // Simulate GUI mode where stream.add triggers speculative offers
+
+    std::mutex dec_mu;
+    std::condition_variable dec_cv;
+    std::map<std::string, std::pair<TaskModel, DownloadController::IncomingConflictReport>> decisions;
+    ipc.SetSpeculativeDecisionCallback([&](const std::string& tx_id, const TaskModel& draft, const DownloadController::IncomingConflictReport& rep) {
+        std::lock_guard<std::mutex> lk(dec_mu);
+        decisions[tx_id] = {draft, rep};
+        dec_cv.notify_all();
+    });
+
+    auto wait_decision = [&](const std::string& tx_id, int timeout_ms = 5000) -> bool {
+        std::unique_lock<std::mutex> lk(dec_mu);
+        return dec_cv.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&]() { return decisions.count(tx_id) > 0; });
+    };
+
+    const std::string mp4_sha = CryptoUtils::ComputeBufferSha256Hex(
+        std::string_view(reinterpret_cast<const char*>(mp4_bytes.data()), mp4_bytes.size()));
+
+    // [1/6] Direct MP4 via stream.add (DIRECT_PROGRESSIVE)
+    std::cout << "  [1/6] Testing Direct MP4 via stream.add starts before confirmation...\n";
+    {
+        json::Value req = json::Object{};
+        req["jsonrpc"] = "2.0";
+        req["id"] = 1;
+        req["method"] = "stream.add";
+        json::Value p = json::Object{};
+        p["sourceType"] = "DIRECT_PROGRESSIVE";
+        p["streamType"] = "HTTP_FILE";
+        p["url"] = "http://127.0.0.1:" + std::to_string(port) + "/video.mp4";
+        p["fileName"] = "direct_video.mp4";
+        req["params"] = std::move(p);
+
+        auto resp = json::Parse(ipc.HandleJsonRpcMessage(req.dump()));
+        std::string tx_id = resp["result"]["taskId"].as_string();
+        ASSERT_TRUE(!tx_id.empty(), "stream.add returned taskId");
+        ASSERT_TRUE(wait_decision(tx_id), "Decision fired for Direct MP4");
+        ASSERT_TRUE(!decisions[tx_id].second.has_conflict(), "No conflict for Direct MP4");
+
+        // Wait until real MP4 bytes arrive before confirmation
+        uint64_t bytes_before = 0;
+        for (int i = 0; i < 60; ++i) {
+            if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes > 0) {
+                bytes_before = snap->downloaded_bytes;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        ASSERT_TRUE(bytes_before > 0, "Direct MP4 received real bytes before confirmation");
+        ASSERT_TRUE(mp4_reqs.load() == 1, "Single HTTP GET started before confirmation");
+
+        auto acc = ctrl.AcceptSpeculativeTransaction(tx_id, "direct_video.mp4", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(acc.ok(), "Accept Direct MP4 succeeds");
+        auto done = ctrl.WaitForTaskCompletion(tx_id, 5000);
+        ASSERT_TRUE(done.ok() && done.value->state == TaskState::kCompleted, "Direct MP4 completes");
+        ASSERT_TRUE(mp4_reqs.load() == 1, "Zero duplicate GET requests after confirmation");
+        auto out_sha = CryptoUtils::ComputeFileSha256Hex(cfg.default_download_dir / "direct_video.mp4");
+        ASSERT_TRUE(out_sha.ok() && *out_sha.value == mp4_sha, "Direct MP4 SHA-256 matches");
+        if (auto m = ctrl.GetSpeculativeMetrics(tx_id)) {
+            std::cout << "    Direct MP4: dispatch=" << (m->t3_tx_created_us - m->t2_ipc_recv_us) / 1000.0
+                      << " ms, first_byte=" << (m->t7_first_byte_us > m->t2_ipc_recv_us ? (m->t7_first_byte_us - m->t2_ipc_recv_us) / 1000.0 : 0.0)
+                      << " ms, pre_bytes=" << bytes_before << "\n";
+        }
+    }
+
+    // [2/6] HLS .m3u8 via stream.add (real segments downloaded before confirmation)
+    std::cout << "  [2/6] Testing HLS .m3u8 segments download before confirmation...\n";
+    {
+        json::Value req = json::Object{};
+        req["jsonrpc"] = "2.0";
+        req["id"] = 2;
+        req["method"] = "stream.add";
+        json::Value p = json::Object{};
+        p["sourceType"] = "HLS_MANIFEST";
+        p["streamType"] = "HLS";
+        p["manifestUrl"] = "http://127.0.0.1:" + std::to_string(port) + "/hls/master.m3u8";
+        p["fileName"] = "hls_video.mp4";
+        req["params"] = std::move(p);
+
+        auto resp = json::Parse(ipc.HandleJsonRpcMessage(req.dump()));
+        std::string tx_id = resp["result"]["taskId"].as_string();
+        ASSERT_TRUE(wait_decision(tx_id), "Decision fired for HLS");
+
+        // Wait until real TS segments are downloaded before confirmation
+        bool got_segments = false;
+        for (int i = 0; i < 100; ++i) {
+            if (hls_seg0_reqs.load() >= 1) {
+                if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes > 0) {
+                    got_segments = true;
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+        ASSERT_TRUE(got_segments, "HLS real segments arrived before confirmation");
+        ASSERT_TRUE(!std::filesystem::exists(cfg.default_download_dir / "hls_video.mp4", ec), "HLS output not written to save_dir before confirmation");
+
+        auto acc = ctrl.AcceptSpeculativeTransaction(tx_id, "hls_video.mp4", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(acc.ok(), "Accept HLS succeeds");
+        auto done = ctrl.WaitForTaskCompletion(tx_id, 10000);
+        ASSERT_TRUE(done.ok() && done.value->state == TaskState::kCompleted, "HLS completes");
+        ASSERT_TRUE(hls_seg0_reqs.load() == 1, "HLS seg_0.ts was not re-downloaded after confirmation");
+        ASSERT_TRUE(std::filesystem::exists(cfg.default_download_dir / "hls_video.mp4", ec) &&
+                    std::filesystem::file_size(cfg.default_download_dir / "hls_video.mp4", ec) > 0, "HLS final MP4 exists");
+        if (auto m = ctrl.GetSpeculativeMetrics(tx_id)) {
+            std::cout << "    HLS: dispatch=" << (m->t3_tx_created_us - m->t2_ipc_recv_us) / 1000.0
+                      << " ms, first_byte=" << (m->t7_first_byte_us > m->t2_ipc_recv_us ? (m->t7_first_byte_us - m->t2_ipc_recv_us) / 1000.0 : 0.0)
+                      << " ms, pre_bytes=" << m->bytes_before_decision << "\n";
+        }
+    }
+
+    // [3/6] DASH .mpd via stream.add (video + audio segments download before confirmation)
+    std::cout << "  [3/6] Testing DASH .mpd video+audio segments download before confirmation...\n";
+    {
+        json::Value req = json::Object{};
+        req["jsonrpc"] = "2.0";
+        req["id"] = 3;
+        req["method"] = "stream.add";
+        json::Value p = json::Object{};
+        p["sourceType"] = "DASH_MANIFEST";
+        p["streamType"] = "DASH";
+        p["manifestUrl"] = "http://127.0.0.1:" + std::to_string(port) + "/dash/manifest.mpd";
+        p["fileName"] = "dash_video.mp4";
+        req["params"] = std::move(p);
+
+        auto resp = json::Parse(ipc.HandleJsonRpcMessage(req.dump()));
+        std::string tx_id = resp["result"]["taskId"].as_string();
+        ASSERT_TRUE(wait_decision(tx_id), "Decision fired for DASH");
+
+        bool got_dash = false;
+        for (int i = 0; i < 100; ++i) {
+            if (dash_v_reqs.load() >= 1 && dash_a_reqs.load() >= 1) {
+                if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes > 0) {
+                    got_dash = true;
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+        ASSERT_TRUE(got_dash, "DASH video & audio segments arrived before confirmation");
+        auto acc = ctrl.AcceptSpeculativeTransaction(tx_id, "dash_video.mp4", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(acc.ok(), "Accept DASH succeeds");
+        auto done = ctrl.WaitForTaskCompletion(tx_id, 10000);
+        ASSERT_TRUE(done.ok() && done.value->state == TaskState::kCompleted, "DASH completes");
+        ASSERT_TRUE(std::filesystem::exists(cfg.default_download_dir / "dash_video.mp4", ec) &&
+                    std::filesystem::file_size(cfg.default_download_dir / "dash_video.mp4", ec) > 0, "DASH final MP4 exists");
+    }
+
+    // [4/6] YouTube adaptive dual-track via stream.add
+    std::cout << "  [4/6] Testing YouTube dual-track adaptive streams download before confirmation...\n";
+    {
+        json::Value req = json::Object{};
+        req["jsonrpc"] = "2.0";
+        req["id"] = 4;
+        req["method"] = "stream.add";
+        json::Value p = json::Object{};
+        p["sourceType"] = "YOUTUBE_EXTRACTION";
+        p["streamType"] = "YOUTUBE";
+        p["videoId"] = "dQw4w9WgXcQ";
+        p["url"] = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        p["tabUrl"] = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        p["videoUrl"] = "http://127.0.0.1:" + std::to_string(port) + "/yt_video.mp4";
+        p["pairedAudioUrl"] = "http://127.0.0.1:" + std::to_string(port) + "/yt_audio.m4a";
+        p["fileName"] = "yt_adaptive.mp4";
+        req["params"] = std::move(p);
+
+        auto resp = json::Parse(ipc.HandleJsonRpcMessage(req.dump()));
+        std::string tx_id = resp["result"]["taskId"].as_string();
+        ASSERT_TRUE(wait_decision(tx_id), "Decision fired for YouTube adaptive");
+
+        bool got_both = false;
+        for (int i = 0; i < 80; ++i) {
+            if (yt_video_reqs.load() == 1 && yt_audio_reqs.load() == 1) {
+                if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes > 0) {
+                    got_both = true;
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        ASSERT_TRUE(got_both, "YouTube video and audio tracks both started before confirmation");
+
+        auto acc = ctrl.AcceptSpeculativeTransaction(tx_id, "yt_adaptive.mp4", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(acc.ok(), "Accept YouTube adaptive succeeds");
+        auto done = ctrl.WaitForTaskCompletion(tx_id, 10000);
+        ASSERT_TRUE(done.ok() && done.value->state == TaskState::kCompleted, "YouTube adaptive completes");
+        ASSERT_TRUE(yt_video_reqs.load() == 1 && yt_audio_reqs.load() == 1, "Zero duplicate track requests after confirmation");
+        ASSERT_TRUE(std::filesystem::exists(cfg.default_download_dir / "yt_adaptive.mp4", ec) &&
+                    std::filesystem::file_size(cfg.default_download_dir / "yt_adaptive.mp4", ec) > 0, "YouTube muxed MP4 exists");
+    }
+
+    // [5/6] Cancellation stops active HLS background worker and cleans staging
+    std::cout << "  [5/6] Testing Cancel stops speculative HLS worker and cleans staging...\n";
+    {
+        json::Value req = json::Object{};
+        req["jsonrpc"] = "2.0";
+        req["id"] = 5;
+        req["method"] = "stream.add";
+        json::Value p = json::Object{};
+        p["sourceType"] = "HLS_MANIFEST";
+        p["streamType"] = "HLS";
+        p["manifestUrl"] = "http://127.0.0.1:" + std::to_string(port) + "/hls/cancel.m3u8";
+        p["fileName"] = "hls_cancel.mp4";
+        req["params"] = std::move(p);
+
+        auto resp = json::Parse(ipc.HandleJsonRpcMessage(req.dump()));
+        std::string tx_id = resp["result"]["taskId"].as_string();
+        ASSERT_TRUE(wait_decision(tx_id), "Decision fired for HLS cancel");
+        for (int i = 0; i < 50; ++i) {
+            if (auto snap = ctrl.GetSpeculativeSnapshot(tx_id); snap && snap->downloaded_bytes > 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        ASSERT_TRUE(ctrl.CancelSpeculativeTransaction(tx_id).ok(), "CancelSpeculativeTransaction succeeds");
+        bool cleaned = false;
+        for (int i = 0; i < 60; ++i) {
+            if (!std::filesystem::exists(cfg.temp_root_dir / tx_id, ec)) {
+                cleaned = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ASSERT_TRUE(cleaned, "Cancelled speculative stream staging dir cleaned up");
+        ASSERT_TRUE(!std::filesystem::exists(cfg.default_download_dir / "hls_cancel.mp4", ec), "No destination file created on Cancel");
+    }
+
+    // [6/6] Existing destination conflict rejects speculative video capture
+    std::cout << "  [6/6] Testing existing destination conflict rejects speculative video...\n";
+    {
+        std::filesystem::create_directories(cfg.default_download_dir, ec);
+        const std::filesystem::path existing_p = cfg.default_download_dir / "conflict_video.mp4";
+        {
+            std::ofstream ofs(existing_p, std::ios::binary | std::ios::trunc);
+            ofs << "EXISTING_VIDEO_SENTINEL";
+        }
+        json::Value req = json::Object{};
+        req["jsonrpc"] = "2.0";
+        req["id"] = 6;
+        req["method"] = "stream.add";
+        json::Value p = json::Object{};
+        p["sourceType"] = "DIRECT_PROGRESSIVE";
+        p["streamType"] = "HTTP_FILE";
+        p["url"] = "http://127.0.0.1:" + std::to_string(port) + "/conflict_video.mp4";
+        p["fileName"] = "conflict_video.mp4";
+        req["params"] = std::move(p);
+
+        auto resp = json::Parse(ipc.HandleJsonRpcMessage(req.dump()));
+        std::string tx_id = resp["result"]["taskId"].as_string();
+        ASSERT_TRUE(wait_decision(tx_id), "Decision fired for conflict video");
+        ASSERT_TRUE(decisions[tx_id].second.has_conflict(), "Conflict detected for existing destination");
+        auto acc = ctrl.AcceptSpeculativeTransaction(tx_id, "conflict_video.mp4", cfg.default_download_dir.string(), true, false, "", ConflictPolicy::kPrompt);
+        ASSERT_TRUE(!acc.ok() && acc.error->code == "ERR_TX_CANCELLED", "Conflicted speculative video tx was cancelled");
+        std::ifstream ifs(existing_p, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        ASSERT_TRUE(content == "EXISTING_VIDEO_SENTINEL", "Existing video file untouched");
+    }
+
+    ctrl.Shutdown();
+    stop_server.store(true);
+    ::closesocket(listen_sock);
+    if (srv_thread.joinable()) srv_thread.join();
+    WSACleanup();
+    std::filesystem::remove_all(work_dir, ec);
+    return true;
+}
+
 bool TestTorrentEndgameStallRecoveryAndCompletion() {
     using namespace radium;
     using namespace radium::torrent;
@@ -8942,6 +9373,7 @@ int main() {
     run(86, "TestTorrentEndgameStallRecoveryAndCompletion", TestTorrentEndgameStallRecoveryAndCompletion);
     run(87, "TestTaskPriorityPersistenceAndScheduling", TestTaskPriorityPersistenceAndScheduling);
     run(88, "TestDownloadResumePersistenceAcrossRestart", TestDownloadResumePersistenceAcrossRestart);
+    run(89, "TestVideoSpeculativeBackgroundDownloadAndConfirmation", TestVideoSpeculativeBackgroundDownloadAndConfirmation);
 
     std::cout << "\nC++20 Unit & Regression Test Summary: " << passed << " / " << total << " suites PASSED.\n";
     return (passed == total) ? 0 : 1;

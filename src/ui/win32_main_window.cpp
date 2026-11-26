@@ -5488,9 +5488,19 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     if (ctx->initial_file_size <= 0 && t->total_bytes > 0) {
                         ctx->initial_file_size = static_cast<int64_t>(t->total_bytes);
                     }
-                    if (t->task_type == TaskType::kStreamHls || t->task_type == TaskType::kStreamDash || t->category == "Video") {
+                    if (t->task_type == TaskType::kStreamHls || t->task_type == TaskType::kStreamDash ||
+                        t->category == "Video" || PathSanitizer::IsWebpageWatchUrl(t->url)) {
                         is_video_stream = true;
                     }
+                }
+            } else if (ctx->draft_task.has_value()) {
+                existing_task = ctx->draft_task;
+                if (ctx->initial_file_size <= 0 && ctx->draft_task->total_bytes > 0) {
+                    ctx->initial_file_size = static_cast<int64_t>(ctx->draft_task->total_bytes);
+                }
+                if (ctx->draft_task->task_type == TaskType::kStreamHls || ctx->draft_task->task_type == TaskType::kStreamDash ||
+                    ctx->draft_task->category == "Video" || PathSanitizer::IsWebpageWatchUrl(ctx->draft_task->url)) {
+                    is_video_stream = true;
                 }
             }
 
@@ -6031,6 +6041,65 @@ LRESULT CALLBACK NewDownloadDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         SetWindowTextW(ctx->hFileSizeLabel, txt.c_str());
                     } else {
                         SetWindowTextW(ctx->hFileSizeLabel, L"Size: Unknown");
+                    }
+
+                    if (!ctx->speculative_tx_id.empty() && ctx->existing_task_id.empty() && ctx->draft_task.has_value()) {
+                        std::string new_vf = qc.video_filter.empty() ? (!qc.id.empty() ? qc.id : "best") : qc.video_filter;
+                        std::string new_af = qc.audio_filter.empty() ? "best" : qc.audio_filter;
+                        std::string cur_vf = ctx->draft_task->stream_options.video_filter;
+                        if (new_vf != cur_vf || qc.itag > 0) {
+                            ctx->controller->CancelSpeculativeTransaction(ctx->speculative_tx_id);
+                            TaskModel next_draft = *ctx->draft_task;
+                            next_draft.task_id.clear();
+                            next_draft.part_path.clear();
+                            next_draft.downloaded_bytes = 0;
+                            next_draft.stream_percent = 0.0;
+                            next_draft.completed_segments = 0;
+                            next_draft.total_segments = 0;
+                            next_draft.stream_options.video_filter = new_vf;
+                            next_draft.stream_options.audio_filter = new_af;
+                            if (!qc.ext.empty()) {
+                                next_draft.stream_options.output_format = qc.ext;
+                            }
+                            if (!qc.resolution.empty() && qc.resolution != "Auto" && qc.resolution != "Original") {
+                                wchar_t fn_buf[512]{};
+                                GetWindowTextW(ctx->hFilenameEdit, fn_buf, 511);
+                                std::string base_fn = WToUtf8(fn_buf);
+                                if (!base_fn.empty()) {
+                                    static const std::regex kResTagRe(R"(\s*\[\s*\d{3,4}p[_\w]*\s*\])", std::regex::icase);
+                                    base_fn = std::regex_replace(base_fn, kResTagRe, "");
+                                    auto dot_pos = base_fn.rfind('.');
+                                    std::string stem = (dot_pos != std::string::npos) ? base_fn.substr(0, dot_pos) : base_fn;
+                                    std::string ext = !qc.ext.empty() ? qc.ext : ((dot_pos != std::string::npos) ? base_fn.substr(dot_pos + 1) : "mp4");
+                                    next_draft.file_name = stem + " [" + qc.resolution + "]." + ext;
+                                    SetWindowTextW(ctx->hFilenameEdit, Utf8ToW(next_draft.file_name).c_str());
+                                }
+                            }
+                            if (!qc.video_url.empty() || qc.itag > 0) {
+                                try {
+                                    radium::json::Value mroot = (!next_draft.stream_options.cached_manifest_body.empty() &&
+                                                                 next_draft.stream_options.cached_manifest_body.front() == '{')
+                                        ? radium::json::Parse(next_draft.stream_options.cached_manifest_body)
+                                        : radium::json::Value(radium::json::Object{});
+                                    if (mroot.is_object()) {
+                                        if (!qc.video_url.empty()) mroot["videoUrl"] = qc.video_url;
+                                        if (!qc.paired_audio_url.empty()) mroot["audioUrl"] = qc.paired_audio_url;
+                                        else if (!qc.video_url.empty()) mroot["audioUrl"] = "";
+                                        if (qc.itag > 0) mroot["selectedItag"] = static_cast<int64_t>(qc.itag);
+                                        if (!qc.resolution.empty()) mroot["resolution"] = qc.resolution;
+                                        next_draft.stream_options.cached_manifest_body = mroot.dump();
+                                    }
+                                } catch (...) {}
+                            }
+                            auto new_res = ctx->controller->BeginSpeculativeOffer(next_draft, nullptr);
+                            if (new_res.ok()) {
+                                ctx->speculative_tx_id = *new_res.value;
+                                next_draft.task_id = ctx->speculative_tx_id;
+                                ctx->draft_task = std::move(next_draft);
+                            } else {
+                                ctx->speculative_tx_id.clear();
+                            }
+                        }
                     }
                 }
                 return 0;

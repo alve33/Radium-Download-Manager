@@ -55,6 +55,29 @@ function isFacebookHomepage(doc, viewport) {
   return pathname === "/" || pathname === "" || pathname === "/home.php";
 }
 
+function getPlayerTargetRect(video) {
+  const fallback = {
+    width: (video && video.width) || 640,
+    height: (video && video.height) || 360,
+    top: 20,
+    left: 20,
+    right: 660,
+    bottom: 380
+  };
+  if (!video || typeof video.getBoundingClientRect !== "function") return fallback;
+  let rect = video.getBoundingClientRect();
+  if (typeof video.closest === "function") {
+    const player = video.closest("#movie_player, .html5-video-player, ytd-player");
+    if (player && typeof player.getBoundingClientRect === "function") {
+      const pRect = player.getBoundingClientRect();
+      if (pRect && pRect.width >= 160 && pRect.height >= 90) {
+        rect = pRect;
+      }
+    }
+  }
+  return rect || fallback;
+}
+
 function positionOverlayHost(video, hostEl) {
   if (!video || !hostEl) return;
   const doc = (video && video.ownerDocument) ? video.ownerDocument : (typeof document !== "undefined" ? document : null);
@@ -65,9 +88,7 @@ function positionOverlayHost(video, hostEl) {
     try { parent.appendChild(hostEl); } catch (_) {}
   }
 
-  const rect = typeof video.getBoundingClientRect === "function"
-    ? video.getBoundingClientRect()
-    : { width: video.width || 640, height: video.height || 360, top: 20, left: 20, right: 660, bottom: 380 };
+  const rect = getPlayerTargetRect(video);
 
   // Hide unobtrusively if the video player is collapsed or scrolled out of the visible viewport
   const isCollapsed = (rect.width !== undefined && rect.width < 120) || (rect.height !== undefined && rect.height < 80);
@@ -246,9 +267,7 @@ function scanAndAttachVideoOverlays(doc, onDownloadClick, minWidth = 240, minHei
   for (const video of videos) {
     notifyDirectVideoElementDiscovered(video, doc);
 
-    const rect = typeof video.getBoundingClientRect === "function"
-      ? video.getBoundingClientRect()
-      : { width: video.width || 640, height: video.height || 360, top: 20, left: 20, right: 660, bottom: 380 };
+    const rect = getPlayerTargetRect(video);
 
     const isPlayerCandidate = (rect.width >= minWidth && rect.height >= minHeight) ||
       (isYouTube && (rect.width >= 160 || (video.parentElement && video.parentElement.id === "movie_player")));

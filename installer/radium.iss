@@ -13,7 +13,7 @@
 #define MyAppName "Radium Download Manager"
 #define MyAppShortName "Radium"
 #ifndef MyAppVersion
-  #define MyAppVersion "2.0.0"
+  #define MyAppVersion "2.1.0"
 #endif
 #define MyAppPublisher "Radium Contributors"
 #define MyAppURL "https://github.com/alve33/Radium-Download-Manager"

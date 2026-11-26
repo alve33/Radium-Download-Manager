@@ -1430,12 +1430,27 @@ std::string IpcServer::HandleJsonRpcMessage(std::string_view raw_json) {
                     ? settings.last_download_dir
                     : (settings.default_download_dir.empty() ? m_controller.GetConfig().default_download_dir.string() : settings.default_download_dir);
             }
+            SpeculativeDecisionCallback spec_cb;
             {
                 std::lock_guard<std::mutex> lock(m_offer_mutex);
                 if (!correlation_id.empty()) {
                     m_recent_offer_correlations[correlation_id] = {t.task_id, t.file_name, NowEpochMs()};
                 }
                 m_gui_pending_offers[t.task_id] = t;
+                spec_cb = m_speculative_cb;
+            }
+            if (spec_cb) {
+                auto spec_res = m_controller.BeginSpeculativeOffer(t, std::move(spec_cb));
+                if (!spec_res.ok()) {
+                    std::lock_guard<std::mutex> lock(m_offer_mutex);
+                    if (m_offer_cb) {
+                        m_offer_cb(t);
+                    } else {
+                        m_pending_offers.push_back(t);
+                    }
+                }
+            } else {
+                std::lock_guard<std::mutex> lock(m_offer_mutex);
                 if (m_offer_cb) {
                     m_offer_cb(t);
                 } else {
