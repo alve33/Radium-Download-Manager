@@ -2053,7 +2053,7 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
 
 function isSupportedVideoSiteUrlDirect(url) {
   if (!url || typeof url !== "string") return false;
-  if (/bilibili\.com|b23\.tv|facebook\.com|fb\.watch|fbcdn\.net|pornhub\.com|phncdn\.com|youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|tiktok\.com|instagram\.com|twitter\.com|x\.com|twitch\.tv|streamable\.com/i.test(url)) {
+  if (/bilibili\.com|b23\.tv|facebook\.com|fb\.watch|fbcdn\.net|youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|tiktok\.com|instagram\.com|twitter\.com|x\.com|twitch\.tv|streamable\.com/i.test(url)) {
     if (/\.(m3u8|mpd|m4s|ts)(\?|$)/i.test(url)) return false;
     return true;
   }
@@ -2076,7 +2076,6 @@ function isSupportedVideoSiteUrlDirect(url) {
         path.includes("/video/") ||
         path.includes("/videos/") ||
         path.startsWith("/video-") ||
-        path.startsWith("/hd-") ||
         path.startsWith("/v/") ||
         path.startsWith("/reel/") ||
         path.startsWith("/reels/") ||
@@ -2088,8 +2087,6 @@ function isSupportedVideoSiteUrlDirect(url) {
         path.startsWith("/player/") ||
         path.includes("/status/") ||
         path.includes("/comments/") ||
-        u.searchParams.has("viewkey") ||
-        path.includes("view_video") ||
         u.searchParams.has("v") ||
         /^\/video[0-9a-z._-]+/i.test(path) ||
         (/^\/\d+/.test(path) && path.split("/").filter(Boolean).length === 1)) {
@@ -2123,7 +2120,7 @@ function resolveCandidateForDownloadRequest(tabId, msg, sender) {
     }
   }
 
-  // 1b. Supported video site watch URL priority check (Bilibili, Facebook, YouTube, adult sites, etc.)
+  // 1b. Supported video site watch URL priority check (Bilibili, Facebook, YouTube, etc.)
   // Never fail with "No supported download source found for this blob" if the page URL is a supported video site!
   let targetPageUrl = effectiveTabUrl || msg.frameUrl || msg.tabUrl || (sender && sender.tab && sender.tab.url) || G.tabUrlMap.get(tabId) || msg.url || "";
   if (targetPageUrl.startsWith("blob:")) {

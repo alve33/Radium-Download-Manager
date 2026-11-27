@@ -77,7 +77,7 @@ struct MultipartEpisode {
 struct ExtractionDiagnosticReport {
     std::string input_url;
     std::string normalized_url;
-    std::string detected_platform; // "bilibili", "facebook", "youtube", "adult", "vimeo", "generic", etc.
+    std::string detected_platform; // "bilibili", "facebook", "youtube", "vimeo", "generic", etc.
     std::string selected_extractor;
     size_t discovered_format_count = 0;
     std::string selected_format_id;
@@ -96,7 +96,7 @@ struct ExtractionDiagnosticReport {
 struct ExtractionMetadata {
     std::string input_url;
     std::string webpage_url;
-    std::string platform_id;       // e.g. "bilibili", "facebook", "youtube", "pornhub", "xvideos", "vimeo"
+    std::string platform_id;       // e.g. "bilibili", "facebook", "youtube", "vimeo"
     std::string extractor_name;    // e.g. "BilibiliExtractor", "FacebookExtractor", "GenericWebVideoExtractor", "YtDlpExtractor"
     std::string video_id;          // e.g. "BV1xx411c7mD", "123456789"
     std::string title;
@@ -181,11 +181,6 @@ public:
     static Result<ExtractionMetadata> ParseHtml5PlayerPage(
         const std::string& html,
         const std::string& page_url);
-    static Result<ExtractionMetadata> ParseAdultPlayerHtml(
-        const std::string& html,
-        const std::string& page_url) {
-        return ParseHtml5PlayerPage(html, page_url);
-    }
     static Result<ExtractionMetadata> ParseYtDlpJson(
         const std::string& json_str,
         const std::string& fallback_url);

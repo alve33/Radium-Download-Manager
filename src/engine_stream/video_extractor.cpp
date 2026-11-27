@@ -152,10 +152,6 @@ std::string ExtractHtmlTitle(const std::string& html) {
         std::string t = UnescapeJsonSlashesAndUnicode(m[1].str());
         auto pos = t.find("_哔哩哔哩");
         if (pos != std::string::npos && pos > 0) t = t.substr(0, pos);
-        pos = t.find(" - Pornhub.com");
-        if (pos != std::string::npos && pos > 0) t = t.substr(0, pos);
-        pos = t.find(" - XVIDEOS.COM");
-        if (pos != std::string::npos && pos > 0) t = t.substr(0, pos);
         return t;
     }
     return "";
@@ -1257,45 +1253,6 @@ Result<ExtractionMetadata> VideoExtractionManager::ParseHtml5PlayerPage(
         fmt.required_headers = meta.required_headers;
         meta.formats.push_back(std::move(fmt));
     };
-
-    static const std::regex media_def_re(
-        R"re(\{[^{}]*"videoUrl"\s*:\s*"(https?:[^"]+)"[^{}]*\})re");
-    {
-        std::sregex_iterator it(html.begin(), html.end(), media_def_re);
-        std::sregex_iterator end;
-        for (; it != end; ++it) {
-            std::string block = (*it)[0].str();
-            std::string vurl = (*it)[1].str();
-            uint32_t h = 0;
-            std::string fmt_type;
-            std::smatch m;
-            static const std::regex q_str_re(R"re("quality"\s*:\s*"(\d{3,4})p?")re");
-            static const std::regex q_num_re(R"re("quality"\s*:\s*(\d{3,4}))re");
-            static const std::regex fmt_re(R"re("format"\s*:\s*"([^"]+)")re");
-            if (std::regex_search(block, m, q_str_re)) h = static_cast<uint32_t>(std::stoul(m[1].str()));
-            else if (std::regex_search(block, m, q_num_re)) h = static_cast<uint32_t>(std::stoul(m[1].str()));
-            if (std::regex_search(block, m, fmt_re)) fmt_type = m[1].str();
-            add_discovered_stream(vurl, h, fmt_type);
-        }
-    }
-
-    static const std::regex xv_title_re(R"re(html5player\.setVideoTitle\s*\(\s*['"]([^'"]+)['"]\s*\))re");
-    std::smatch xv_m;
-    if (meta.title.empty() && std::regex_search(html, xv_m, xv_title_re) && xv_m.size() > 1) {
-        meta.title = UnescapeJsonSlashesAndUnicode(xv_m[1].str());
-    }
-    static const std::regex xv_hls_re(R"re(html5player\.setVideoHLS\s*\(\s*['"](https?:[^'"]+)['"]\s*\))re");
-    if (std::regex_search(html, xv_m, xv_hls_re) && xv_m.size() > 1) {
-        add_discovered_stream(xv_m[1].str(), 1080, "hls");
-    }
-    static const std::regex xv_high_re(R"re(html5player\.setVideoUrlHigh\s*\(\s*['"](https?:[^'"]+)['"]\s*\))re");
-    if (std::regex_search(html, xv_m, xv_high_re) && xv_m.size() > 1) {
-        add_discovered_stream(xv_m[1].str(), 720, "mp4");
-    }
-    static const std::regex xv_low_re(R"re(html5player\.setVideoUrlLow\s*\(\s*['"](https?:[^'"]+)['"]\s*\))re");
-    if (std::regex_search(html, xv_m, xv_low_re) && xv_m.size() > 1) {
-        add_discovered_stream(xv_m[1].str(), 360, "mp4");
-    }
 
     static const std::regex quality_kv_re(
         R"re(["']?(?:quality_)?(2160|1440|1080|720|480|360|240)p?["']?\s*:\s*\[?\s*["'](https?:[^"']+)["'])re",

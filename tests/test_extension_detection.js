@@ -1333,23 +1333,19 @@ async function runTests() {
   console.log("  [Regression Invariants] verified SEC-001 and BUG-039 invariants -> PASS");
 
   // [Scenario 28] Multi-Site Video Extraction & Compatibility Overhaul Verification
-  console.log("\n[21/21] Testing Multi-Site Video Extraction (Bilibili, Facebook, Adult Platforms, Vimeo, Twitch)...");
+  console.log("\n[21/21] Testing Multi-Site Video Extraction (Bilibili, Facebook, Vimeo, Twitch)...");
   const fns = require("../extension/js/function.js");
-  // 1. Verify isSupportedVideoSiteWatchUrl & isWebpageWatchUrl for Bilibili, Facebook, Adult Sites, and general platforms
+  // 1. Verify isSupportedVideoSiteWatchUrl & isWebpageWatchUrl for Bilibili, Facebook, and general platforms
   assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.bilibili.com/video/BV1xx411c7mD?p=2"), true, "Bilibili BV watch URL recognized");
   assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://b23.tv/BV1xx411c7mD"), true, "Bilibili b23.tv short URL recognized");
   assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.facebook.com/watch/?v=1234567890"), true, "Facebook Watch URL recognized");
   assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.facebook.com/reel/987654321"), true, "Facebook Reel URL recognized");
   assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://fb.watch/abc123xyz/"), true, "fb.watch short URL recognized");
-  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.pornhub.com/view_video.php?viewkey=64a1b2c3d4"), true, "Pornhub viewkey URL recognized");
-  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.xvideos.com/video.kdfj123/test_title"), true, "XVideos video URL recognized");
-  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://xhamster.com/videos/sample-video-12345"), true, "xHamster video URL recognized");
-  assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://spankbang.com/5abcd/video/sample"), true, "SpankBang video URL recognized");
   assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://vimeo.com/123456789"), true, "Vimeo video URL recognized");
   assert.strictEqual(fns.isSupportedVideoSiteWatchUrl("https://www.dailymotion.com/video/x8abcde"), true, "Dailymotion video URL recognized");
   // Direct media files on those hosts must NOT be classified as webpage watch URLs
   assert.strictEqual(fns.isWebpageWatchUrl("https://cdn.bilibili.com/video/sample.mp4"), false, "Direct MP4 URL is not a webpage watch URL");
-  assert.strictEqual(fns.isWebpageWatchUrl("https://ev-h.phncdn.com/hls/videos/master.m3u8?validfrom=1700000000"), false, "Direct HLS master.m3u8 is not a webpage watch URL");
+  assert.strictEqual(fns.isWebpageWatchUrl("https://cdn.example.org/hls/videos/master.m3u8?validfrom=1700000000"), false, "Direct HLS master.m3u8 is not a webpage watch URL");
 
   // 2. Verify Facebook CDN (fbcdn.net) bytestart/byteend range trap stripping in normalizeMediaUrl
   const rawFbCdn = "https://video.fdac1-1.fna.fbcdn.net/v/t42.1790-2/100000_n.mp4?_nc_cat=104&bytestart=0&byteend=524287&efg=eyJ2ZW5jb2RlX3RhZyI6InN2ZV9oZCJ9&oh=abc&oe=6789ABCD";

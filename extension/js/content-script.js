@@ -1383,8 +1383,8 @@ function initContentScript() {
         effectivePageUrl = window.top.location.href;
       }
     } catch (_) {}
-    const isSupportedSite = /bilibili\.com|b23\.tv|youtube\.com|youtu\.be|facebook\.com|fb\.watch|fbcdn\.net|pornhub\.com|phncdn\.com/i.test(effectivePageUrl) ||
-                            /bilibili\.com|b23\.tv|facebook\.com|pornhub\.com/i.test(curLoc);
+    const isSupportedSite = /bilibili\.com|b23\.tv|youtube\.com|youtu\.be|facebook\.com|fb\.watch|fbcdn\.net/i.test(effectivePageUrl) ||
+                            /bilibili\.com|b23\.tv|facebook\.com/i.test(curLoc);
     if (isSupportedSite && (!videoSrc || videoSrc.startsWith("blob:"))) {
       videoSrc = effectivePageUrl;
     }

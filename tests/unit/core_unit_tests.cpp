@@ -551,16 +551,12 @@ bool TestMultiSiteVideoExtractionOverhaul() {
     using namespace radium::engine_stream;
     using radium::PathSanitizer;
 
-    // 6.1 URL Detection & Classification (Bilibili, Facebook, Adult Sites, General Video Platforms)
+    // 6.1 URL Detection & Classification (Bilibili, Facebook, General Video Platforms)
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.bilibili.com/video/BV1xx411c7mD?p=2") == "bilibili", "Identify Bilibili BV watch URL");
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://b23.tv/BV1xx411c7mD") == "bilibili", "Identify b23.tv short URL");
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.facebook.com/watch/?v=1234567890") == "facebook", "Identify Facebook Watch URL");
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.facebook.com/reel/987654321") == "facebook", "Identify Facebook Reel URL");
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://fb.watch/abc123xyz/") == "facebook", "Identify fb.watch URL");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.pornhub.com/view_video.php?viewkey=64a1b2c3d4") == "pornhub", "Identify Pornhub URL");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.xvideos.com/video.kdfj123/test_title") == "xvideos", "Identify XVideos URL");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://xhamster.com/videos/sample-video-12345") == "xhamster", "Identify xHamster URL");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://spankbang.com/5abcd/video/sample") == "spankbang", "Identify SpankBang URL");
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://vimeo.com/123456789") == "vimeo", "Identify Vimeo URL");
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.dailymotion.com/video/x8abcde") == "dailymotion", "Identify Dailymotion URL");
     TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.twitch.tv/videos/987654321") == "twitch", "Identify Twitch VOD URL");
@@ -569,15 +565,13 @@ bool TestMultiSiteVideoExtractionOverhaul() {
 
     // Direct media files on video hosts must NOT be mistaken for webpage watch URLs
     TEST_ASSERT(!VideoExtractionManager::IsSupportedVideoSiteUrl("https://cdn.bilibili.com/media/clip.mp4"), "Direct MP4 is not a watch page");
-    TEST_ASSERT(!PathSanitizer::IsWebpageWatchUrl("https://ev-h.phncdn.com/hls/videos/master.m3u8?validfrom=1700000000"), "Direct M3U8 is not a watch page");
+    TEST_ASSERT(!PathSanitizer::IsWebpageWatchUrl("https://cdn.example.org/hls/videos/master.m3u8?validfrom=1700000000"), "Direct M3U8 is not a watch page");
     TEST_ASSERT(PathSanitizer::IsWebpageWatchUrl("https://www.bilibili.com/video/BV1xx411c7mD"), "Bilibili BV page is a watch page");
     TEST_ASSERT(PathSanitizer::IsWebpageWatchUrl("https://www.facebook.com/watch/?v=123456789"), "Facebook watch page is a watch page");
-    TEST_ASSERT(PathSanitizer::IsWebpageWatchUrl("https://www.pornhub.com/view_video.php?viewkey=ph6012345"), "Pornhub watch page is a watch page");
 
-    // 6.2 Registrable Domain Extraction for Netscape Cookie Files (Bilibili, Facebook, Pornhub)
+    // 6.2 Registrable Domain Extraction for Netscape Cookie Files (Bilibili, Facebook)
     TEST_ASSERT(VideoExtractionManager::ExtractRegistrableDomain("www.bilibili.com") == "bilibili.com", "Bilibili root cookie domain is bilibili.com");
     TEST_ASSERT(VideoExtractionManager::ExtractRegistrableDomain("m.facebook.com") == "facebook.com", "Facebook root cookie domain is facebook.com");
-    TEST_ASSERT(VideoExtractionManager::ExtractRegistrableDomain("rt.pornhub.com") == "pornhub.com", "Pornhub root cookie domain is pornhub.com");
 
     // 6.3 Facebook CDN Range Trap Stripping (bytestart / byteend)
     const std::string raw_fb_cdn = "https://video.fdac1-1.fna.fbcdn.net/v/t42.1790-2/100000_n.mp4?_nc_cat=104&bytestart=0&byteend=524287&efg=eyJ2ZW5jb2RlX3RhZyI6InN2ZV9oZCJ9&oh=abc&oe=6789ABCD";
@@ -638,44 +632,7 @@ bool TestMultiSiteVideoExtractionOverhaul() {
     TEST_ASSERT(!fb_login_res.ok(), "Facebook login wall returns structured error");
     TEST_ASSERT(fb_login_res.error->code.find("ERR_EXTRACTOR_LOGIN_REQUIRED") != std::string::npos, "Facebook login wall classified as ERR_EXTRACTOR_LOGIN_REQUIRED");
 
-    // 6.7 Adult Platform Native HTML Parser (mediaDefinitions JSON + html5player calls + no fake qualities)
-    const std::string mock_adult_html = R"(
-<html>
-<head><meta property="og:title" content="Sample Adult Platform Multi-Quality Stream" /></head>
-<body>
-<script>
-var flashvars_12345 = {
-  "mediaDefinitions": [
-    {"defaultQuality":true,"format":"mp4","videoUrl":"https:\/\/ev.phncdn.com\/videos\/1080P_4000K_12345.mp4?validfrom=1700000000&validto=1900000000","quality":"1080"},
-    {"defaultQuality":false,"format":"mp4","videoUrl":"https:\/\/ev.phncdn.com\/videos\/720P_2000K_12345.mp4?validfrom=1700000000&validto=1900000000","quality":"720"},
-    {"defaultQuality":false,"format":"hls","videoUrl":"https:\/\/ev-h.phncdn.com\/hls\/videos\/12345\/master.m3u8?validfrom=1700000000&validto=1900000000","quality":"480"}
-  ]
-};
-</script>
-</body>
-</html>
-    )";
-    auto adult_res = VideoExtractionManager::ParseAdultPlayerHtml(mock_adult_html, "https://www.pornhub.com/view_video.php?viewkey=ph12345");
-    TEST_ASSERT(adult_res.ok(), "Parsed adult platform HTML mediaDefinitions");
-    const auto& adult_meta = *adult_res.value;
-    TEST_ASSERT(adult_meta.title == "Sample Adult Platform Multi-Quality Stream", "Extracted adult video title");
-    TEST_ASSERT(adult_meta.formats.size() == 3, "Extracted exact 3 formats from mediaDefinitions");
-    TEST_ASSERT(adult_meta.formats[0].height == 1080 && adult_meta.formats[0].protocol == "https", "1080p direct MP4 format prioritized first");
-    TEST_ASSERT(adult_meta.formats[1].height == 720 && adult_meta.formats[1].protocol == "https", "720p direct MP4 format second");
-    TEST_ASSERT(adult_meta.formats[2].height == 480 && adult_meta.formats[2].protocol == "m3u8_native", "480p HLS manifest format classified as m3u8_native");
-
-    // 6.7b Targets.txt Video Platform Identification and Generic HTML5 Player Extraction
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.eporner.com/video-12345/sample/") == "eporner", "Identified eporner");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://txxx.com/videos/123/title/") == "txxx", "Identified txxx");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://drtuber.com/video/54321/sample") == "drtuber", "Identified drtuber");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.tnaflix.com/video/999/test") == "tnaflix", "Identified tnaflix");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://spankbang.com/abc/video/watch") == "spankbang", "Identified spankbang");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://xcafe.com/videos/111/") == "xcafe", "Identified xcafe");
-    TEST_ASSERT(VideoExtractionManager::IdentifyPlatform("https://www.porndoe.com/video/222") == "porndoe", "Identified porndoe");
-    TEST_ASSERT(PathSanitizer::IsWebpageWatchUrl("https://www.eporner.com/video-12345/"), "eporner watch URL recognized");
-    TEST_ASSERT(PathSanitizer::IsWebpageWatchUrl("https://txxx.com/videos/123/"), "txxx watch URL recognized");
-    TEST_ASSERT(PathSanitizer::IsWebpageWatchUrl("https://xcafe.com/videos/111/"), "xcafe watch URL recognized");
-
+    // 6.7 Generic HTML5 Player Extraction
     const std::string mock_html5_player_html = R"(
 <html>
 <head><title>HTML5 Stream Test Video</title></head>
@@ -691,7 +648,7 @@ var playerConfig = {
 </body>
 </html>
     )";
-    auto html5_parse_res = VideoExtractionManager::ParseAdultPlayerHtml(mock_html5_player_html, "https://www.xcafe.com/videos/111/");
+    auto html5_parse_res = VideoExtractionManager::ParseHtml5PlayerPage(mock_html5_player_html, "https://example.org/videos/111/");
     TEST_ASSERT(html5_parse_res.ok(), "Parsed generic HTML5 player stream tags");
     TEST_ASSERT(!html5_parse_res.value->formats.empty(), "Discovered formats from HTML5 video & playerConfig");
     TEST_ASSERT(html5_parse_res.value->title.find("HTML5 Stream Test Video") != std::string::npos, "Extracted title from HTML5 page");

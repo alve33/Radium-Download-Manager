@@ -407,15 +407,12 @@ function isSupportedVideoSiteWatchUrl(url) {
         path.includes("/video/") ||
         path.includes("/videos/") ||
         path.startsWith("/video-") ||
-        path.startsWith("/hd-") ||
         path.startsWith("/reel/") ||
         path.startsWith("/reels/") ||
         path.startsWith("/shorts/") ||
         path.startsWith("/clip/") ||
         path.startsWith("/clips/") ||
         path.startsWith("/embed/") ||
-        u.searchParams.has("viewkey") ||
-        path.includes("view_video") ||
         /^\/video[0-9a-z._-]+/i.test(path)) {
       return true;
     }

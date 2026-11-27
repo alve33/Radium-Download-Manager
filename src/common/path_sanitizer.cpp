@@ -999,9 +999,6 @@ bool PathSanitizer::IsWebpageWatchUrl(std::string_view url) {
         path.find("/clip/") != std::string::npos ||
         path.find("/clips/") != std::string::npos ||
         path.find("/embed/") != std::string::npos ||
-        path.find("/hd-") != std::string::npos ||
-        lower.find("viewkey=") != std::string::npos ||
-        lower.find("view_video") != std::string::npos ||
         (path.find("/video") != std::string::npos && path.size() > 6)) {
         return true;
     }

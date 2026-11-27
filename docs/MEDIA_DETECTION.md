@@ -107,7 +107,7 @@ Radium Download Manager documentation and UI never promise that every `blob:` UR
 
 ## 7. Webpage Watch URL Guard & Multi-Site Intent Classification (`BUG-034`)
 
-Websites like YouTube (`youtube.com/watch?v=...`, `youtube.com/shorts/...`), Bilibili (`bilibili.com/video/BV...`, `b23.tv/...`), Facebook (`facebook.com/watch/...`, `facebook.com/reel/...`, `fb.watch/...`), adult video streaming platforms (Pornhub, XVideos, XNXX, xHamster, SpankBang, RedTube, YouPorn, Eporner, etc.), Vimeo (`vimeo.com/...`), Dailymotion, Twitch, X/Twitter, Instagram, TikTok, and Reddit present HTML watch pages rather than direct media files or static manifests.
+Websites like YouTube (`youtube.com/watch?v=...`, `youtube.com/shorts/...`), Bilibili (`bilibili.com/video/BV...`, `b23.tv/...`), Facebook (`facebook.com/watch/...`, `facebook.com/reel/...`, `fb.watch/...`), Vimeo (`vimeo.com/...`), Dailymotion, Twitch, X/Twitter, Instagram, TikTok, and Reddit present HTML watch pages rather than direct media files or static manifests.
 
 1. **The Watch Page Failure Mode:**
    - If a user passes an HTML watch page URL directly to an ordinary segmented HTTP engine (`TaskType::kHttpFile`), the engine issues concurrent byte-range requests (`Range: bytes=0-1048575`) against an HTML web page. Streaming platforms detect this anomalous non-browser traffic and immediately return **HTTP 429 Too Many Requests**, **HTTP 403 Forbidden**, or an HTML document disguised as `.mp4`.
