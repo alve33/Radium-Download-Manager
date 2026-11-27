@@ -450,9 +450,12 @@ function updateTabBadge(tabId) {
   const list = G.cacheData.get(tabId) || [];
   const count = list.length;
   const text = count > 0 ? String(count) : "";
+  const targetTabId = (typeof tabId === "number" && tabId > 0) ? tabId : undefined;
   try {
-    chrome.action.setBadgeText({ text, tabId: (typeof tabId === "number" && tabId > 0) ? tabId : undefined });
-    chrome.action.setBadgeBackgroundColor({ color: "#FF4F57", tabId: (typeof tabId === "number" && tabId > 0) ? tabId : undefined });
+    Promise.resolve(chrome.action.setBadgeText({ text, tabId: targetTabId })).catch(() => {});
+    if (chrome.action.setBadgeBackgroundColor) {
+      Promise.resolve(chrome.action.setBadgeBackgroundColor({ color: "#FF4F57", tabId: targetTabId })).catch(() => {});
+    }
   } catch (_) {}
 }
 
@@ -2042,7 +2045,11 @@ async function submitMediaCandidateToRadium(candidate, options = {}, customTrans
         candidate.handoffStatus = "Browser Fallback";
         return { accepted: false, fallbackToBrowser: true, url: candidate.url };
       } else if (typeof chrome !== "undefined" && chrome.downloads && chrome.downloads.download) {
-        chrome.downloads.download({ url: candidate.url });
+        try {
+          Promise.resolve(chrome.downloads.download({ url: candidate.url }, () => {
+            if (chrome.runtime) void chrome.runtime.lastError;
+          })).catch(() => {});
+        } catch (_) {}
         candidate.handoffStatus = "Browser Fallback";
         return { accepted: false, fallbackToBrowser: true, url: candidate.url };
       }
@@ -3174,21 +3181,44 @@ function consumeCapturedPostBody(url) {
   return { post: entry.post, postType: entry.postType };
 }
 
+let contextMenuRegistrationInFlight = false;
+let contextMenuRegistrationQueued = false;
+
 function registerRadiumContextMenus() {
   if (typeof chrome === "undefined" || !chrome.contextMenus || typeof chrome.contextMenus.create !== "function") {
     return;
   }
+  if (contextMenuRegistrationInFlight) {
+    contextMenuRegistrationQueued = true;
+    return;
+  }
+  contextMenuRegistrationInFlight = true;
+  const finish = () => {
+    contextMenuRegistrationInFlight = false;
+    if (contextMenuRegistrationQueued) {
+      contextMenuRegistrationQueued = false;
+      registerRadiumContextMenus();
+    }
+  };
   try {
     chrome.contextMenus.removeAll(() => {
+      if (chrome.runtime) void chrome.runtime.lastError;
       try {
         chrome.contextMenus.create({
           id: "radium-download-link",
           title: "Download with Radium",
           contexts: ["link", "video", "audio"]
+        }, () => {
+          if (chrome.runtime) void chrome.runtime.lastError;
+          finish();
         });
-      } catch (_) {}
+      } catch (_) {
+        finish();
+      }
     });
-  } catch (_) {}
+  } catch (_) {
+    finish();
+  }
 }
 
 // 6. Register extension runtime listeners

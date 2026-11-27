@@ -550,10 +550,12 @@ function initPopupUI() {
     }
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
       if (tabs && tabs[0]) {
         let targetTab = tabs[0];
         if (targetTab.url && targetTab.url.startsWith("chrome-extension://")) {
           chrome.tabs.query({ currentWindow: true }, (allTabs) => {
+            if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
             const nonExt = (allTabs || []).find(t => t.url && !t.url.startsWith("chrome-extension://"));
             if (nonExt) targetTab = nonExt;
             queryAndLoad(targetTab.id, targetTab.url || "");
@@ -563,10 +565,12 @@ function initPopupUI() {
         queryAndLoad(targetTab.id, targetTab.url || "");
       } else {
         chrome.tabs.query({ active: true, lastFocusedWindow: true }, (lastTabs) => {
+          if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
           if (lastTabs && lastTabs[0]) {
             let targetTab = lastTabs[0];
             if (targetTab.url && targetTab.url.startsWith("chrome-extension://")) {
               chrome.tabs.query({ lastFocusedWindow: true }, (allTabs) => {
+                if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
                 const nonExt = (allTabs || []).find(t => t.url && !t.url.startsWith("chrome-extension://"));
                 if (nonExt) targetTab = nonExt;
                 queryAndLoad(targetTab.id, targetTab.url || "");
@@ -667,6 +671,8 @@ function initPopupUI() {
           action: "setSiteCapture",
           tabUrl: currentTabUrl,
           enabled: ev.target.checked
+        }, () => {
+          if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
         });
       }
     });
@@ -685,6 +691,8 @@ function initPopupUI() {
         chrome.runtime.sendMessage({
           action: "clearMedia",
           tabId: currentTabId
+        }, () => {
+          if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
         });
       }
     });
@@ -709,6 +717,8 @@ function initPopupUI() {
               clickTime: Date.now(),
               tabId: currentTabId,
               tabUrl: currentTabUrl
+            }, () => {
+              if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
             });
           }
         });
@@ -749,6 +759,8 @@ function initPopupUI() {
             clickTime: Date.now(),
             tabId: currentTabId,
             tabUrl: currentTabUrl
+          }, () => {
+            if (typeof chrome !== "undefined" && chrome.runtime) void chrome.runtime.lastError;
           });
         }
       });
